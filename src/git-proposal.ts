@@ -127,6 +127,43 @@ export async function prepareCommittedBase(options: {
   return { namedBase: options.namedBase, baseCommit, bundlePath };
 }
 
+export async function pinGitBranchComparison(options: {
+  repositoryPath: string;
+  namedBase: string;
+  reviewBranch: string;
+}): Promise<{
+  baseCommit: string;
+  proposedCommit: string;
+  comparisonSource: string;
+  artifactId: string;
+}> {
+  requireNamedBase(options.namedBase);
+  requireNamedBase(options.reviewBranch);
+  const repositoryPath = await realpath(options.repositoryPath);
+  const topLevel = await gitText(repositoryPath, ["rev-parse", "--show-toplevel"]);
+  if (resolve(topLevel) !== repositoryPath) {
+    throw new Error("Branch review requires the consuming-project root");
+  }
+  const resolveNamedCommit = async (name: string): Promise<string> => {
+    const fullRef = await gitText(repositoryPath, ["rev-parse", "--symbolic-full-name", name]);
+    if (!fullRef.startsWith("refs/")) throw new Error(`Branch review ref is not a branch or tag: ${name}`);
+    const revision = await gitText(repositoryPath, ["rev-parse", "--verify", `${name}^{commit}`]);
+    if (!OBJECT_ID.test(revision)) throw new Error(`Branch review ref did not resolve to a commit: ${name}`);
+    return revision;
+  };
+  const namedBase = await resolveNamedCommit(options.namedBase);
+  const proposedCommit = await resolveNamedCommit(options.reviewBranch);
+  const baseCommit = await gitText(repositoryPath, ["merge-base", namedBase, proposedCommit]);
+  if (!OBJECT_ID.test(baseCommit)) throw new Error("Branch review refs have no valid merge base");
+  const comparisonSource = `git:${baseCommit}...${proposedCommit}`;
+  return {
+    baseCommit,
+    proposedCommit,
+    comparisonSource,
+    artifactId: createHash("sha256").update(`${options.namedBase}\0${options.reviewBranch}\0${comparisonSource}`, "utf8").digest("hex"),
+  };
+}
+
 function decodePath(value: Buffer): string {
   let path: string;
   try {

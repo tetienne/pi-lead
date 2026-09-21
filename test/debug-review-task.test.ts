@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 
 import {
   runDebugTask,
@@ -13,11 +18,42 @@ import type { ReviewRequiredSummary } from "../src/proposed-change-task.ts";
 
 const digest = (character: string) => character.repeat(64);
 const commit = (character: string) => character.repeat(40);
+const execFileAsync = promisify(execFile);
 const document = (source: string, contents: string) => ({
   source,
   contents,
   digest: createHash("sha256").update(contents, "utf8").digest("hex"),
 });
+
+async function git(cwd: string, ...args: string[]): Promise<void> {
+  await execFileAsync("/usr/bin/git", args, {
+    cwd,
+    env: { HOME: cwd, PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+  });
+}
+
+async function branchReviewRequest(options: {
+  standards: ReturnType<typeof document>;
+  specification?: ReturnType<typeof document>;
+}) {
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-branch-review-"));
+  const repositoryPath = join(root, "consumer");
+  await git(root, "init", "--quiet", "--initial-branch=main", repositoryPath);
+  await writeFile(join(repositoryPath, "value.txt"), "before\n");
+  await git(repositoryPath, "add", "value.txt");
+  await git(repositoryPath, "-c", "user.name=PI Lead Test", "-c", "user.email=pi-lead@example.invalid", "commit", "--quiet", "-m", "base");
+  await git(repositoryPath, "switch", "--quiet", "-c", "review");
+  await writeFile(join(repositoryPath, "value.txt"), "after\n");
+  await git(repositoryPath, "add", "value.txt");
+  await git(repositoryPath, "-c", "user.name=PI Lead Test", "-c", "user.email=pi-lead@example.invalid", "commit", "--quiet", "-m", "review");
+  return {
+    taskId: "review-13",
+    repositoryPath,
+    namedBase: "main",
+    reviewBranch: "review",
+    ...options,
+  };
+}
 
 function proposal(): ReviewRequiredSummary {
   return {
@@ -190,18 +226,15 @@ test("a standalone branch review pins both independent reports without mutating 
   };
   const specification = document("spec.md", "specification");
   const standards = document("AGENTS.md", "standards");
-  const result = await runStandaloneBranchReview({
-    taskId: "review-13",
-    baseCommit: commit("a"),
-    proposedCommit: commit("b"),
-    specification,
-    standards,
-  }, runtime);
+  const result = await runStandaloneBranchReview(
+    await branchReviewRequest({ specification, standards }),
+    runtime,
+  );
 
   assert.equal(result.status, "DONE");
   assert.deepEqual(calls.sort(), ["SPEC", "STANDARDS"]);
   if (result.status === "DONE") {
-    assert.equal(result.comparisonSource, `git:${commit("a")}...${commit("b")}`);
+    assert.match(result.comparisonSource, /^git:[0-9a-f]{40}\.\.\.[0-9a-f]{40}$/);
     assert.equal(result.reports.length, 2);
     assert.equal(result.reports.every((report) => report.readOnly && !report.published), true);
   }
@@ -220,18 +253,18 @@ test("a standalone branch review explicitly reports a missing spec while retaini
       };
     },
   };
-  const result = await runStandaloneBranchReview({
-    taskId: "review-13", baseCommit: commit("a"), proposedCommit: commit("b"),
-    standards: document("AGENTS.md", "standards"),
-  }, runtime);
+  const result = await runStandaloneBranchReview(
+    await branchReviewRequest({ standards: document("AGENTS.md", "standards") }),
+    runtime,
+  );
 
   assert.deepEqual(result, {
     status: "DONE",
     taskId: "review-13",
-    comparisonSource: `git:${commit("a")}...${commit("b")}`,
+    comparisonSource: result.status === "DONE" ? result.comparisonSource : "",
     reports: [{
       taskId: "review-13", axis: "STANDARDS", reviewerId: "reviewer", contextId: "context",
-      comparisonSource: `git:${commit("a")}...${commit("b")}`,
+      comparisonSource: result.status === "DONE" ? result.comparisonSource : "",
       standardsDigest: document("AGENTS.md", "standards").digest,
       findings: [{ severity: "NON_BLOCKING", title: "Name", detail: "Rename this." }],
       readOnly: true, published: false,
@@ -249,7 +282,7 @@ test("a standalone review rejects a forged document pin before it can dispatch a
     async review() { reviewed = true; throw new Error("not reached"); },
   };
   const result = await runStandaloneBranchReview({
-    taskId: "review-13", baseCommit: commit("a"), proposedCommit: commit("b"),
+    taskId: "review-13", repositoryPath: "/missing", namedBase: "main", reviewBranch: "review",
     standards: { source: "AGENTS.md", contents: "standards", digest: digest("a") },
   }, runtime);
 
@@ -274,10 +307,35 @@ test("a standalone review blocks if its supposedly read-only workers changed wor
       };
     },
   };
-  const result = await runStandaloneBranchReview({
-    taskId: "review-13", baseCommit: commit("a"), proposedCommit: commit("b"), standards,
-  }, runtime);
+  const result = await runStandaloneBranchReview(await branchReviewRequest({ standards }), runtime);
 
   assert.equal(result.status, "BLOCKED");
   assert.equal(result.status === "BLOCKED" && result.reason, "REVIEW_EVIDENCE_INVALID");
+});
+
+test("a failed parallel review retains its completed independent report after confirming no mutation", async () => {
+  const standards = document("AGENTS.md", "standards");
+  const specification = document("spec.md", "specification");
+  const runtime: StandaloneBranchReviewRuntime = {
+    async observeReadOnlyState() { return { worktreeDigest: digest("a"), refsDigest: digest("b") }; },
+    async review(input) {
+      if (input.axis === "SPEC") throw new Error("reviewer unavailable");
+      return {
+        taskId: input.taskId, axis: input.axis, reviewerId: "standards-reviewer", contextId: "standards-context",
+        comparisonSource: input.comparisonSource, standardsDigest: input.standards.digest,
+        findings: [], readOnly: true, published: false,
+      };
+    },
+  };
+  const result = await runStandaloneBranchReview(
+    await branchReviewRequest({ standards, specification }),
+    runtime,
+  );
+
+  assert.equal(result.status, "BLOCKED");
+  if (result.status === "BLOCKED") {
+    assert.equal(result.reason, "REVIEW_FAILED");
+    assert.equal(result.reports.length, 1);
+    assert.equal(result.reports[0]?.axis, "STANDARDS");
+  }
 });

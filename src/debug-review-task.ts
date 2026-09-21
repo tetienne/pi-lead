@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { pinGitBranchComparison } from "./git-proposal.ts";
 import type { PinnedReviewDocument } from "./review-context.ts";
 import type {
   CompleteLocalCodingDone,
@@ -11,7 +12,6 @@ import type {
 } from "./review-fix-commit-task.ts";
 import { runReviewFixCommitTask } from "./review-fix-commit-task.ts";
 
-const COMMIT = /^[0-9a-f]{40}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
 
 export type FeedbackPhase = "REPRODUCE" | "VERIFY";
@@ -205,8 +205,9 @@ export async function runDebugTask(
 
 export type StandaloneBranchReviewRequest = {
   taskId: string;
-  baseCommit: string;
-  proposedCommit: string;
+  repositoryPath: string;
+  namedBase: string;
+  reviewBranch: string;
   specification?: PinnedReviewDocument;
   standards: PinnedReviewDocument;
 };
@@ -311,15 +312,22 @@ export async function runStandaloneBranchReview(
 ): Promise<StandaloneBranchReviewSummary> {
   if (
     !request.taskId.trim() ||
-    !COMMIT.test(request.baseCommit) ||
-    !COMMIT.test(request.proposedCommit) ||
-    request.baseCommit === request.proposedCommit ||
     !validDocument(request.standards) ||
     (request.specification !== undefined && !validDocument(request.specification))
   ) {
     return reviewBlocked(request.taskId, "INVALID_REVIEW_CONTEXT", "Standalone reviews require distinct pinned commits and valid review documents");
   }
-  const comparisonSource = `git:${request.baseCommit}...${request.proposedCommit}`;
+  let comparison: Awaited<ReturnType<typeof pinGitBranchComparison>>;
+  try {
+    comparison = await pinGitBranchComparison({
+      repositoryPath: request.repositoryPath,
+      namedBase: request.namedBase,
+      reviewBranch: request.reviewBranch,
+    });
+  } catch (error) {
+    return reviewBlocked(request.taskId, "INVALID_REVIEW_CONTEXT", error instanceof Error ? error.message : String(error));
+  }
+  const comparisonSource = comparison.comparisonSource;
   let before: { worktreeDigest: string; refsDigest: string };
   try {
     before = await runtime.observeReadOnlyState(options.signal);
@@ -336,24 +344,7 @@ export async function runStandaloneBranchReview(
       : [{ taskId: request.taskId, axis: "SPEC" as const, comparisonSource, specification: request.specification, standards: request.standards }]),
   ];
   const settled = await Promise.allSettled(inputs.map((input) => runtime.review(input, options.signal)));
-  const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
-  if (rejected) {
-    return reviewBlocked(request.taskId, "REVIEW_FAILED", rejected.reason instanceof Error ? rejected.reason.message : String(rejected.reason));
-  }
-  const reports = settled.map((result) => {
-    if (result.status !== "fulfilled") throw new Error("Unreachable review result");
-    return result.value;
-  });
-  const standards = reports.find((report) => report.axis === "STANDARDS");
-  const specification = reports.find((report) => report.axis === "SPEC");
-  if (
-    !standards ||
-    !validReviewReport(standards, inputs[0]!, specification) ||
-    (request.specification !== undefined &&
-      (!specification || !validReviewReport(specification, inputs[1]!, standards)))
-  ) {
-    return reviewBlocked(request.taskId, "REVIEW_EVIDENCE_INVALID", "Independent review reports must cover the pinned comparison in separate read-only contexts", reports);
-  }
+  const reports = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
   let after: { worktreeDigest: string; refsDigest: string };
   try {
     after = await runtime.observeReadOnlyState(options.signal);
@@ -366,6 +357,20 @@ export async function runStandaloneBranchReview(
     after.refsDigest !== before.refsDigest
   ) {
     return reviewBlocked(request.taskId, "REVIEW_EVIDENCE_INVALID", "Read-only review changed the worktree or refs", reports);
+  }
+  const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (rejected) {
+    return reviewBlocked(request.taskId, "REVIEW_FAILED", rejected.reason instanceof Error ? rejected.reason.message : String(rejected.reason), reports);
+  }
+  const standards = reports.find((report) => report.axis === "STANDARDS");
+  const specification = reports.find((report) => report.axis === "SPEC");
+  if (
+    !standards ||
+    !validReviewReport(standards, inputs[0]!, specification) ||
+    (request.specification !== undefined &&
+      (!specification || !validReviewReport(specification, inputs[1]!, standards)))
+  ) {
+    return reviewBlocked(request.taskId, "REVIEW_EVIDENCE_INVALID", "Independent review reports must cover the pinned comparison in separate read-only contexts", reports);
   }
   return {
     status: "DONE",
