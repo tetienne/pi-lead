@@ -259,6 +259,19 @@ export async function createNativeProposedChangeRuntime(
     join(homedir(), ".local", "state", "pi-lead");
   const pollIntervalMs = options.pollIntervalMs ?? 100;
   const runs = new Map<string, RunState>();
+  const ownedRun = (proposal: ReviewRequiredSummary, action: string): RunState => {
+    const run = runs.get(proposal.vmId);
+    if (
+      !run ||
+      run.worker.taskId !== proposal.taskId ||
+      run.worker.assignmentId !== proposal.assignmentId ||
+      run.worker.workerId !== proposal.workerId ||
+      run.worker.baseCommit !== proposal.baseCommit
+    ) {
+      throw new Error(`Cannot ${action} a proposal that is not owned by this runtime`);
+    }
+    return run;
+  };
 
   return {
     async launch(
@@ -427,16 +440,7 @@ export async function createNativeProposedChangeRuntime(
     },
 
     async commitProposal(proposal: ReviewRequiredSummary, branchName: string) {
-      const run = runs.get(proposal.vmId);
-      if (
-        !run ||
-        run.worker.taskId !== proposal.taskId ||
-        run.worker.assignmentId !== proposal.assignmentId ||
-        run.worker.workerId !== proposal.workerId ||
-        run.worker.baseCommit !== proposal.baseCommit
-      ) {
-        throw new Error("Cannot commit a proposal that is not owned by this runtime");
-      }
+      const run = ownedRun(proposal, "commit");
       return deliverGitProposal({
         repositoryPath: options.cwd,
         baseCommit: proposal.baseCommit,
@@ -449,17 +453,7 @@ export async function createNativeProposedChangeRuntime(
     },
 
     publicationStateDirectory(proposal: ReviewRequiredSummary): string {
-      const run = runs.get(proposal.vmId);
-      if (
-        !run ||
-        run.worker.taskId !== proposal.taskId ||
-        run.worker.assignmentId !== proposal.assignmentId ||
-        run.worker.workerId !== proposal.workerId ||
-        run.worker.baseCommit !== proposal.baseCommit
-      ) {
-        throw new Error("Cannot publish a proposal that is not owned by this runtime");
-      }
-      return run.directory;
+      return ownedRun(proposal, "publish").directory;
     },
 
     async terminate(worker: ProposedChangeWorker): Promise<{ vmId: string; terminated: boolean }> {

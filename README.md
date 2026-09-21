@@ -103,9 +103,10 @@ After a validated implementation has passed its independent review and been deli
 
 ```bash
 export PI_LEAD_GIT_REMOTE=origin
+export PI_LEAD_GIT_REMOTE_URL=https://git.example.invalid/your-org/your-project.git
 ```
 
-The value must name one existing remote with exactly one push URL. PI Lead never creates a remote, chooses among remotes, uses a force refspec, overwrites an existing different remote task branch, or publishes a protected/arbitrary branch. Before each attempt it records the exact intended remote/ref/commit in its host-owned run state; it records the observed result after reconciliation. A failed or unreconciled push leaves the reviewed local branch intact and reports `BLOCKED`; retrying starts by observing the remote branch again. PR creation, merges, deployment and privileged operations have no automatic publication path and remain human gates.
+The name and exact URL form one trusted remote configuration; PI Lead does not read a repository-defined remote for publication. It never creates a remote, chooses among remotes, uses a force refspec, overwrites an existing different remote task branch, or publishes a protected/arbitrary branch. Before each attempt it records the exact intended remote/ref/commit in its host-owned run state; it records the observed result after reconciliation. A failed or unreconciled push leaves the reviewed local branch intact and reports `BLOCKED`; retrying starts by observing the remote branch again. PR creation, merges, deployment and privileged operations have no automatic publication path and remain human gates.
 
 ## Planning assets
 

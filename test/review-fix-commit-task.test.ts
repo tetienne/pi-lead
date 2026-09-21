@@ -124,6 +124,7 @@ test("a reviewed local commit is published only through the exact task-branch pu
         status: "PUBLISHED",
         intent: {
           operation: "PUSH_TASK_BRANCH", remoteName: "publish",
+          remoteFingerprint: "a".repeat(64),
           sourceRef: "refs/heads/pi-lead/task-task-4", destinationRef: "refs/heads/pi-lead/task-task-4",
           commit: initial.proposedCommit,
         },
@@ -157,6 +158,7 @@ test("an uncertain publication blocks completion while retaining the reviewed lo
         status: "UNCERTAIN",
         intent: {
           operation: "PUSH_TASK_BRANCH", remoteName: "publish",
+          remoteFingerprint: "a".repeat(64),
           sourceRef: `refs/heads/${input.commit.branchName}`, destinationRef: `refs/heads/${input.commit.branchName}`,
           commit: input.commit.commit,
         },

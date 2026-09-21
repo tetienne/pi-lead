@@ -104,6 +104,7 @@ export async function createNativeReviewFixCommitRuntime(options: {
   workspaceId?: string;
   modelId?: string;
   gitRemoteName?: string;
+  gitRemoteUrl?: string;
 }): Promise<ReviewFixCommitRuntime> {
   const proposedChanges = await createNativeProposedChangeRuntime(options);
   const reviewers = await createNativeChatGptRuntime(options);
@@ -147,7 +148,7 @@ export async function createNativeReviewFixCommitRuntime(options: {
     async commit(input, _signal?: AbortSignal) {
       return proposedChanges.commitProposal(input.proposal, input.branchName);
     },
-    async publish(input, _signal?: AbortSignal) {
+    async publish(input, signal?: AbortSignal) {
       const stateDirectory = proposedChanges.publicationStateDirectory(input.proposal);
       const record = async (event: PublicationEvent) => {
         const path = join(stateDirectory, "publication.json");
@@ -161,9 +162,11 @@ export async function createNativeReviewFixCommitRuntime(options: {
       return publishTaskBranch({
         repositoryPath: options.cwd,
         configuredRemoteName: options.gitRemoteName ?? process.env.PI_LEAD_GIT_REMOTE,
+        configuredRemoteUrl: options.gitRemoteUrl ?? process.env.PI_LEAD_GIT_REMOTE_URL,
         branchName: input.commit.branchName,
         commit: input.commit.commit,
         journal: { record },
+        signal,
       });
     },
   };
