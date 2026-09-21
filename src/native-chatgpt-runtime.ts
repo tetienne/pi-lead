@@ -46,6 +46,7 @@ type NativeChatGptRuntimeOptions = {
   herdr?: HerdrClient;
   processHost?: ChatGptProcessHost;
   pollIntervalMs?: number;
+  providerProfile?: "chatgpt" | "opencode-go";
 };
 
 type RunState = {
@@ -91,7 +92,11 @@ async function runHerdr(args: string[]): Promise<unknown | undefined> {
 }
 
 class NativeChatGptCliClient implements HerdrClient, ChatGptProcessHost {
-  readonly #launcherPath = fileURLToPath(new URL("./chatgpt-launcher.ts", import.meta.url));
+  readonly #launcherPath: string;
+
+  constructor(launcher = "./chatgpt-launcher.ts") {
+    this.#launcherPath = fileURLToPath(new URL(launcher, import.meta.url));
+  }
 
   async createBackgroundTab(request: {
     workspaceId: string;
@@ -257,7 +262,10 @@ function parseResult(value: unknown): ChatGptWorkerResult {
 export async function createNativeChatGptRuntime(
   options: NativeChatGptRuntimeOptions,
 ): Promise<ChatGptTaskRuntime> {
-  const cli = new NativeChatGptCliClient();
+  const profile = options.providerProfile ?? "chatgpt";
+  const cli = new NativeChatGptCliClient(
+    profile === "chatgpt" ? "./chatgpt-launcher.ts" : "./opencode-go-launcher.ts",
+  );
   const herdr = options.herdr ?? cli;
   const processHost = options.processHost ?? cli;
   const stateRoot =
@@ -268,12 +276,22 @@ export async function createNativeChatGptRuntime(
 
   return {
     async launch(request: ChatGptLaunchRequest, signal?: AbortSignal): Promise<ChatGptWorker> {
+      const profileRequest = request as unknown as {
+        provider: string;
+        transport?: string;
+        cacheWarming?: string;
+        allowedHosts: readonly string[];
+      };
       if (
-        request.provider !== "openai-codex" ||
-        request.transport !== "sse" ||
-        request.cacheWarming !== "off" ||
-        request.allowedHosts.length !== 1 ||
-        request.allowedHosts[0] !== "chatgpt.com" ||
+        (profile === "chatgpt"
+          ? profileRequest.provider !== "openai-codex" ||
+            profileRequest.transport !== "sse" ||
+            profileRequest.cacheWarming !== "off" ||
+            profileRequest.allowedHosts.length !== 1 ||
+            profileRequest.allowedHosts[0] !== "chatgpt.com"
+          : profileRequest.provider !== "opencode-go" ||
+            profileRequest.allowedHosts.length !== 1 ||
+            profileRequest.allowedHosts[0] !== "opencode.ai") ||
         request.allowWebSockets !== false ||
         request.focus !== false ||
         request.hostMounts.length !== 0 ||
@@ -319,10 +337,9 @@ export async function createNativeChatGptRuntime(
           modelId,
           controllerHeartbeatTimeoutMs: 5_000,
           policy: {
-            provider: request.provider,
-            transport: request.transport,
-            cacheWarming: request.cacheWarming,
-            allowedHosts: request.allowedHosts,
+            provider: profileRequest.provider,
+            ...(profile === "chatgpt" ? { transport: request.transport, cacheWarming: request.cacheWarming } : {}),
+            allowedHosts: profileRequest.allowedHosts,
             allowWebSockets: request.allowWebSockets,
             hostMounts: request.hostMounts,
             inheritHostEnvironment: request.inheritHostEnvironment,

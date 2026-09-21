@@ -23,6 +23,11 @@ import {
   type UnstartedChatGptBlockedSummary,
 } from "./chatgpt-task.ts";
 import {
+  runReadOnlyOpenCodeGoTask,
+  type OpenCodeGoRunSummary,
+  type OpenCodeGoTaskRequest,
+} from "./opencode-go-task.ts";
+import {
   runIsolatedFixture,
   type FixtureRequest,
   type FixtureRunSummary,
@@ -40,6 +45,11 @@ type LeadDependencies = {
     cwd: string,
     signal: AbortSignal,
   ): Promise<ChatGptRunSummary>;
+  runOpenCodeGo?(
+    request: OpenCodeGoTaskRequest,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<OpenCodeGoRunSummary>;
   runProposedChange?(
     request: ProposedChangeRequest,
     cwd: string,
@@ -150,6 +160,32 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       );
     };
 
+    const runOpenCodeGo = async (
+      question: string,
+      context: { cwd: string; ui: { notify(message: string, level: "info" | "error"): void } },
+    ): Promise<void> => {
+      if (!dependencies.runOpenCodeGo) return;
+      let preparedQuestion: string;
+      try { preparedQuestion = await prepareChatGptQuestion(question, context.cwd); }
+      catch (error) {
+        context.ui.notify(`PI Lead OpenCode Go worker: ${error instanceof Error ? error.message : String(error)}`, "error");
+        return;
+      }
+      const request = { taskId: randomUUID(), assignmentId: randomUUID(), question: preparedQuestion };
+      let summary: OpenCodeGoRunSummary;
+      if (activeWorkerSlots() + 1 > MAX_ACTIVE_WORKERS) {
+        summary = { status: "BLOCKED", reason: "CONCURRENCY_LIMIT", detail: `At most ${MAX_ACTIVE_WORKERS} workers may be active`, taskId: request.taskId, assignmentId: request.assignmentId, diagnosticsRetained: false, resourcesStarted: false, vmTerminated: true } satisfies UnstartedChatGptBlockedSummary;
+      } else {
+        const controller = new AbortController(); activeRuns.set(controller, 1);
+        try { summary = await dependencies.runOpenCodeGo(request, context.cwd, controller.signal); }
+        catch (error) {
+          summary = { status: "BLOCKED", reason: "NATIVE_CONTROL_UNAVAILABLE", detail: error instanceof Error ? error.message : String(error), taskId: request.taskId, assignmentId: request.assignmentId, diagnosticsRetained: false, resourcesStarted: false, vmTerminated: false } satisfies UnstartedChatGptBlockedSummary;
+        } finally { releaseWorkerSlots(controller); }
+      }
+      pi.appendEntry("pi-lead:opencode-go-summary", summary);
+      context.ui.notify(`PI Lead OpenCode Go worker: ${summary.status} — ${summary.status === "DONE" ? summary.output : summary.detail ?? summary.reason}`, summary.status === "DONE" ? "info" : "error");
+    };
+
     pi.on("session_shutdown", async () => {
       shuttingDown = true;
       for (const controller of activeRuns.keys()) {
@@ -176,6 +212,13 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       pi.registerCommand("lead-read", {
         description: "Ask an isolated ChatGPT worker a bounded read-only question",
         handler: async (args, context) => runChatGpt(args, context),
+      });
+    }
+
+    if (dependencies.runOpenCodeGo) {
+      pi.registerCommand("lead-read-go", {
+        description: "Ask an isolated OpenCode Go worker a bounded read-only question",
+        handler: async (args, context) => runOpenCodeGo(args, context),
       });
     }
 
@@ -403,6 +446,11 @@ export default createLeadExtension({
     const { createNativeChatGptRuntime } = await import("./native-chatgpt-runtime.ts");
     const runtime = await createNativeChatGptRuntime({ cwd });
     return runReadOnlyChatGptTask(request, runtime, { signal });
+  },
+  async runOpenCodeGo(request, cwd, signal) {
+    const { createNativeOpenCodeGoRuntime } = await import("./native-opencode-go-runtime.ts");
+    const runtime = await createNativeOpenCodeGoRuntime({ cwd });
+    return runReadOnlyOpenCodeGoTask(request, runtime, { signal });
   },
   async runProposedChange(request, cwd, signal) {
     const { createNativeProposedChangeRuntime } = await import(

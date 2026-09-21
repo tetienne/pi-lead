@@ -44,3 +44,11 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Sandbox Boundary](../../../docs/research/sandbox-boundary.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+Implementation completed 2026-09-21, pending the ticket's explicit live-account human gate. `lead-read-go` creates a bounded read-only worker using Pi's native `opencode-go` provider and its pinned `gpt-5.6-luna` catalog record; no OpenCode CLI or separate client was introduced. The host holds `OPENCODE_API_KEY`, substitutes only at `https://opencode.ai/zen/go/v1/responses`, preserves Pi's `x-opencode-session` and `x-opencode-client: pi` headers, denies redirects/alternate destinations and fails closed on reflected keys. Exhaustion is a terminal `QUOTA_EXHAUSTED` result with no paid-provider fallback.
+
+Unattended execution requires the operator to first confirm that OpenCode Go's **Use balance** option is disabled, then set the local `PI_LEAD_OPENCODE_GO_NO_OVERAGE_CONFIRMED=1` acknowledgement. This is a human gate, not evidence that the account setting has been inspected. A real included-quota run remains pending and must not be substituted with paid balance.
+
+Validation: `npm run typecheck`; `node --test test/opencode-go-policy.test.ts test/opencode-go-task.test.ts` (7/7); and `node src/run-opencode-go-fake-cli.ts`, which ran an isolated Gondolin VM through Pi's native streaming path, observed one mediated request with the selected provider/model and required headers, collected the correlated answer, and confirmed VM termination. The sandbox initially prevented Gondolin from opening its local virtio socket; the same fake-upstream fixture passed when run with the required local VM permission. The full suite previously passed before concurrent Ticket 10 work added an incomplete test file; it is not a Ticket 09 failure.
