@@ -95,10 +95,11 @@ test("valid explicit workflow selection bypasses Jev, while unavailable choices 
 
 test("ambiguous, malformed, unknown, stale, and unavailable judgments never route a worker", async () => {
   const cases = [
-    [response({ choice: "UNCERTAIN" }), "CLARIFICATION_REQUIRED"],
+    [response({ choice: "UNCERTAIN", probabilities: { CHAT: 0.04, UNCERTAIN: 0.96 } }), "CLARIFICATION_REQUIRED"],
     [response({ confidence: undefined }), "INVALID_RESPONSE"],
     [response({ choice: "SHELL" }), "INVALID_RESPONSE"],
     [response({ choice: "REVIEW", probabilities: { REVIEW: 0.96, UNCERTAIN: 0.04 } }), "INVALID_RESPONSE"],
+    [response({ probabilities: { CHAT: 0.1, UNCERTAIN: 0.9 } }), "INVALID_RESPONSE"],
   ] as const;
   for (const [judgment, status] of cases) {
     const { router: intake } = router({ async decide() { return judgment; } });
@@ -120,6 +121,10 @@ test("unavailable service and missing cost evidence fail closed, and the capped 
   assert.deepEqual(await unavailable.route("summarize"), {
     status: "SERVICE_UNAVAILABLE",
     reason: "JEV_UNAVAILABLE",
+  });
+  assert.deepEqual(await unavailable.route("retry after uncertain timeout"), {
+    status: "BUDGET_BLOCKED",
+    reason: "COST_EVIDENCE_MISSING",
   });
 
   const noCost = router({ async decide() { return response({ costUsd: undefined }); } }).router;

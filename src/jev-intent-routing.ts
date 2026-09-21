@@ -85,6 +85,13 @@ function validateJudgment(
   ) {
     return undefined;
   }
+  const distribution = request.candidates.map((candidate) => probabilities[candidate] as number);
+  if (
+    Math.abs(distribution.reduce((sum, probability) => sum + probability, 0) - 1) > 0.001 ||
+    distribution.some((probability) => probability > (probabilities[response.choice as string] as number))
+  ) {
+    return undefined;
+  }
   return {
     choice: response.choice as JevWorkflow | "UNCERTAIN",
     confidence: response.confidence,
@@ -165,11 +172,14 @@ export function createJevIntentRouter(options: RouterOptions) {
       try {
         rawResponse = await options.transport.decide(request);
       } catch {
-        reservedUsd -= options.budget.reservationUsd;
+        // A timeout or transport error may have reached the provider. Retain the
+        // reservation and stop further paid attempts until the next reset period.
+        costEvidenceUncertain = true;
         return { status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE" };
       }
       const judgment = validateJudgment(rawResponse, request);
       if (!judgment) {
+        costEvidenceUncertain = true;
         return { status: "INVALID_RESPONSE", reason: "INVALID_JEV_RESPONSE" };
       }
       if (judgment.costUsd === undefined) {

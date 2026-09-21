@@ -131,3 +131,39 @@ test("the Lead admits at most two fixture workers concurrently", async () => {
   for (const release of releases) release();
   await Promise.all([first, second]);
 });
+
+test("natural-language routing keeps chat in Lead and makes ambiguous intake visibly handled", async () => {
+  let inputHandler:
+    | ((event: { source: string; streamingBehavior?: unknown; images?: unknown[]; text: string }, context: unknown) => Promise<{ action: string }>)
+    | undefined;
+  const notifications: Array<{ message: string; level: string }> = [];
+  const pi = {
+    on(name: string, handler: typeof inputHandler) {
+      if (name === "input") inputHandler = handler;
+      return () => undefined;
+    },
+    registerCommand() {},
+    appendEntry() {},
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() {
+      throw new Error("not used");
+    },
+    async routeIntent(input) {
+      assert.equal(input, "this is both a bug report and a request to implement it");
+      return { status: "CLARIFICATION_REQUIRED", reason: "AMBIGUOUS_INTENT" };
+    },
+  })(pi);
+
+  assert.deepEqual(
+    await inputHandler?.(
+      { source: "user", text: "this is both a bug report and a request to implement it" },
+      { cwd: "/consumer", ui: { notify(message: string, level: string) { notifications.push({ message, level }); } } },
+    ),
+    { action: "handled" },
+  );
+  assert.deepEqual(notifications, [{
+    message: "PI Lead intent: clarification required; no worker was started",
+    level: "info",
+  }]);
+});

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { MAX_ACTIVE_WORKERS } from "./policy.ts";
+import type { JevRoutingOutcome } from "./jev-intent-routing.ts";
 import { prepareChatGptQuestion } from "./chatgpt-input.ts";
 import { parseProposedChangeInput } from "./proposed-change-input.ts";
 import { pinReviewSpecification, pinReviewStandards } from "./review-context.ts";
@@ -60,6 +61,7 @@ type LeadDependencies = {
     cwd: string,
     signal: AbortSignal,
   ): Promise<CompleteLocalCodingSummary>;
+  routeIntent?(input: string): Promise<JevRoutingOutcome>;
 };
 
 export function createLeadExtension(dependencies: LeadDependencies) {
@@ -198,14 +200,40 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       }
     });
 
-    if (dependencies.runChatGpt) {
+    if (dependencies.runChatGpt || dependencies.routeIntent) {
       pi.on("input", async (event, context) => {
         if (event.source === "extension" || event.streamingBehavior !== undefined || event.images?.length) {
           return { action: "continue" };
         }
         const match = /^lead:\s*ask worker\s+(.+)$/is.exec(event.text);
-        if (!match?.[1]) return { action: "continue" };
-        await runChatGpt(match[1], context);
+        if (match?.[1] && dependencies.runChatGpt) {
+          await runChatGpt(match[1], context);
+          return { action: "handled" };
+        }
+        if (!dependencies.routeIntent) return { action: "continue" };
+        let outcome: JevRoutingOutcome;
+        try {
+          outcome = await dependencies.routeIntent(event.text);
+        } catch {
+          context.ui.notify("PI Lead intent: routing unavailable; no worker was started", "error");
+          return { action: "handled" };
+        }
+        if (outcome.status === "ROUTED" && outcome.workflow === "CHAT") {
+          return { action: "continue" };
+        }
+        if (outcome.status === "CLARIFICATION_REQUIRED") {
+          context.ui.notify("PI Lead intent: clarification required; no worker was started", "info");
+          return { action: "handled" };
+        }
+        if (outcome.status === "UNAVAILABLE") {
+          context.ui.notify(`PI Lead intent: ${outcome.workflow} is unavailable; no worker was started`, "info");
+          return { action: "handled" };
+        }
+        if (outcome.status === "ROUTED") {
+          context.ui.notify(`PI Lead intent: ${outcome.workflow} requires its workflow entry point; no worker was started`, "info");
+          return { action: "handled" };
+        }
+        context.ui.notify("PI Lead intent: routing unavailable; no worker was started", "error");
         return { action: "handled" };
       });
 
