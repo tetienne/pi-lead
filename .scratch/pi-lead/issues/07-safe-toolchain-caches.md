@@ -4,7 +4,7 @@
 
 **Blocked by:** [03: Return a validated proposed change from a private workspace](03-validated-proposed-change.md)
 
-**Status:** IN PROGRESS
+**Status:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -44,3 +44,9 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Sandbox Boundary](../../../docs/research/sandbox-boundary.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+Implemented 2026-09-21. Proposed-change workers now key mise seeds by the committed `.mise.toml`, exact `mise=2025.8.20-r0`, verified Linux guest architecture and musl ABI. A seed is reusable only after a trusted host attests an integrity manifest; Gondolin mounts it read-only and copies it into worker-private mise storage. Worker content has no route to promote back into a seed.
+
+Validation: focused policy/runtime tests, `npm test` (83 passing) and typecheck passed before subsequent Ticket 08 worktree changes; cold/warm Gondolin fixture runs persisted all preparation, readiness and validation timing deltas and reported `NO_IMPROVEMENT` when not every phase improved. The fixture also proved a guest cannot write the seed, that a private poison written by one worker is absent for the next worker sharing that seed, and that host checkout/VM cleanup remain correct. Independent Standards and Spec reviews drove the seed attestation, platform, pinning and measurement corrections. macOS arm64 is the only runtime evidence; Ubuntu 24.04 x86_64/arm64 remains Ticket 08 work.
