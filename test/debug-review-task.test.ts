@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import {
@@ -7,51 +8,63 @@ import {
   type DebugRuntime,
   type StandaloneBranchReviewRuntime,
 } from "../src/debug-review-task.ts";
-import type { CompleteLocalCodingDone } from "../src/review-fix-commit-task.ts";
+import type { ReviewReport } from "../src/review-fix-commit-task.ts";
+import type { ReviewRequiredSummary } from "../src/proposed-change-task.ts";
 
 const digest = (character: string) => character.repeat(64);
 const commit = (character: string) => character.repeat(40);
+const document = (source: string, contents: string) => ({
+  source,
+  contents,
+  digest: createHash("sha256").update(contents, "utf8").digest("hex"),
+});
 
-function completeTask(): CompleteLocalCodingDone {
+function proposal(): ReviewRequiredSummary {
   return {
-    status: "DONE",
+    status: "REVIEW_REQUIRED",
     taskId: "debug-13",
-    proposal: {
-      status: "REVIEW_REQUIRED",
-      taskId: "debug-13",
-      assignmentId: "debug-13:build:0",
-      workerId: "builder",
-      vmId: "vm-builder",
-      tabId: "tab-builder",
-      paneId: "pane-builder",
-      piSessionId: "session-builder",
-      baseCommit: commit("a"),
-      proposedCommit: commit("b"),
-      validations: [{ task: "test", command: "mise run test", passed: true, exitCode: 0 }],
-      artifactId: digest("c"),
-      files: [],
-      humanGate: true,
-      hostCommitted: false,
-      published: false,
-      vmTerminated: true,
-    },
-    reviews: [],
-    reviewHistory: [],
-    reviewCycles: 0,
-    commit: {
-      branchName: "pi-lead/task-debug-13",
-      commit: commit("b"),
-      committed: true,
-      activeCheckoutPreserved: true,
-    },
+    assignmentId: "debug-13:build:0",
+    workerId: "builder",
+    vmId: "vm-builder",
+    tabId: "tab-builder",
+    paneId: "pane-builder",
+    piSessionId: "session-builder",
+    baseCommit: commit("a"),
+    proposedCommit: commit("b"),
+    validations: [{ task: "test", command: "mise run test", passed: true, exitCode: 0 }],
+    artifactId: digest("c"),
+    files: [],
+    humanGate: true,
+    hostCommitted: false,
     published: false,
-    specification: { source: "ticket.md", digest: digest("d"), contents: "ticket" },
-    standards: { source: "AGENTS.md", digest: digest("e"), contents: "standards" },
+    vmTerminated: true,
+  };
+}
+
+function report(proposed: ReviewRequiredSummary, axis: "STANDARDS" | "SPEC"): ReviewReport {
+  return {
+    taskId: proposed.taskId,
+    assignmentId: `review:${axis}`,
+    axis,
+    reviewerId: `reviewer-${axis}`,
+    contextId: `context-${axis}`,
+    baseCommit: proposed.baseCommit,
+    proposedCommit: proposed.proposedCommit,
+    artifactId: proposed.artifactId,
+    reviewArtifactId: digest(axis === "STANDARDS" ? "d" : "e"),
+    comparisonSource: `git:${proposed.baseCommit}..${proposed.proposedCommit}`,
+    specSource: "ticket.md",
+    specDigest: document("ticket.md", "ticket").digest,
+    standardsDigest: document("AGENTS.md", "standards").digest,
+    findings: [],
+    vmTerminated: true,
+    tabClosed: true,
   };
 }
 
 test("a debug task executes the symptom-specific failing loop before diagnosis, then verifies the reviewed fix", async () => {
   const calls: string[] = [];
+  const built = proposal();
   const runtime: DebugRuntime = {
     async executeFeedback(input) {
       calls.push(`${input.phase}:${input.command}`);
@@ -70,9 +83,17 @@ test("a debug task executes the symptom-specific failing loop before diagnosis, 
       assert.match(input.symptom, /saving/i);
       return { taskId: input.task.taskId, feedbackId: input.reproduction.feedbackId, artifactId: digest("b"), summary: "Null value reaches save." };
     },
-    async implement(input) {
-      calls.push(`implement:${input.diagnosis.artifactId}`);
-      return completeTask();
+    async propose() {
+      calls.push("propose");
+      return built;
+    },
+    async review(input) {
+      calls.push(`review:${input.axis}`);
+      return report(input.proposal, input.axis);
+    },
+    async commit(input) {
+      calls.push("commit");
+      return { branchName: input.branchName, commit: input.proposal.proposedCommit, committed: true, activeCheckoutPreserved: true };
     },
   };
 
@@ -84,8 +105,8 @@ test("a debug task executes the symptom-specific failing loop before diagnosis, 
       namedBase: "main",
       validationTasks: ["test"],
       dependencyHosts: [],
-      specification: { source: "ticket.md", digest: digest("d"), contents: "ticket" },
-      standards: { source: "AGENTS.md", digest: digest("e"), contents: "standards" },
+      specification: document("ticket.md", "ticket"),
+      standards: document("AGENTS.md", "standards"),
     },
     symptom: "Saving an empty title throws.",
     feedbackId: "empty-title-save",
@@ -96,7 +117,10 @@ test("a debug task executes the symptom-specific failing loop before diagnosis, 
   assert.deepEqual(calls, [
     "REPRODUCE:mise run test -- empty-title-save",
     `diagnose:${digest("a")}`,
-    `implement:${digest("b")}`,
+    "propose",
+    "review:STANDARDS",
+    "review:SPEC",
+    "commit",
     "VERIFY:mise run test -- empty-title-save",
   ]);
   if (result.status === "DONE") {
@@ -116,15 +140,17 @@ test("a debug task blocks without diagnosing or changing code when the claimed s
       };
     },
     async diagnose() { diagnosed = true; throw new Error("not reached"); },
-    async implement() { throw new Error("not reached"); },
+    async propose() { throw new Error("not reached"); },
+    async review() { throw new Error("not reached"); },
+    async commit() { throw new Error("not reached"); },
   };
 
   const result = await runDebugTask({
     task: {
       taskId: "debug-13", instruction: "Fix it.", repositoryPath: "/consumer", namedBase: "main",
       validationTasks: ["test"], dependencyHosts: [],
-      specification: { source: "ticket.md", digest: digest("d"), contents: "ticket" },
-      standards: { source: "AGENTS.md", digest: digest("e"), contents: "standards" },
+      specification: document("ticket.md", "ticket"),
+      standards: document("AGENTS.md", "standards"),
     },
     symptom: "It fails.", feedbackId: "repro", feedbackCommand: "mise run test -- repro",
   }, runtime);
@@ -145,6 +171,7 @@ test("a debug task blocks without diagnosing or changing code when the claimed s
 test("a standalone branch review pins both independent reports without mutating or publishing", async () => {
   const calls: string[] = [];
   const runtime: StandaloneBranchReviewRuntime = {
+    async observeReadOnlyState() { return { worktreeDigest: digest("a"), refsDigest: digest("b") }; },
     async review(input) {
       calls.push(input.axis);
       return {
@@ -161,8 +188,8 @@ test("a standalone branch review pins both independent reports without mutating 
       };
     },
   };
-  const specification = { source: "spec.md", digest: digest("d"), contents: "specification" };
-  const standards = { source: "AGENTS.md", digest: digest("e"), contents: "standards" };
+  const specification = document("spec.md", "specification");
+  const standards = document("AGENTS.md", "standards");
   const result = await runStandaloneBranchReview({
     taskId: "review-13",
     baseCommit: commit("a"),
@@ -182,6 +209,7 @@ test("a standalone branch review pins both independent reports without mutating 
 
 test("a standalone branch review explicitly reports a missing spec while retaining its read-only Standards report", async () => {
   const runtime: StandaloneBranchReviewRuntime = {
+    async observeReadOnlyState() { return { worktreeDigest: digest("a"), refsDigest: digest("b") }; },
     async review(input) {
       assert.equal(input.axis, "STANDARDS");
       return {
@@ -194,7 +222,7 @@ test("a standalone branch review explicitly reports a missing spec while retaini
   };
   const result = await runStandaloneBranchReview({
     taskId: "review-13", baseCommit: commit("a"), proposedCommit: commit("b"),
-    standards: { source: "AGENTS.md", digest: digest("e"), contents: "standards" },
+    standards: document("AGENTS.md", "standards"),
   }, runtime);
 
   assert.deepEqual(result, {
@@ -204,7 +232,7 @@ test("a standalone branch review explicitly reports a missing spec while retaini
     reports: [{
       taskId: "review-13", axis: "STANDARDS", reviewerId: "reviewer", contextId: "context",
       comparisonSource: `git:${commit("a")}...${commit("b")}`,
-      standardsDigest: digest("e"),
+      standardsDigest: document("AGENTS.md", "standards").digest,
       findings: [{ severity: "NON_BLOCKING", title: "Name", detail: "Rename this." }],
       readOnly: true, published: false,
     }],
@@ -212,4 +240,44 @@ test("a standalone branch review explicitly reports a missing spec while retaini
     readOnly: true,
     published: false,
   });
+});
+
+test("a standalone review rejects a forged document pin before it can dispatch a reviewer", async () => {
+  let reviewed = false;
+  const runtime: StandaloneBranchReviewRuntime = {
+    async observeReadOnlyState() { throw new Error("not reached"); },
+    async review() { reviewed = true; throw new Error("not reached"); },
+  };
+  const result = await runStandaloneBranchReview({
+    taskId: "review-13", baseCommit: commit("a"), proposedCommit: commit("b"),
+    standards: { source: "AGENTS.md", contents: "standards", digest: digest("a") },
+  }, runtime);
+
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.status === "BLOCKED" && result.reason, "INVALID_REVIEW_CONTEXT");
+  assert.equal(reviewed, false);
+});
+
+test("a standalone review blocks if its supposedly read-only workers changed worktree or refs", async () => {
+  let observations = 0;
+  const standards = document("AGENTS.md", "standards");
+  const runtime: StandaloneBranchReviewRuntime = {
+    async observeReadOnlyState() {
+      observations++;
+      return { worktreeDigest: digest(observations === 1 ? "a" : "c"), refsDigest: digest("b") };
+    },
+    async review(input) {
+      return {
+        taskId: input.taskId, axis: input.axis, reviewerId: "reviewer", contextId: "context",
+        comparisonSource: input.comparisonSource, standardsDigest: input.standards.digest,
+        findings: [], readOnly: true, published: false,
+      };
+    },
+  };
+  const result = await runStandaloneBranchReview({
+    taskId: "review-13", baseCommit: commit("a"), proposedCommit: commit("b"), standards,
+  }, runtime);
+
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.status === "BLOCKED" && result.reason, "REVIEW_EVIDENCE_INVALID");
 });

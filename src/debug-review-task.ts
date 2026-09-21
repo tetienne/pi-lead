@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { PinnedReviewDocument } from "./review-context.ts";
 import type {
   CompleteLocalCodingDone,
@@ -5,7 +7,9 @@ import type {
   CompleteLocalCodingSummary,
   ReviewAxis,
   ReviewFinding,
+  ReviewFixCommitRuntime,
 } from "./review-fix-commit-task.ts";
+import { runReviewFixCommitTask } from "./review-fix-commit-task.ts";
 
 const COMMIT = /^[0-9a-f]{40}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
@@ -36,7 +40,7 @@ export type DebugTaskRequest = {
   feedbackCommand: string;
 };
 
-export interface DebugRuntime {
+export interface DebugRuntime extends ReviewFixCommitRuntime {
   executeFeedback(input: {
     task: CompleteLocalCodingRequest;
     symptom: string;
@@ -49,10 +53,6 @@ export interface DebugRuntime {
     symptom: string;
     reproduction: FeedbackEvidence;
   }, signal?: AbortSignal): Promise<DiagnosisEvidence>;
-  implement(input: {
-    task: CompleteLocalCodingRequest;
-    diagnosis: DiagnosisEvidence;
-  }, signal?: AbortSignal): Promise<CompleteLocalCodingSummary>;
 }
 
 export type DebugTaskDone = {
@@ -159,7 +159,19 @@ export async function runDebugTask(
 
   let implementation: CompleteLocalCodingSummary;
   try {
-    implementation = await runtime.implement({ task: request.task, diagnosis }, options.signal);
+    implementation = await runReviewFixCommitTask(
+      {
+        ...request.task,
+        instruction: [
+          request.task.instruction,
+          "",
+          "Diagnose and correct the reproduced symptom using this attributable diagnosis evidence:",
+          diagnosis.summary,
+        ].join("\n"),
+      },
+      runtime,
+      options,
+    );
   } catch (error) {
     return blocked("IMPLEMENTATION_BLOCKED", error instanceof Error ? error.message : String(error), { reproduction, diagnosis });
   }
@@ -213,6 +225,7 @@ export type StandaloneBranchReviewReport = {
 };
 
 export interface StandaloneBranchReviewRuntime {
+  observeReadOnlyState(signal?: AbortSignal): Promise<{ worktreeDigest: string; refsDigest: string }>;
   review(input: {
     taskId: string;
     axis: ReviewAxis;
@@ -244,7 +257,16 @@ export type StandaloneBranchReviewSummary =
     };
 
 function validDocument(document: PinnedReviewDocument): boolean {
-  return document.source.trim().length > 0 && DIGEST.test(document.digest) && document.contents.trim().length > 0;
+  return (
+    document.source.trim().length > 0 &&
+    DIGEST.test(document.digest) &&
+    document.contents.trim().length > 0 &&
+    createHash("sha256").update(document.contents, "utf8").digest("hex") === document.digest
+  );
+}
+
+function validReadOnlyState(value: { worktreeDigest: string; refsDigest: string }): boolean {
+  return DIGEST.test(value.worktreeDigest) && DIGEST.test(value.refsDigest);
 }
 
 function validReviewReport(
@@ -298,6 +320,15 @@ export async function runStandaloneBranchReview(
     return reviewBlocked(request.taskId, "INVALID_REVIEW_CONTEXT", "Standalone reviews require distinct pinned commits and valid review documents");
   }
   const comparisonSource = `git:${request.baseCommit}...${request.proposedCommit}`;
+  let before: { worktreeDigest: string; refsDigest: string };
+  try {
+    before = await runtime.observeReadOnlyState(options.signal);
+  } catch (error) {
+    return reviewBlocked(request.taskId, "REVIEW_FAILED", error instanceof Error ? error.message : String(error));
+  }
+  if (!validReadOnlyState(before)) {
+    return reviewBlocked(request.taskId, "REVIEW_EVIDENCE_INVALID", "The pre-review worktree/ref state is invalid");
+  }
   const inputs: Array<Parameters<StandaloneBranchReviewRuntime["review"]>[0]> = [
     { taskId: request.taskId, axis: "STANDARDS", comparisonSource, standards: request.standards },
     ...(request.specification === undefined
@@ -322,6 +353,19 @@ export async function runStandaloneBranchReview(
       (!specification || !validReviewReport(specification, inputs[1]!, standards)))
   ) {
     return reviewBlocked(request.taskId, "REVIEW_EVIDENCE_INVALID", "Independent review reports must cover the pinned comparison in separate read-only contexts", reports);
+  }
+  let after: { worktreeDigest: string; refsDigest: string };
+  try {
+    after = await runtime.observeReadOnlyState(options.signal);
+  } catch (error) {
+    return reviewBlocked(request.taskId, "REVIEW_FAILED", error instanceof Error ? error.message : String(error), reports);
+  }
+  if (
+    !validReadOnlyState(after) ||
+    after.worktreeDigest !== before.worktreeDigest ||
+    after.refsDigest !== before.refsDigest
+  ) {
+    return reviewBlocked(request.taskId, "REVIEW_EVIDENCE_INVALID", "Read-only review changed the worktree or refs", reports);
   }
   return {
     status: "DONE",
