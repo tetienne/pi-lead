@@ -4,7 +4,7 @@
 
 **Blocked by:** [02: Complete a ChatGPT Pro read-only worker task](02-chatgpt-worker.md)
 
-**Status:** IN PROGRESS
+**Status:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -50,4 +50,4 @@ Read source version caveats before using an API; research is source evidence, no
 
 `lead-plan` and natural IDEATE routing now dispatch the installed Ask Matt flow through Pi skill expansion. The bounded prompt requires grill-with-docs, explicitly gated primary-source research, to-spec, human seam approval, to-tickets, human ticket-granularity approval, and separate local tracker publication. Wayfinder is explicitly unavailable. The former local pseudo-skill state machine was removed.
 
-Automated validation passed through the full suite before the final prompt-boundary correction. The remaining completion gate is a real sample planning request: it must be carried through the actual skills and both human approvals, producing a cited research note when needed, durable context/ADR/spec files and separately published dependent ticket files. No planning request or approval is fabricated automatically.
+Automated validation passed through the full suite before the final prompt-boundary correction. The live integration test then loaded `lead-plan` from the project-local extension, entered `ask-matt`, `grill-with-docs`, explicit primary-source research, received the two human confirmations, and reached `to-spec`. The user explicitly accepted this as the ticket test and intentionally interrupted it before it created a sample spec or tickets; no business artifacts or approvals were fabricated. The integration is therefore accepted as DONE, while a future real planning request will produce its own artifacts through the same human gates.
