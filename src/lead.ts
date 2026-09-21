@@ -244,7 +244,10 @@ export function createLeadExtension(dependencies: LeadDependencies) {
         if (!dependencies.routeIntent) return { action: "continue" };
         let outcome: JevRoutingOutcome;
         try {
-          outcome = await dependencies.routeIntent(explicit?.[2] ?? event.text, explicitWorkflow);
+          outcome = await dependencies.routeIntent(
+            explicitWorkflow ? explicit?.[2] ?? event.text : event.text,
+            explicitWorkflow,
+          );
         } catch {
           context.ui.notify("PI Lead intent: routing unavailable; no worker was started", "error");
           return { action: "handled" };
