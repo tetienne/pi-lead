@@ -137,4 +137,11 @@ test("a guest whose architecture or ABI differs from its seed is rejected", asyn
     },
   };
   await assert.rejects(assertGuestCachePlatform(vm as never, plan), /architecture/i);
+  const wrongAbi = {
+    async exec(command: string[]) {
+      if (command[1] === "-m") return { ok: true, stdout: "aarch64\n" };
+      return { ok: false, stdout: "" };
+    },
+  };
+  await assert.rejects(assertGuestCachePlatform(wrongAbi as never, plan), /ABI/i);
 });

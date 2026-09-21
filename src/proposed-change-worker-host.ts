@@ -254,6 +254,9 @@ async function runChecked(
 }
 
 async function ensureGuestToolchain(vm: VM, environment: Record<string, string>): Promise<void> {
+  const expectedMiseVersion = GUEST_MISE_VERSION.replace(/-r\d+$/, "");
+  const hasPinnedMise = (result: { ok: boolean; stdout: string } | undefined): boolean =>
+    result?.ok === true && result.stdout.trim().split(/\s+/, 1)[0] === expectedMiseVersion;
   let ready = true;
   for (const path of ["/usr/bin/git", "/usr/bin/mise"]) {
     try {
@@ -265,7 +268,7 @@ async function ensureGuestToolchain(vm: VM, environment: Record<string, string>)
   const installed = ready
     ? await vm.exec(["/usr/bin/mise", "--version"], { env: environment })
     : undefined;
-  if (!installed?.ok || !installed.stdout.startsWith(GUEST_MISE_VERSION.replace(/-r\d+$/, ""))) {
+  if (!hasPinnedMise(installed)) {
     await runChecked(
       vm,
       ["/sbin/apk", "add", "--no-cache", GUEST_GIT_PACKAGE, GUEST_MISE_PACKAGE],
@@ -276,7 +279,7 @@ async function ensureGuestToolchain(vm: VM, environment: Record<string, string>)
     );
   }
   const verified = await vm.exec(["/usr/bin/mise", "--version"], { env: environment });
-  if (!verified.ok || !verified.stdout.startsWith(GUEST_MISE_VERSION.replace(/-r\d+$/, ""))) {
+  if (!hasPinnedMise(verified)) {
     throw new Error(`Pinned guest mise ${GUEST_MISE_VERSION} is unavailable`);
   }
 }

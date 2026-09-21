@@ -219,10 +219,20 @@ if (comparisonDirectory && summary.status === "REVIEW_REQUIRED" && summary.toolc
     cacheComparison = {
       cold,
       warm: summary.toolchainCache,
+      coldPreparationDeltaMs:
+        summary.toolchainCache.seedCopyMs + summary.toolchainCache.guestToolchainPreparationMs -
+        (cold.seedCopyMs + cold.guestToolchainPreparationMs),
       miseReadinessDeltaMs: summary.toolchainCache.miseReadinessMs - cold.miseReadinessMs,
       validationExecutionDeltaMs: summary.toolchainCache.validationExecutionMs - cold.validationExecutionMs,
       conclusion:
-        summary.toolchainCache.miseReadinessMs < cold.miseReadinessMs
+        summary.toolchainCache.seedCopyMs + summary.toolchainCache.guestToolchainPreparationMs <=
+          cold.seedCopyMs + cold.guestToolchainPreparationMs &&
+        summary.toolchainCache.miseReadinessMs <= cold.miseReadinessMs &&
+        summary.toolchainCache.validationExecutionMs <= cold.validationExecutionMs &&
+        (summary.toolchainCache.seedCopyMs + summary.toolchainCache.guestToolchainPreparationMs <
+          cold.seedCopyMs + cold.guestToolchainPreparationMs ||
+          summary.toolchainCache.miseReadinessMs < cold.miseReadinessMs ||
+          summary.toolchainCache.validationExecutionMs < cold.validationExecutionMs)
           ? "IMPROVED"
           : "NO_IMPROVEMENT",
     };

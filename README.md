@@ -97,6 +97,10 @@ npm run change-mutating-check-fixture
 
 The positive fixture executes its controlled edit process inside the VM and proves transfer, isolated mise validation, exact artifact collection, checkout preservation and confirmed cleanup. The negative fixtures prove a precise dependency denial with no policy expansion and rejection of a validation task that mutates the proposed tree. The real Pi/provider path reuses Ticket 02's host-mediated ChatGPT worker, but was not charged again for this ticket; Ubuntu 24.04 coverage remains assigned to Ticket 08.
 
+## Safe mise cache seeds
+
+Toolchain cache seeds are host-owned and keyed by the committed `.mise.toml`, the pinned guest mise package, Linux guest architecture and musl ABI. A seed becomes reusable only after a trusted host provisioning flow has populated it and called `attestToolchainSeed`; its manifest includes a content digest. Guest workers receive that seed read-only at `/opt/pi-lead/mise-seed`, copy it into worker-private mise directories, and never promote writable worker content back into a seed. The cold/warm fixture can persist a comparison artifact and records `NO_IMPROVEMENT` when its measured preparation, readiness and validation phases do not all improve. This runtime evidence is macOS arm64 only; it does not establish Ubuntu coverage.
+
 ## Controlled task-branch publication
 
 After a validated implementation has passed its independent review and been delivered locally, the trusted host can publish only its exact `pi-lead/task-<task-id>` branch. Configure the consuming project's permitted remote in the trusted Lead environment, not in guest-visible worker inputs:
