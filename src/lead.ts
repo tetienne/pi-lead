@@ -5,6 +5,7 @@ import { MAX_ACTIVE_WORKERS } from "./policy.ts";
 import { createJevIntentRouter, JEV_WORKFLOWS, type JevRoutingOutcome, type JevWorkflow } from "./jev-intent-routing.ts";
 import { createOpenRouterJevTransport } from "./openrouter-jev-transport.ts";
 import { planningSkillPrompt } from "./planning-intake.ts";
+import { triageSkillPrompt, wayfinderSkillPrompt } from "./tracker-intake.ts";
 import { prepareChatGptQuestion } from "./chatgpt-input.ts";
 import { parseProposedChangeInput } from "./proposed-change-input.ts";
 import { pinReviewSpecification, pinReviewStandards } from "./review-context.ts";
@@ -86,7 +87,7 @@ function configuredIntentRouter(): LeadDependencies["routeIntent"] | undefined {
   }
   const router = createJevIntentRouter({
     transport: createOpenRouterJevTransport({ apiKey }),
-    getState: () => ({ version: 1, availability: { CHAT: true, IDEATE: true } }),
+    getState: () => ({ version: 1, availability: { CHAT: true, IDEATE: true, TRIAGE: true, WAYFIND: true } }),
     budget: { dailyCapUsd: 1, reservationUsd: 0.01, resetHourUtc },
   });
   return router.route;
@@ -136,6 +137,14 @@ export function createLeadExtension(dependencies: LeadDependencies) {
     const startPlanning = (idea: string, context: { ui: { notify(message: string, level: "info" | "error"): void } }) => {
       pi.sendUserMessage(planningSkillPrompt(idea), { expandPromptTemplates: true });
       context.ui.notify("PI Lead plan: sent to Ask Matt; no build was started", "info");
+    };
+    const startTriage = (request: string, context: { ui: { notify(message: string, level: "info" | "error"): void } }) => {
+      pi.sendUserMessage(triageSkillPrompt(request), { expandPromptTemplates: true });
+      context.ui.notify("PI Lead triage: sent to Matt; no build was started", "info");
+    };
+    const startWayfinding = (request: string, context: { ui: { notify(message: string, level: "info" | "error"): void } }) => {
+      pi.sendUserMessage(wayfinderSkillPrompt(request), { expandPromptTemplates: true });
+      context.ui.notify("PI Lead wayfinding: sent to Matt; no build was started", "info");
     };
 
     const runChatGpt = async (
@@ -261,8 +270,18 @@ export function createLeadExtension(dependencies: LeadDependencies) {
           return { action: "continue" };
         }
         if (outcome.status === "ROUTED" && outcome.workflow === "IDEATE") {
-          try { startPlanning(event.text, context); }
+          try { startPlanning(explicitWorkflow ? explicit?.[2] ?? event.text : event.text, context); }
           catch (error) { context.ui.notify(`PI Lead plan: ${error instanceof Error ? error.message : String(error)}`, "error"); }
+          return { action: "handled" };
+        }
+        if (outcome.status === "ROUTED" && outcome.workflow === "TRIAGE") {
+          try { startTriage(explicitWorkflow ? explicit?.[2] ?? event.text : event.text, context); }
+          catch (error) { context.ui.notify(`PI Lead triage: ${error instanceof Error ? error.message : String(error)}`, "error"); }
+          return { action: "handled" };
+        }
+        if (outcome.status === "ROUTED" && outcome.workflow === "WAYFIND") {
+          try { startWayfinding(explicitWorkflow ? explicit?.[2] ?? event.text : event.text, context); }
+          catch (error) { context.ui.notify(`PI Lead wayfinding: ${error instanceof Error ? error.message : String(error)}`, "error"); }
           return { action: "handled" };
         }
         if (outcome.status === "SERVICE_UNAVAILABLE" && !explicitWorkflow) {
@@ -516,6 +535,28 @@ export function createLeadExtension(dependencies: LeadDependencies) {
           startPlanning(args, context);
         } catch (error) {
           context.ui.notify(`PI Lead plan: ${error instanceof Error ? error.message : String(error)}`, "error");
+        }
+      },
+    });
+
+    pi.registerCommand("lead-triage", {
+      description: "Triage incoming work through the installed Matt workflow",
+      handler: async (args, context) => {
+        try {
+          startTriage(args, context);
+        } catch (error) {
+          context.ui.notify(`PI Lead triage: ${error instanceof Error ? error.message : String(error)}`, "error");
+        }
+      },
+    });
+
+    pi.registerCommand("lead-wayfind", {
+      description: "Map a large uncertain effort through the installed Matt workflow",
+      handler: async (args, context) => {
+        try {
+          startWayfinding(args, context);
+        } catch (error) {
+          context.ui.notify(`PI Lead wayfinding: ${error instanceof Error ? error.message : String(error)}`, "error");
         }
       },
     });
