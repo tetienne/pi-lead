@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { collectGitProposal, prepareCommittedBase } from "./git-proposal.ts";
+import { collectGitProposal, deliverGitProposal, prepareCommittedBase } from "./git-proposal.ts";
 import type { HerdrClient } from "./native-runtime.ts";
 import { createProposedChangePolicy } from "./proposed-change-policy.ts";
 import {
@@ -17,6 +17,7 @@ import {
   type ProposedChangeWorker,
   type ProposedChangeWorkerResult,
   type ValidationEvidence,
+  type ReviewRequiredSummary,
 } from "./proposed-change-task.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
 
@@ -25,6 +26,18 @@ const execFileAsync = promisify(execFile);
 export interface ProposedChangeProcessHost {
   start(request: { paneId: string; stateDirectory: string }): Promise<void>;
 }
+
+export type NativeProposedChangeRuntime = ProposedChangeRuntime & {
+  commitProposal(
+    proposal: ReviewRequiredSummary,
+    branchName: string,
+  ): Promise<{
+    branchName: string;
+    commit: string;
+    committed: true;
+    activeCheckoutPreserved: true;
+  }>;
+};
 
 type NativeProposedChangeRuntimeOptions = {
   cwd: string;
@@ -235,7 +248,7 @@ function parseResult(value: unknown): ProposedChangeWorkerResult {
 
 export async function createNativeProposedChangeRuntime(
   options: NativeProposedChangeRuntimeOptions,
-): Promise<ProposedChangeRuntime> {
+): Promise<NativeProposedChangeRuntime> {
   const cli = new NativeProposedChangeCliClient();
   const herdr = options.herdr ?? cli;
   const processHost = options.processHost ?? cli;
@@ -410,6 +423,28 @@ export async function createNativeProposedChangeRuntime(
         throw new Error("Collected proposal revision does not match the worker result");
       }
       return { artifactId: collected.artifactId, files: collected.files };
+    },
+
+    async commitProposal(proposal: ReviewRequiredSummary, branchName: string) {
+      const run = runs.get(proposal.vmId);
+      if (
+        !run ||
+        run.worker.taskId !== proposal.taskId ||
+        run.worker.assignmentId !== proposal.assignmentId ||
+        run.worker.workerId !== proposal.workerId ||
+        run.worker.baseCommit !== proposal.baseCommit
+      ) {
+        throw new Error("Cannot commit a proposal that is not owned by this runtime");
+      }
+      return deliverGitProposal({
+        repositoryPath: options.cwd,
+        baseCommit: proposal.baseCommit,
+        proposedCommit: proposal.proposedCommit,
+        artifactId: proposal.artifactId,
+        bundlePath: join(run.directory, "proposal.bundle"),
+        collectionDirectory: join(run.directory, "commit-collection"),
+        branchName,
+      });
     },
 
     async terminate(worker: ProposedChangeWorker): Promise<{ vmId: string; terminated: boolean }> {

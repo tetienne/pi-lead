@@ -13,6 +13,7 @@ const MAX_TOTAL_BLOB_BYTES = 64 * 1024 * 1024;
 const MAX_CHANGED_FILES = 1_000;
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const NAMED_BASE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+const TASK_BRANCH = /^pi-lead\/task-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 type GitOutput = { stdout: Buffer; stderr: Buffer };
 
@@ -383,12 +384,24 @@ export async function collectGitProposal(options: {
   const files: ProposedFile[] = [];
   let totalBlobBytes = 0;
   for (const change of rawChanges) {
+    const previousContent =
+      change.oldMode === "000000" ? undefined : await objectContents(repository, change.oldObject);
+    if (previousContent) totalBlobBytes += previousContent.byteLength;
     if (change.status === "deleted") {
+      if (totalBlobBytes > MAX_TOTAL_BLOB_BYTES) {
+        throw new Error(`Proposed file content exceeds ${MAX_TOTAL_BLOB_BYTES} bytes`);
+      }
       files.push({
         path: change.path,
         status: change.status,
         oldMode: change.oldMode,
         newMode: change.newMode,
+        ...(previousContent
+          ? {
+              previousContentBase64: previousContent.toString("base64"),
+              previousBinary: isBinary(previousContent),
+            }
+          : {}),
       });
       continue;
     }
@@ -413,9 +426,79 @@ export async function collectGitProposal(options: {
       newMode: change.newMode,
       contentBase64: content.toString("base64"),
       binary: change.newMode === "120000" ? false : isBinary(content),
+      ...(previousContent
+        ? {
+            previousContentBase64: previousContent.toString("base64"),
+            previousBinary: isBinary(previousContent),
+          }
+        : {}),
       ...(symlinkTarget === undefined ? {} : { symlinkTarget }),
     });
   }
   const artifactId = createHash("sha256").update(await readFile(bundlePath)).digest("hex");
   return { artifactId, proposedCommit, files };
+}
+
+export async function deliverGitProposal(options: {
+  repositoryPath: string;
+  baseCommit: string;
+  proposedCommit: string;
+  artifactId: string;
+  bundlePath: string;
+  collectionDirectory: string;
+  branchName: string;
+}): Promise<{
+  branchName: string;
+  commit: string;
+  committed: true;
+  activeCheckoutPreserved: true;
+}> {
+  if (!TASK_BRANCH.test(options.branchName)) {
+    throw new Error("Invalid local PI Lead task branch");
+  }
+  if (!OBJECT_ID.test(options.proposedCommit)) throw new Error("Invalid proposed commit ID");
+  if (!/^[0-9a-f]{64}$/.test(options.artifactId)) throw new Error("Invalid proposal artifact ID");
+  const repositoryPath = await realpath(options.repositoryPath);
+  const topLevel = await gitText(repositoryPath, ["rev-parse", "--show-toplevel"]);
+  if (resolve(topLevel) !== repositoryPath) {
+    throw new Error("Task branch delivery requires the consuming-project root");
+  }
+  const collected = await collectGitProposal({
+    baseCommit: options.baseCommit,
+    bundlePath: options.bundlePath,
+    collectionDirectory: options.collectionDirectory,
+  });
+  if (
+    collected.proposedCommit !== options.proposedCommit ||
+    collected.artifactId !== options.artifactId
+  ) {
+    throw new Error("Proposal artifact no longer matches the reviewed final revision");
+  }
+  const fullBranchName = `refs/heads/${options.branchName}`;
+  const existingRefs = (await gitText(repositoryPath, ["for-each-ref", "--format=%(refname)", fullBranchName]))
+    .split("\n")
+    .filter(Boolean);
+  if (existingRefs.includes(fullBranchName)) {
+    throw new Error(`Local PI Lead task branch already exists: ${options.branchName}`);
+  }
+  await runGit(repositoryPath, [
+    "fetch",
+    "--no-tags",
+    resolve(options.bundlePath),
+    `${PROPOSAL_REF}:${fullBranchName}`,
+  ]);
+  const deliveredCommit = await gitText(repositoryPath, [
+    "rev-parse",
+    "--verify",
+    `${fullBranchName}^{commit}`,
+  ]);
+  if (deliveredCommit !== options.proposedCommit) {
+    throw new Error("Delivered task branch does not identify the final reviewed proposal");
+  }
+  return {
+    branchName: options.branchName,
+    commit: deliveredCommit,
+    committed: true,
+    activeCheckoutPreserved: true,
+  };
 }

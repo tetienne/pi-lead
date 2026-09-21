@@ -4,6 +4,7 @@ export type ParsedProposedChangeInput = {
   namedBase: string;
   validationTasks: string[];
   dependencyHosts: string[];
+  specSource?: string;
   instruction: string;
 };
 
@@ -19,6 +20,7 @@ export function parseProposedChangeInput(raw: string): ParsedProposedChangeInput
   }
   const tokens = optionsText.split(/\s+/).filter(Boolean);
   let namedBase: string | undefined;
+  let specSource: string | undefined;
   const validationTasks: string[] = [];
   const dependencyHosts: string[] = [];
   for (let index = 0; index < tokens.length; index += 2) {
@@ -28,6 +30,17 @@ export function parseProposedChangeInput(raw: string): ParsedProposedChangeInput
     if (option === "--base") {
       if (namedBase !== undefined) throw new Error("--base may be provided only once");
       namedBase = value;
+    } else if (option === "--spec") {
+      if (specSource !== undefined) throw new Error("--spec may be provided only once");
+      if (
+        value.startsWith("/") ||
+        value.includes("\\") ||
+        value.includes("\0") ||
+        value.split("/").some((part) => part === "" || part === "." || part === "..")
+      ) {
+        throw new Error("--spec must be a confined relative Markdown path");
+      }
+      specSource = value;
     } else if (option === "--check") {
       validationTasks.push(value);
     } else if (option === "--allow") {
@@ -49,5 +62,5 @@ export function parseProposedChangeInput(raw: string): ParsedProposedChangeInput
     dependencyHosts,
     validationTasks,
   });
-  return { namedBase, validationTasks, dependencyHosts, instruction };
+  return { namedBase, validationTasks, dependencyHosts, ...(specSource ? { specSource } : {}), instruction };
 }

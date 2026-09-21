@@ -4,12 +4,18 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MAX_ACTIVE_WORKERS } from "./policy.ts";
 import { prepareChatGptQuestion } from "./chatgpt-input.ts";
 import { parseProposedChangeInput } from "./proposed-change-input.ts";
+import { pinReviewSpecification, pinReviewStandards } from "./review-context.ts";
 import {
   runProposedChangeTask,
   type ProposedChangeRequest,
   type ProposedChangeSummary,
   type UnstartedProposedChangeSummary,
 } from "./proposed-change-task.ts";
+import {
+  runReviewFixCommitTask,
+  type CompleteLocalCodingRequest,
+  type CompleteLocalCodingSummary,
+} from "./review-fix-commit-task.ts";
 import {
   runReadOnlyChatGptTask,
   type ChatGptRunSummary,
@@ -39,11 +45,54 @@ type LeadDependencies = {
     cwd: string,
     signal: AbortSignal,
   ): Promise<ProposedChangeSummary>;
+  runCompleteLocalCoding?(
+    request: CompleteLocalCodingRequest,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<CompleteLocalCodingSummary>;
 };
 
 export function createLeadExtension(dependencies: LeadDependencies) {
   return (pi: ExtensionAPI): void => {
-    const activeRuns = new Set<AbortController>();
+    const activeRuns = new Map<AbortController, number>();
+    const queuedRuns: Array<{
+      slots: number;
+      controller: AbortController;
+      resolve(controller: AbortController): void;
+      reject(reason: unknown): void;
+    }> = [];
+    let shuttingDown = false;
+    const activeWorkerSlots = () => [...activeRuns.values()].reduce((sum, slots) => sum + slots, 0);
+    const startQueuedRuns = () => {
+      while (true) {
+        const index = queuedRuns.findIndex((queued) =>
+          activeWorkerSlots() + queued.slots <= MAX_ACTIVE_WORKERS,
+        );
+        if (index < 0) return;
+        const queued = queuedRuns.splice(index, 1)[0];
+        if (!queued) return;
+        activeRuns.set(queued.controller, queued.slots);
+        queued.resolve(queued.controller);
+      }
+    };
+    const reserveWorkerSlots = (slots: number): Promise<AbortController> => {
+      const controller = new AbortController();
+      if (shuttingDown) {
+        controller.abort(new DOMException("Lead session closed", "AbortError"));
+        return Promise.reject(controller.signal.reason);
+      }
+      if (activeWorkerSlots() + slots <= MAX_ACTIVE_WORKERS) {
+        activeRuns.set(controller, slots);
+        return Promise.resolve(controller);
+      }
+      return new Promise((resolvePromise, reject) => {
+        queuedRuns.push({ slots, controller, resolve: resolvePromise, reject });
+      });
+    };
+    const releaseWorkerSlots = (controller: AbortController) => {
+      activeRuns.delete(controller);
+      startQueuedRuns();
+    };
 
     const runChatGpt = async (
       question: string,
@@ -62,7 +111,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       }
       const request = { taskId: randomUUID(), assignmentId: randomUUID(), question: preparedQuestion };
       let summary: ChatGptRunSummary;
-      if (activeRuns.size >= MAX_ACTIVE_WORKERS) {
+      if (activeWorkerSlots() + 1 > MAX_ACTIVE_WORKERS) {
         summary = {
           status: "BLOCKED",
           reason: "CONCURRENCY_LIMIT",
@@ -75,7 +124,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
         } satisfies UnstartedChatGptBlockedSummary;
       } else {
         const controller = new AbortController();
-        activeRuns.add(controller);
+        activeRuns.set(controller, 1);
         try {
           summary = await dependencies.runChatGpt(request, context.cwd, controller.signal);
         } catch (error) {
@@ -90,7 +139,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
             vmTerminated: false,
           } satisfies UnstartedChatGptBlockedSummary;
         } finally {
-          activeRuns.delete(controller);
+          releaseWorkerSlots(controller);
         }
       }
       pi.appendEntry("pi-lead:chatgpt-summary", summary);
@@ -102,8 +151,14 @@ export function createLeadExtension(dependencies: LeadDependencies) {
     };
 
     pi.on("session_shutdown", async () => {
-      for (const controller of activeRuns) {
+      shuttingDown = true;
+      for (const controller of activeRuns.keys()) {
         controller.abort(new DOMException("Lead session closed", "AbortError"));
+      }
+      for (const queued of queuedRuns.splice(0)) {
+        const reason = new DOMException("Lead session closed before queued work started", "AbortError");
+        queued.controller.abort(reason);
+        queued.reject(reason);
       }
     });
 
@@ -146,7 +201,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
             ...parsed,
           };
           let summary: ProposedChangeSummary;
-          if (activeRuns.size >= MAX_ACTIVE_WORKERS) {
+          if (activeWorkerSlots() + 1 > MAX_ACTIVE_WORKERS) {
             summary = {
               status: "BLOCKED",
               reason: "CONCURRENCY_LIMIT",
@@ -159,7 +214,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
             } satisfies UnstartedProposedChangeSummary;
           } else {
             const controller = new AbortController();
-            activeRuns.add(controller);
+            activeRuns.set(controller, 1);
             try {
               summary = await runProposedChange(
                 request,
@@ -178,7 +233,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
                 vmTerminated: false,
               } satisfies UnstartedProposedChangeSummary;
             } finally {
-              activeRuns.delete(controller);
+            releaseWorkerSlots(controller);
             }
           }
           pi.appendEntry("pi-lead:proposed-change-summary", summary);
@@ -194,12 +249,107 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       });
     }
 
+    if (dependencies.runCompleteLocalCoding) {
+      const runCompleteLocalCoding = dependencies.runCompleteLocalCoding;
+      pi.registerCommand("lead-implement", {
+        description: "Build, independently review, correct and commit an isolated coding task",
+        handler: async (args, context) => {
+          let parsed: ReturnType<typeof parseProposedChangeInput>;
+          try {
+            parsed = parseProposedChangeInput(args);
+          } catch (error) {
+            context.ui.notify(
+              `PI Lead implement: ${error instanceof Error ? error.message : String(error)}`,
+              "error",
+            );
+            return;
+          }
+          let specification: CompleteLocalCodingRequest["specification"];
+          let standards: CompleteLocalCodingRequest["standards"];
+          try {
+            if (!parsed.specSource) throw new Error("implement request requires --spec <relative-markdown-path>");
+            [specification, standards] = await Promise.all([
+              pinReviewSpecification(context.cwd, parsed.specSource),
+              pinReviewStandards(context.cwd),
+            ]);
+          } catch (error) {
+            context.ui.notify(
+              `PI Lead implement: ${error instanceof Error ? error.message : String(error)}`,
+              "error",
+            );
+            return;
+          }
+          const request: CompleteLocalCodingRequest = {
+            taskId: randomUUID(),
+            repositoryPath: context.cwd,
+            ...parsed,
+            specification,
+            standards,
+          };
+          let summary: CompleteLocalCodingSummary;
+          // This task can have its Standards and Spec reviewers active together, so it
+          // reserves both permitted worker slots for the whole lifecycle and queues
+          // behind already-running work instead of overcommitting reviewer capacity.
+          if (activeWorkerSlots() + 2 > MAX_ACTIVE_WORKERS) {
+            context.ui.notify("PI Lead implement: QUEUED — waiting for two review slots", "info");
+          }
+          let controller: AbortController;
+          try {
+            controller = await reserveWorkerSlots(2);
+          } catch (error) {
+            summary = {
+              status: "BLOCKED",
+              taskId: request.taskId,
+              reason: "BUILD_BLOCKED",
+              detail: error instanceof Error ? error.message : String(error),
+              reviews: [],
+              reviewHistory: [],
+              reviewCycles: 0,
+              diagnosticsRetained: true,
+              specification,
+              standards,
+            };
+            pi.appendEntry("pi-lead:complete-task-summary", summary);
+            context.ui.notify(`PI Lead implement: BLOCKED — ${error instanceof Error ? error.message : String(error)}`, "error");
+            return;
+          }
+          try {
+            summary = await runCompleteLocalCoding(request, context.cwd, controller.signal);
+          } catch (error) {
+            summary = {
+              status: "BLOCKED",
+              taskId: request.taskId,
+              reason: "BUILD_BLOCKED",
+              detail: error instanceof Error ? error.message : String(error),
+              reviews: [],
+              reviewHistory: [],
+              reviewCycles: 0,
+              diagnosticsRetained: true,
+              specification,
+              standards,
+            };
+          } finally {
+            releaseWorkerSlots(controller);
+          }
+          pi.appendEntry("pi-lead:complete-task-summary", summary);
+          const detail =
+            summary.status === "DONE"
+              ? `committed ${summary.commit.commit} on ${summary.commit.branchName}`
+              : summary.detail;
+          context.ui.notify(
+            `PI Lead implement: ${summary.status} — ${detail}`,
+            summary.status === "DONE" ? "info" : "error",
+          );
+        },
+      });
+    }
+
     pi.registerCommand("lead-fixture", {
       description: "Run the PI Lead isolated fixture",
       handler: async (_args, context) => {
         const request = { taskId: randomUUID(), assignmentId: randomUUID() };
         let summary: FixtureRunSummary;
-        if (activeRuns.size >= MAX_ACTIVE_WORKERS) {
+        if (activeWorkerSlots() + 1 > MAX_ACTIVE_WORKERS) {
           summary = {
             status: "BLOCKED",
             reason: "CONCURRENCY_LIMIT",
@@ -214,7 +364,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
           return;
         }
         const controller = new AbortController();
-        activeRuns.add(controller);
+        activeRuns.set(controller, 1);
         try {
           try {
             summary = await dependencies.runFixture(request, context.cwd, controller.signal);
@@ -236,7 +386,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
             summary.status === "DONE" ? "info" : "error",
           );
         } finally {
-          activeRuns.delete(controller);
+          releaseWorkerSlots(controller);
         }
       },
     });
@@ -260,5 +410,12 @@ export default createLeadExtension({
     );
     const runtime = await createNativeProposedChangeRuntime({ cwd });
     return runProposedChangeTask(request, runtime, { signal });
+  },
+  async runCompleteLocalCoding(request, cwd, signal) {
+    const { createNativeReviewFixCommitRuntime } = await import(
+      "./native-review-fix-commit-runtime.ts"
+    );
+    const runtime = await createNativeReviewFixCommitRuntime({ cwd });
+    return runReviewFixCommitTask(request, runtime, { signal });
   },
 });

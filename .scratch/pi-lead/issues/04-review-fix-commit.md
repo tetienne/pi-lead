@@ -4,7 +4,7 @@
 
 **Blocked by:** [03: Return a validated proposed change from a private workspace](03-validated-proposed-change.md)
 
-**Status:** ready-for-agent
+**Status:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -45,3 +45,11 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Herdr Contracts](../../../docs/research/herdr-contracts.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+Implemented 2026-09-21. `/lead-implement` takes the existing explicit base/check/dependency inputs plus a confined `--spec` path. The Lead snapshots that specification and the applicable repository/Matt workflow standards before work begins, records their digests in independent Standards and Spec reports, and reserves/queues two worker slots for the whole build/review lifecycle. Blocking reports cause a fresh isolated proposal with the same required checks; all review rounds are retained, and a third unresolved round returns `BLOCKED / REVIEW_LIMIT_REACHED`.
+
+The final local delivery re-collects the exact reviewed proposal bundle, refuses an existing/arbitrary branch, and creates only `pi-lead/task-<task-id>` without changing the active checkout or publishing. Collected review context includes prior and proposed contents; oversized complete context blocks rather than attesting to a partial revision. The builder explicitly loads the pinned Matt `implement` and `tdd` skills; reviewer reports retain separate Pi/worker identities, cleanup evidence and artifacts. Durable cross-restart reconciliation and retention remain Ticket 06 work.
+
+Validation: `npm test` (58 passing), `npm run typecheck`, `git diff --check`, focused local Git task-branch delivery test, correction-cycle/validation identity tests, and queued-capacity test. No live provider, host-architecture, or external-push claim is made by this slice.

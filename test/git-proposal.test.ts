@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { test } from "node:test";
 
 import {
+  deliverGitProposal,
   PROPOSAL_REF,
   collectGitProposal,
   prepareCommittedBase,
@@ -73,6 +74,74 @@ test("a named committed base is bundled without changing the active checkout or 
     statusBefore,
   );
   assert.equal(await readFile(join(repository, "modified.txt"), "utf8"), "local uncommitted edit\n");
+});
+
+test("a reviewed proposal is delivered to a new local task branch without touching the active checkout", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-deliver-"));
+  const repository = await createBaseRepository(root);
+  const prepared = await prepareCommittedBase({
+    repositoryPath: repository,
+    namedBase: "main",
+    outputPath: join(root, "base.bundle"),
+  });
+  const guest = join(root, "guest");
+  await git(root, "clone", "--quiet", "--branch", "main", prepared.bundlePath, guest);
+  await writeFile(join(guest, "modified.txt"), "reviewed change\n");
+  await git(guest, "add", "modified.txt");
+  await git(
+    guest,
+    "-c",
+    "user.name=Isolated Worker",
+    "-c",
+    "user.email=worker@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "reviewed proposal",
+  );
+  await git(guest, "branch", "-M", PROPOSAL_REF.replace("refs/heads/", ""));
+  const bundle = join(root, "proposal.bundle");
+  await git(guest, "bundle", "create", bundle, PROPOSAL_REF);
+  const collected = await collectGitProposal({
+    baseCommit: prepared.baseCommit,
+    bundlePath: bundle,
+    collectionDirectory: join(root, "collection"),
+  });
+  await writeFile(join(repository, "local.txt"), "must remain local\n");
+  const statusBefore = await git(repository, "status", "--porcelain=v1", "--untracked-files=all");
+  const branchBefore = await git(repository, "branch", "--show-current");
+
+  const delivery = await deliverGitProposal({
+    repositoryPath: repository,
+    baseCommit: prepared.baseCommit,
+    proposedCommit: collected.proposedCommit,
+    artifactId: collected.artifactId,
+    bundlePath: bundle,
+    collectionDirectory: join(root, "delivery-collection"),
+    branchName: "pi-lead/task-task-4",
+  });
+
+  assert.deepEqual(delivery, {
+    branchName: "pi-lead/task-task-4",
+    commit: collected.proposedCommit,
+    committed: true,
+    activeCheckoutPreserved: true,
+  });
+  assert.equal(await git(repository, "branch", "--show-current"), branchBefore);
+  assert.equal(await git(repository, "status", "--porcelain=v1", "--untracked-files=all"), statusBefore);
+  assert.equal(await git(repository, "rev-parse", "pi-lead/task-task-4"), collected.proposedCommit);
+  await assert.rejects(
+    deliverGitProposal({
+      repositoryPath: repository,
+      baseCommit: prepared.baseCommit,
+      proposedCommit: collected.proposedCommit,
+      artifactId: collected.artifactId,
+      bundlePath: bundle,
+      collectionDirectory: join(root, "delivery-collection"),
+      branchName: "pi-lead/task-task-4",
+    }),
+    /already exists/,
+  );
 });
 
 test("the committed base must be a short branch or tag name, not an object expression", async () => {
@@ -143,6 +212,10 @@ test("collection preserves file bytes, modes, renames, deletions, and confined s
   assert.equal(byPath.get("renamed.txt")?.status, "renamed");
   assert.equal(byPath.get("renamed.txt")?.previousPath, "rename-me.txt");
   assert.equal(byPath.get("delete-me.txt")?.status, "deleted");
+  assert.equal(
+    Buffer.from(byPath.get("delete-me.txt")?.previousContentBase64 ?? "", "base64").toString("utf8"),
+    "delete contents\n",
+  );
   assert.equal(byPath.get("script.sh")?.oldMode, "100644");
   assert.equal(byPath.get("script.sh")?.newMode, "100755");
   assert.equal(byPath.get("binary.dat")?.binary, true);

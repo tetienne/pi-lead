@@ -48,6 +48,8 @@ export type ProposedFile = {
   newMode: string;
   contentBase64?: string;
   binary?: boolean;
+  previousContentBase64?: string;
+  previousBinary?: boolean;
   symlinkTarget?: string;
 };
 
