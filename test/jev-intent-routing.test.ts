@@ -25,7 +25,10 @@ function response(overrides: Record<string, unknown> = {}) {
     type: "choice",
     choice: "CHAT",
     confidence: 0.96,
-    probabilities: { CHAT: 0.96, UNCERTAIN: 0.04 },
+    probabilities: Object.fromEntries([
+      ...allWorkflows.map((workflow) => [workflow, workflow === "CHAT" ? 0.96 : 0]),
+      ["UNCERTAIN", 0.04],
+    ]),
     costUsd: 0.002,
     ...overrides,
   };
@@ -66,7 +69,7 @@ test("routes one bounded natural-language request only to a currently available 
     {
       questionId: "intent",
       state: "Could you summarize this repository?",
-      candidates: ["CHAT", "UNCERTAIN"],
+      candidates: [...allWorkflows, "UNCERTAIN"],
     },
   ]);
 });
@@ -95,11 +98,11 @@ test("valid explicit workflow selection bypasses Jev, while unavailable choices 
 
 test("ambiguous, malformed, unknown, stale, and unavailable judgments never route a worker", async () => {
   const cases = [
-    [response({ choice: "UNCERTAIN", probabilities: { CHAT: 0.04, UNCERTAIN: 0.96 } }), "CLARIFICATION_REQUIRED"],
+    [response({ choice: "UNCERTAIN", probabilities: Object.fromEntries([...allWorkflows.map((workflow) => [workflow, workflow === "CHAT" ? 0.04 : 0]), ["UNCERTAIN", 0.96]]) }), "CLARIFICATION_REQUIRED"],
     [response({ confidence: undefined }), "INVALID_RESPONSE"],
     [response({ choice: "SHELL" }), "INVALID_RESPONSE"],
-    [response({ choice: "REVIEW", probabilities: { REVIEW: 0.96, UNCERTAIN: 0.04 } }), "INVALID_RESPONSE"],
-    [response({ probabilities: { CHAT: 0.1, UNCERTAIN: 0.9 } }), "INVALID_RESPONSE"],
+    [response({ choice: "REVIEW", probabilities: Object.fromEntries([...allWorkflows.map((workflow) => [workflow, workflow === "REVIEW" ? 0.96 : 0]), ["UNCERTAIN", 0.04]]) }), "UNAVAILABLE"],
+    [response({ probabilities: Object.fromEntries([...allWorkflows.map((workflow) => [workflow, workflow === "CHAT" ? 0.1 : 0]), ["UNCERTAIN", 0.9]]) }), "INVALID_RESPONSE"],
   ] as const;
   for (const [judgment, status] of cases) {
     const { router: intake } = router({ async decide() { return judgment; } });
@@ -161,7 +164,7 @@ test("unchanged requests are deduplicated and prompts contain only current input
   const { router: intake } = router({
     async decide(request) {
       calls++;
-      assert.deepEqual(request.candidates, ["CHAT", "UNCERTAIN"]);
+      assert.deepEqual(request.candidates, [...allWorkflows, "UNCERTAIN"]);
       return response();
     },
   });
@@ -169,4 +172,14 @@ test("unchanged requests are deduplicated and prompts contain only current input
   await intake.route("summarize this");
   await intake.route("summarize this");
   assert.equal(calls, 1);
+});
+
+test("refuses oversized input before a paid judgment", async () => {
+  let calls = 0;
+  const { router: intake } = router({ async decide() { calls++; return response(); } });
+  assert.deepEqual(await intake.route("x".repeat(1_201)), {
+    status: "CLARIFICATION_REQUIRED",
+    reason: "INPUT_TOO_LARGE",
+  });
+  assert.equal(calls, 0);
 });

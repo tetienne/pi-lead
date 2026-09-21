@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { MAX_ACTIVE_WORKERS } from "./policy.ts";
-import type { JevRoutingOutcome } from "./jev-intent-routing.ts";
+import { createJevIntentRouter, JEV_WORKFLOWS, type JevRoutingOutcome, type JevWorkflow } from "./jev-intent-routing.ts";
+import { createOpenRouterJevTransport } from "./openrouter-jev-transport.ts";
 import { prepareChatGptQuestion } from "./chatgpt-input.ts";
 import { parseProposedChangeInput } from "./proposed-change-input.ts";
 import { pinReviewSpecification, pinReviewStandards } from "./review-context.ts";
@@ -61,8 +62,27 @@ type LeadDependencies = {
     cwd: string,
     signal: AbortSignal,
   ): Promise<CompleteLocalCodingSummary>;
-  routeIntent?(input: string): Promise<JevRoutingOutcome>;
+  routeIntent?(input: string, explicitWorkflow?: JevWorkflow): Promise<JevRoutingOutcome>;
 };
+
+function configuredIntentRouter(): LeadDependencies["routeIntent"] | undefined {
+  const apiKey = process.env.PI_LEAD_JEV_OPENROUTER_KEY;
+  if (!apiKey) return undefined;
+  const resetHourUtc = Number(process.env.PI_LEAD_JEV_RESET_HOUR_UTC);
+  if (
+    process.env.PI_LEAD_JEV_DEDICATED_KEY_CONFIRMED !== "yes" ||
+    process.env.PI_LEAD_JEV_PROVIDER_DAILY_CAP_USD !== "1" ||
+    !Number.isInteger(resetHourUtc) || resetHourUtc < 0 || resetHourUtc > 23
+  ) {
+    return async () => ({ status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE" });
+  }
+  const router = createJevIntentRouter({
+    transport: createOpenRouterJevTransport({ apiKey }),
+    getState: () => ({ version: 1, availability: { CHAT: true } }),
+    budget: { dailyCapUsd: 1, reservationUsd: 0.01, resetHourUtc },
+  });
+  return router.route;
+}
 
 export function createLeadExtension(dependencies: LeadDependencies) {
   return (pi: ExtensionAPI): void => {
@@ -210,10 +230,14 @@ export function createLeadExtension(dependencies: LeadDependencies) {
           await runChatGpt(match[1], context);
           return { action: "handled" };
         }
+        const explicit = /^lead:\s*(?:workflow\s+)?([a-z]+)(?:\s+(.+))?$/i.exec(event.text);
+        const explicitWorkflow = JEV_WORKFLOWS.find(
+          (workflow) => workflow === explicit?.[1]?.toUpperCase(),
+        );
         if (!dependencies.routeIntent) return { action: "continue" };
         let outcome: JevRoutingOutcome;
         try {
-          outcome = await dependencies.routeIntent(event.text);
+          outcome = await dependencies.routeIntent(explicit?.[2] ?? event.text, explicitWorkflow);
         } catch {
           context.ui.notify("PI Lead intent: routing unavailable; no worker was started", "error");
           return { action: "handled" };
@@ -465,6 +489,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
 }
 
 export default createLeadExtension({
+  routeIntent: configuredIntentRouter(),
   async runFixture(request, cwd, signal) {
     const { createNativeFixtureRuntime } = await import("./native-runtime.ts");
     const runtime = await createNativeFixtureRuntime({ cwd });

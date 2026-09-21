@@ -9,6 +9,7 @@ export const JEV_WORKFLOWS = [
   "WAYFIND",
   "OPERATE",
 ] as const;
+export const MAX_JEV_INTENT_INPUT_CHARS = 1_200;
 
 export type JevWorkflow = (typeof JEV_WORKFLOWS)[number];
 
@@ -45,6 +46,7 @@ export type JevRoutingOutcome =
   | { status: "ROUTED"; workflow: JevWorkflow; source: "jev" | "explicit" }
   | { status: "UNAVAILABLE"; workflow: JevWorkflow; reason: "WORKFLOW_UNAVAILABLE" }
   | { status: "CLARIFICATION_REQUIRED"; reason: "AMBIGUOUS_INTENT" }
+  | { status: "CLARIFICATION_REQUIRED"; reason: "INPUT_TOO_LARGE" }
   | { status: "INVALID_RESPONSE"; reason: "INVALID_JEV_RESPONSE" }
   | { status: "STALE"; reason: "STALE_STATE" }
   | { status: "SERVICE_UNAVAILABLE"; reason: "JEV_UNAVAILABLE" }
@@ -147,14 +149,14 @@ export function createJevIntentRouter(options: RouterOptions) {
           ? { status: "ROUTED", workflow: explicitWorkflow, source: "explicit" }
           : { status: "UNAVAILABLE", workflow: explicitWorkflow, reason: "WORKFLOW_UNAVAILABLE" };
       }
-      const candidates = JEV_WORKFLOWS.filter((workflow) => state.availability[workflow]);
-      if (candidates.length === 0) {
-        return { status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE" };
+      const normalizedInput = input.trim().replace(/\s+/g, " ");
+      if (!normalizedInput || normalizedInput.length > MAX_JEV_INTENT_INPUT_CHARS) {
+        return { status: "CLARIFICATION_REQUIRED", reason: "INPUT_TOO_LARGE" };
       }
       const request: JevIntentRequest = {
         questionId: "intent",
-        state: input.trim(),
-        candidates: [...candidates, "UNCERTAIN"],
+        state: normalizedInput,
+        candidates: [...JEV_WORKFLOWS, "UNCERTAIN"],
       };
       const cacheKey = JSON.stringify([state.version, request.state, request.candidates]);
       const prior = cached.get(cacheKey);
