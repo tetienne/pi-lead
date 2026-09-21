@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { lstat, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const TRUSTED_GIT = "/usr/bin/git";
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -137,8 +140,9 @@ async function remoteCommit(
   repositoryPath: string,
   intent: PublicationIntent,
   remoteUrl: string,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const output = await gitText(repositoryPath, ["ls-remote", "--heads", remoteUrl, intent.destinationRef]);
+  const output = await gitText(repositoryPath, ["ls-remote", "--heads", remoteUrl, intent.destinationRef], signal);
   if (!output) return undefined;
   const lines = output.split("\n").filter(Boolean);
   if (lines.length !== 1) throw new Error("Configured remote returned ambiguous task-branch state");
@@ -169,7 +173,7 @@ async function observe(
  * force, refspecs, tags, PRs, merges, deployment, or remote creation.
  */
 export async function publishTaskBranch(options: {
-  repositoryPath: string;
+  sourceBundlePath: string;
   configuredRemoteName?: string;
   configuredRemoteUrl?: string;
   configuredRemoteUrls?: readonly string[];
@@ -197,64 +201,67 @@ export async function publishTaskBranch(options: {
       status: "BLOCKED", intent, detail: "Configured publication remote is ambiguous",
     });
   }
-  const localCommit = await gitText(options.repositoryPath, ["rev-parse", "--verify", `${intent.sourceRef}^{commit}`], options.signal);
-  if (localCommit !== intent.commit) {
+  const metadata = await lstat(options.sourceBundlePath);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
     return observe(options.journal, intent, {
-      status: "BLOCKED", intent, detail: "Local task branch no longer identifies the reviewed final commit",
+      status: "BLOCKED", intent, detail: "Publication source must be a regular host-owned proposal bundle",
     });
   }
-  await options.journal?.record({ phase: "INTENDED", intent });
-  let before: string | undefined;
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-publication-"));
+  const repositoryPath = join(root, "source.git");
   try {
-    options.signal?.throwIfAborted();
-    before = await remoteCommit(options.repositoryPath, intent, remoteUrl);
-  } catch (error) {
-    return observe(options.journal, intent, {
-      status: "UNCERTAIN", intent, detail: error instanceof Error ? error.message : String(error),
-    });
-  }
-  if (before === intent.commit) {
-    return observe(options.journal, intent, { status: "ALREADY_PUBLISHED", intent, observedCommit: before });
-  }
-  if (before !== undefined) {
-    return observe(options.journal, intent, {
-      status: "BLOCKED", intent, observedCommit: before,
-      detail: "Remote task branch already exists at a different commit; refusing to overwrite it",
-    });
-  }
-  try {
-    options.signal?.throwIfAborted();
-    await runGit(options.repositoryPath, ["push", "--porcelain", "--no-verify", remoteUrl, `${intent.sourceRef}:${intent.destinationRef}`], options.signal);
-  } catch (error) {
+    await runGit(root, ["init", "--bare", repositoryPath], options.signal);
     try {
-      const after = await remoteCommit(options.repositoryPath, intent, remoteUrl);
-      if (after === intent.commit) {
-        return observe(options.journal, intent, { status: "PUBLISHED", intent, observedCommit: after });
+      await runGit(repositoryPath, ["bundle", "verify", options.sourceBundlePath], options.signal);
+      await runGit(repositoryPath, ["bundle", "unbundle", options.sourceBundlePath], options.signal);
+      if (await gitText(repositoryPath, ["cat-file", "-t", intent.commit], options.signal) !== "commit") {
+        return observe(options.journal, intent, { status: "BLOCKED", intent, detail: "Proposal bundle lacks the reviewed final commit" });
       }
+      await runGit(repositoryPath, ["update-ref", intent.sourceRef, intent.commit], options.signal);
+    } catch (error) {
       return observe(options.journal, intent, {
-        status: "FAILED", intent, observedCommit: after,
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    } catch (reconciliationError) {
-      return observe(options.journal, intent, {
-        status: "UNCERTAIN", intent,
-        detail: `Push failed and remote state could not be reconciled: ${reconciliationError instanceof Error ? reconciliationError.message : String(reconciliationError)}`,
+        status: "BLOCKED", intent, detail: error instanceof Error ? error.message : String(error),
       });
     }
-  }
-  try {
-    const after = await remoteCommit(options.repositoryPath, intent, remoteUrl);
-    if (after !== intent.commit) {
+    await options.journal?.record({ phase: "INTENDED", intent });
+    let before: string | undefined;
+    try {
+      options.signal?.throwIfAborted();
+      before = await remoteCommit(repositoryPath, intent, remoteUrl, options.signal);
+    } catch (error) {
       return observe(options.journal, intent, {
-        status: "UNCERTAIN", intent, observedCommit: after,
-        detail: "Push returned successfully but the remote task branch did not match the reviewed commit",
+        status: "UNCERTAIN", intent, detail: error instanceof Error ? error.message : String(error),
       });
     }
-    return observe(options.journal, intent, { status: "PUBLISHED", intent, observedCommit: after });
-  } catch (error) {
-    return observe(options.journal, intent, {
-      status: "UNCERTAIN", intent,
-      detail: `Push returned successfully but remote state could not be reconciled: ${error instanceof Error ? error.message : String(error)}`,
-    });
+    if (before === intent.commit) {
+      return observe(options.journal, intent, { status: "ALREADY_PUBLISHED", intent, observedCommit: before });
+    }
+    if (before !== undefined) {
+      return observe(options.journal, intent, {
+        status: "BLOCKED", intent, observedCommit: before,
+        detail: "Remote task branch already exists at a different commit; refusing to overwrite it",
+      });
+    }
+    try {
+      options.signal?.throwIfAborted();
+      await runGit(repositoryPath, ["push", "--porcelain", "--no-verify", remoteUrl, `${intent.sourceRef}:${intent.destinationRef}`], options.signal);
+    } catch (error) {
+      try {
+        const after = await remoteCommit(repositoryPath, intent, remoteUrl, options.signal);
+        if (after === intent.commit) return observe(options.journal, intent, { status: "PUBLISHED", intent, observedCommit: after });
+        return observe(options.journal, intent, { status: "FAILED", intent, observedCommit: after, detail: error instanceof Error ? error.message : String(error) });
+      } catch (reconciliationError) {
+        return observe(options.journal, intent, { status: "UNCERTAIN", intent, detail: `Push failed and remote state could not be reconciled: ${reconciliationError instanceof Error ? reconciliationError.message : String(reconciliationError)}` });
+      }
+    }
+    try {
+      const after = await remoteCommit(repositoryPath, intent, remoteUrl, options.signal);
+      if (after !== intent.commit) return observe(options.journal, intent, { status: "UNCERTAIN", intent, observedCommit: after, detail: "Push returned successfully but the remote task branch did not match the reviewed commit" });
+      return observe(options.journal, intent, { status: "PUBLISHED", intent, observedCommit: after });
+    } catch (error) {
+      return observe(options.journal, intent, { status: "UNCERTAIN", intent, detail: `Push returned successfully but remote state could not be reconciled: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 }

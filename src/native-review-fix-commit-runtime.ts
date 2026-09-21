@@ -160,7 +160,7 @@ export async function createNativeReviewFixCommitRuntime(options: {
         await writeJsonAtomically(path, { schemaVersion: 1, events: [...events, event] });
       };
       return publishTaskBranch({
-        repositoryPath: options.cwd,
+        sourceBundlePath: join(stateDirectory, "proposal.bundle"),
         configuredRemoteName: options.gitRemoteName ?? process.env.PI_LEAD_GIT_REMOTE,
         configuredRemoteUrl: options.gitRemoteUrl ?? process.env.PI_LEAD_GIT_REMOTE_URL,
         branchName: input.commit.branchName,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -35,16 +35,18 @@ async function taskBranchFixture() {
   await git(repository, "add", "value.txt");
   await git(repository, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "reviewed");
   const commit = await git(repository, "rev-parse", "HEAD");
+  const sourceBundlePath = join(root, "proposal.bundle");
+  await git(repository, "bundle", "create", sourceBundlePath, "pi-lead/task-5");
   await git(root, "init", "--bare", "--quiet", remote);
   await git(repository, "remote", "add", "publish", remote);
-  return { repository, remote, commit };
+  return { repository, remote, commit, sourceBundlePath };
 }
 
 test("publication pushes only the exact reviewed task branch and records intent before its observed outcome", async () => {
   const fixture = await taskBranchFixture();
   const events: PublicationEvent[] = [];
   const result = await publishTaskBranch({
-    repositoryPath: fixture.repository, configuredRemoteName: "publish", configuredRemoteUrl: fixture.remote, branchName: "pi-lead/task-5", commit: fixture.commit,
+    sourceBundlePath: fixture.sourceBundlePath, configuredRemoteName: "publish", configuredRemoteUrl: fixture.remote, branchName: "pi-lead/task-5", commit: fixture.commit,
     journal: { async record(event) { events.push(event); } },
   });
   assert.equal(result.status, "PUBLISHED");
@@ -56,10 +58,10 @@ test("publication pushes only the exact reviewed task branch and records intent 
 
 test("publication blocks missing and ambiguous configured remotes without creating one", async () => {
   const fixture = await taskBranchFixture();
-  const missing = await publishTaskBranch({ repositoryPath: fixture.repository, branchName: "pi-lead/task-5", commit: fixture.commit });
+  const missing = await publishTaskBranch({ sourceBundlePath: fixture.sourceBundlePath, branchName: "pi-lead/task-5", commit: fixture.commit });
   assert.equal(missing.status, "BLOCKED");
   assert.match(missing.detail ?? "", /No consuming-project/);
-  const ambiguous = await publishTaskBranch({ repositoryPath: fixture.repository, configuredRemoteName: "publish", configuredRemoteUrls: [fixture.remote, join(fixture.remote, "other")], branchName: "pi-lead/task-5", commit: fixture.commit });
+  const ambiguous = await publishTaskBranch({ sourceBundlePath: fixture.sourceBundlePath, configuredRemoteName: "publish", configuredRemoteUrls: [fixture.remote, join(fixture.remote, "other")], branchName: "pi-lead/task-5", commit: fixture.commit });
   assert.equal(ambiguous.status, "BLOCKED");
   assert.match(ambiguous.detail ?? "", /ambiguous/);
 });
@@ -67,13 +69,15 @@ test("publication blocks missing and ambiguous configured remotes without creati
 test("publication refuses protected, arbitrary, force-like, and existing unrelated destinations", async () => {
   const fixture = await taskBranchFixture();
   await assert.rejects(
-    publishTaskBranch({ repositoryPath: fixture.repository, configuredRemoteName: "publish", configuredRemoteUrl: fixture.remote, branchName: "main", commit: fixture.commit }),
+    publishTaskBranch({ sourceBundlePath: fixture.sourceBundlePath, configuredRemoteName: "publish", configuredRemoteUrl: fixture.remote, branchName: "main", commit: fixture.commit }),
     /only PI Lead task branches/,
   );
   await git(fixture.repository, "push", "--quiet", "publish", "HEAD:refs/heads/pi-lead/task-5");
   await git(fixture.repository, "commit", "--allow-empty", "--quiet", "-m", "different local state");
   const different = await git(fixture.repository, "rev-parse", "HEAD");
-  const result = await publishTaskBranch({ repositoryPath: fixture.repository, configuredRemoteName: "publish", configuredRemoteUrl: fixture.remote, branchName: "pi-lead/task-5", commit: different });
+  await rm(fixture.sourceBundlePath);
+  await git(fixture.repository, "bundle", "create", fixture.sourceBundlePath, "pi-lead/task-5");
+  const result = await publishTaskBranch({ sourceBundlePath: fixture.sourceBundlePath, configuredRemoteName: "publish", configuredRemoteUrl: fixture.remote, branchName: "pi-lead/task-5", commit: different });
   assert.equal(result.status, "BLOCKED");
   assert.match(result.detail ?? "", /refusing to overwrite/);
 });
@@ -99,7 +103,7 @@ test("a rejected push records a failed, reconciled publication outcome", async (
   await writeFile(hook, "#!/bin/sh\nexit 1\n");
   await chmod(hook, 0o755);
   const result = await publishTaskBranch({
-    repositoryPath: fixture.repository,
+    sourceBundlePath: fixture.sourceBundlePath,
     configuredRemoteName: "publish",
     configuredRemoteUrl: fixture.remote,
     branchName: "pi-lead/task-5",
