@@ -10,6 +10,7 @@ import {
   createReadonlyToolchainSeed,
   prepareToolchainCache,
 } from "../src/toolchain-cache.ts";
+import { assertGuestCachePlatform } from "../src/proposed-change-worker-host.ts";
 
 test("a compatible trusted mise seed is reusable but remains read-only to every worker", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-lead-toolchain-cache-"));
@@ -118,4 +119,22 @@ test("a cache plan rejects an unapproved worker identity or guest architecture",
     }),
     /architecture/i,
   );
+});
+
+test("a guest whose architecture or ABI differs from its seed is rejected", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-toolchain-cache-"));
+  const plan = await prepareToolchainCache({
+    root,
+    workerId: "worker-one",
+    miseConfig: "",
+    miseVersion: "2025.8.20-r0",
+    guestArchitecture: "arm64",
+  });
+  const vm = {
+    async exec(command: string[]) {
+      if (command[1] === "-m") return { ok: true, stdout: "x86_64\n" };
+      return { ok: true, stdout: "" };
+    },
+  };
+  await assert.rejects(assertGuestCachePlatform(vm as never, plan), /architecture/i);
 });

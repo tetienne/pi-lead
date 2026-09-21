@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, readlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { ReadonlyProvider, RealFSProvider, type VirtualProvider } from "@earendil-works/gondolin";
@@ -59,6 +59,35 @@ function cacheKey(options: {
     .digest("hex");
 }
 
+async function seedContentDigest(directory: string): Promise<string> {
+  const digest = createHash("sha256");
+  const visit = async (relative: string): Promise<void> => {
+    const absolute = join(directory, relative);
+    const metadata = await lstat(absolute);
+    if (metadata.isDirectory()) {
+      digest.update(`directory\0${relative}\0`);
+      const entries = await readdir(absolute);
+      for (const entry of entries.sort()) await visit(join(relative, entry));
+      return;
+    }
+    if (metadata.isSymbolicLink()) {
+      digest.update(`symlink\0${relative}\0${await readlink(absolute)}\0`);
+      return;
+    }
+    if (!metadata.isFile()) throw new Error("Unsupported toolchain seed entry");
+    digest.update(`file\0${relative}\0`);
+    digest.update(await readFile(absolute));
+  };
+  for (const contentDirectory of MISE_SEED_CONTENT_DIRECTORIES) {
+    try {
+      await visit(contentDirectory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return digest.digest("hex");
+}
+
 async function hasAttestedSeed(directory: string, seedId: string): Promise<boolean> {
   try {
     const manifest = JSON.parse(await readFile(join(directory, SEED_MANIFEST), "utf8")) as unknown;
@@ -72,9 +101,10 @@ async function hasAttestedSeed(directory: string, seedId: string): Promise<boole
       "contentDirectories" in manifest &&
       Array.isArray(manifest.contentDirectories) &&
       manifest.contentDirectories.length === MISE_SEED_CONTENT_DIRECTORIES.length &&
-      manifest.contentDirectories.every(
-        (entry, index) => entry === MISE_SEED_CONTENT_DIRECTORIES[index],
-      )
+      manifest.contentDirectories.every((entry, index) => entry === MISE_SEED_CONTENT_DIRECTORIES[index]) &&
+      "contentDigest" in manifest &&
+      typeof manifest.contentDigest === "string" &&
+      manifest.contentDigest === (await seedContentDigest(directory))
     );
   } catch {
     return false;
@@ -128,6 +158,7 @@ export async function attestToolchainSeed(plan: ToolchainCachePlan): Promise<voi
       schemaVersion: 1,
       seedId: plan.seedId,
       contentDirectories: MISE_SEED_CONTENT_DIRECTORIES,
+      contentDigest: await seedContentDigest(plan.host.seedDirectory),
     })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );

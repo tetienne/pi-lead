@@ -43,6 +43,8 @@ const root = await mkdtemp(join(tmpdir(), "pi-lead-change-fixture-"));
 const denyBootstrap = process.argv.includes("--deny-bootstrap");
 const mutatingCheck = process.argv.includes("--mutating-check");
 const warmCache = process.argv.includes("--warm-cache");
+const poisonPrivateCache = process.argv.includes("--poison-private-cache");
+const assertNoPrivatePoison = process.argv.includes("--assert-no-private-poison");
 const repository = join(root, "consumer");
 const stateDirectory = join(root, "state");
 await git(root, ["init", "--quiet", "--initial-branch=main", repository]);
@@ -80,7 +82,7 @@ const policy = createProposedChangePolicy({
   validationTasks: ["test"],
 });
 const cacheOptions = {
-  root: join(stateDirectory, "toolchain-cache"),
+  root: process.env.PI_LEAD_CACHE_FIXTURE_ROOT ?? join(stateDirectory, "toolchain-cache"),
   workerId,
   miseConfig: await readFile(join(repository, ".mise.toml"), "utf8"),
   miseVersion: GUEST_MISE_VERSION,
@@ -122,6 +124,8 @@ try {
       path: "value.txt",
       contents: "after\n",
       assertReadonlySeed: true,
+      ...(poisonPrivateCache ? { writePrivateCachePoison: true } : {}),
+      ...(assertNoPrivatePoison ? { assertNoPrivateCachePoison: true } : {}),
       ...(warmCache
         ? { expectedSeedFile: { path: "trusted-fixture/seed", contents: "trusted" } }
         : {}),
@@ -198,6 +202,34 @@ const summary = await runProposedChangeTask(
   runtime,
 );
 
+let cacheComparison: unknown;
+const comparisonDirectory = process.env.PI_LEAD_CACHE_COMPARISON_DIRECTORY;
+if (comparisonDirectory && summary.status === "REVIEW_REQUIRED" && summary.toolchainCache) {
+  await mkdir(comparisonDirectory, { recursive: true });
+  if (summary.toolchainCache.state === "COLD") {
+    await writeFile(
+      join(comparisonDirectory, "cold.json"),
+      `${JSON.stringify(summary.toolchainCache)}\n`,
+    );
+  } else {
+    const cold = JSON.parse(await readFile(join(comparisonDirectory, "cold.json"), "utf8")) as typeof summary.toolchainCache;
+    if (cold.seedId !== summary.toolchainCache.seedId) {
+      throw new Error("Cold and warm fixture runs do not use the same toolchain seed");
+    }
+    cacheComparison = {
+      cold,
+      warm: summary.toolchainCache,
+      miseReadinessDeltaMs: summary.toolchainCache.miseReadinessMs - cold.miseReadinessMs,
+      validationExecutionDeltaMs: summary.toolchainCache.validationExecutionMs - cold.validationExecutionMs,
+      conclusion:
+        summary.toolchainCache.miseReadinessMs < cold.miseReadinessMs
+          ? "IMPROVED"
+          : "NO_IMPROVEMENT",
+    };
+    await writeFile(join(comparisonDirectory, "comparison.json"), `${JSON.stringify(cacheComparison)}\n`);
+  }
+}
+
 assert.equal(termination.terminated, true);
 assert.equal(await readFile(join(repository, "value.txt"), "utf8"), "before\n");
 if (denyBootstrap) {
@@ -224,6 +256,9 @@ process.stdout.write(
       hostCheckoutPreserved: true,
       ...(denyBootstrap ? { allowedDependencyHosts: [], policyExpanded: false } : {}),
       ...(warmCache ? { expectedCacheState: "WARM" } : {}),
+      ...(poisonPrivateCache ? { wrotePrivateCachePoison: true } : {}),
+      ...(assertNoPrivatePoison ? { verifiedNoPrivateCachePoison: true } : {}),
+      ...(cacheComparison === undefined ? {} : { cacheComparison }),
     },
     null,
     2,

@@ -210,7 +210,10 @@ async function seedPrivateMiseStorage(
   }
 }
 
-async function assertGuestPlatform(vm: VM, plan: ToolchainCachePlan): Promise<void> {
+export async function assertGuestCachePlatform(
+  vm: Pick<VM, "exec">,
+  plan: ToolchainCachePlan,
+): Promise<void> {
   const architecture = await vm.exec(["/bin/uname", "-m"]);
   const expectedArchitecture = plan.guest.platform === "linux-arm64-musl" ? "aarch64" : "x86_64";
   if (!architecture.ok || architecture.stdout.trim() !== expectedArchitecture) {
@@ -259,15 +262,23 @@ async function ensureGuestToolchain(vm: VM, environment: Record<string, string>)
       ready = false;
     }
   }
-  if (ready) return;
-  await runChecked(
-    vm,
-    ["/sbin/apk", "add", "--no-cache", GUEST_GIT_PACKAGE, GUEST_MISE_PACKAGE],
-    {
-      env: environment,
-      label: "isolated Git/mise installation",
-    },
-  );
+  const installed = ready
+    ? await vm.exec(["/usr/bin/mise", "--version"], { env: environment })
+    : undefined;
+  if (!installed?.ok || !installed.stdout.startsWith(GUEST_MISE_VERSION.replace(/-r\d+$/, ""))) {
+    await runChecked(
+      vm,
+      ["/sbin/apk", "add", "--no-cache", GUEST_GIT_PACKAGE, GUEST_MISE_PACKAGE],
+      {
+        env: environment,
+        label: "isolated pinned Git/mise installation",
+      },
+    );
+  }
+  const verified = await vm.exec(["/usr/bin/mise", "--version"], { env: environment });
+  if (!verified.ok || !verified.stdout.startsWith(GUEST_MISE_VERSION.replace(/-r\d+$/, ""))) {
+    throw new Error(`Pinned guest mise ${GUEST_MISE_VERSION} is unavailable`);
+  }
 }
 
 async function preparePrivateWorkspace(
@@ -450,6 +461,8 @@ export type RunProposedChangeWorkerHostOptions = {
     contents: string;
     assertReadonlySeed?: boolean;
     expectedSeedFile?: { path: string; contents: string };
+    writePrivateCachePoison?: boolean;
+    assertNoPrivateCachePoison?: boolean;
   };
 };
 
@@ -556,7 +569,7 @@ export async function runProposedChangeWorkerHost(
     resourcesStarted = true;
     abortController.signal.throwIfAborted();
     await applyGuestCaEnvironment(vm, environment);
-    await assertGuestPlatform(vm, launch.toolchainCache);
+    await assertGuestCachePlatform(vm, launch.toolchainCache);
     const seedCopyStartedAt = performance.now();
     await seedPrivateMiseStorage(vm, environment);
     const seedCopyMs = performance.now() - seedCopyStartedAt;
@@ -584,6 +597,20 @@ export async function runProposedChangeWorkerHost(
         if (copiedSeed !== options.fixtureEdit.expectedSeedFile.contents) {
           throw new Error("Trusted mise seed was not copied into private worker storage");
         }
+      }
+      if (options.fixtureEdit.writePrivateCachePoison) {
+        await vm.fs.writeFile(`${environment.MISE_DATA_DIR}/cross-worker-poison`, "poisoned");
+      }
+      if (options.fixtureEdit.assertNoPrivateCachePoison) {
+        const privatePoison = await vm.fs.access(`${environment.MISE_DATA_DIR}/cross-worker-poison`).then(
+          () => true,
+          () => false,
+        );
+        const seedPoison = await vm.fs.access(`${environment.PI_LEAD_MISE_SEED}/data/cross-worker-poison`).then(
+          () => true,
+          () => false,
+        );
+        if (privatePoison || seedPoison) throw new Error("Cross-worker cache poison escaped private storage");
       }
       const editPath = requireFixturePath(options.fixtureEdit.path);
       await vm.fs.writeFile(
