@@ -210,3 +210,41 @@ test("credential bytes reflected across response chunks are blocked before reach
   assert.equal(deliveredText.includes(credential.accessToken), false);
   assert.equal(deliveredText.includes(credential.accessToken.slice(0, 13)), false);
 });
+
+test("explicit dependency hosts receive ordinary HTTPS access without credential injection or policy expansion", async () => {
+  const credential = { accessToken: "host-token", accountId: "host-account" };
+  const mediation = createChatGptMediation({
+    initialCredential: credential,
+    async refreshCredential() {
+      throw new Error("dependency requests must not refresh ChatGPT credentials");
+    },
+    placeholderNonce: "dependency-hosts",
+    additionalAllowedHosts: ["registry.npmjs.org"],
+  });
+  const dependencyRequest = new Request("https://registry.npmjs.org/typescript", {
+    headers: { accept: "application/json" },
+  });
+
+  assert.deepEqual(mediation.allowedHosts, ["chatgpt.com", "registry.npmjs.org"]);
+  assert.equal(await mediation.httpHooks.isRequestAllowed?.(dependencyRequest), true);
+  const forwarded = await mediation.httpHooks.onRequest?.(dependencyRequest.clone());
+  assert.ok(forwarded instanceof Request);
+  assert.equal(forwarded.headers.has("authorization"), false);
+  assert.equal(forwarded.headers.has("chatgpt-account-id"), false);
+  assert.equal(
+    await mediation.httpHooks.isRequestAllowed?.(
+      new Request("https://packages.example.com/typescript"),
+    ),
+    false,
+  );
+  assert.equal(
+    mediation.getLastPolicyRejection(),
+    "Dependency destination packages.example.com is not explicitly allowed",
+  );
+  assert.equal(await mediation.httpHooks.isRequestAllowed?.(dependencyRequest), true);
+  assert.equal(
+    mediation.getLastPolicyRejection(),
+    "Dependency destination packages.example.com is not explicitly allowed",
+  );
+  assert.deepEqual(mediation.allowedHosts, ["chatgpt.com", "registry.npmjs.org"]);
+});

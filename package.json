@@ -20,6 +20,9 @@
     "chatgpt-cancel-fixture": "node src/run-chatgpt-fake-cli.ts --cancel",
     "chatgpt-reflection-fixture": "node src/run-chatgpt-fake-cli.ts --reflect-secret",
     "chatgpt-live": "node src/run-chatgpt-live-cli.ts",
+    "change-fixture": "node src/run-proposed-change-fixture-cli.ts",
+    "change-denied-fixture": "node src/run-proposed-change-fixture-cli.ts --deny-bootstrap",
+    "change-mutating-check-fixture": "node src/run-proposed-change-fixture-cli.ts --mutating-check",
     "fixture": "node src/run-fixture-cli.ts",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit"

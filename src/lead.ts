@@ -3,6 +3,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { MAX_ACTIVE_WORKERS } from "./policy.ts";
 import { prepareChatGptQuestion } from "./chatgpt-input.ts";
+import { parseProposedChangeInput } from "./proposed-change-input.ts";
+import {
+  runProposedChangeTask,
+  type ProposedChangeRequest,
+  type ProposedChangeSummary,
+  type UnstartedProposedChangeSummary,
+} from "./proposed-change-task.ts";
 import {
   runReadOnlyChatGptTask,
   type ChatGptRunSummary,
@@ -27,6 +34,11 @@ type LeadDependencies = {
     cwd: string,
     signal: AbortSignal,
   ): Promise<ChatGptRunSummary>;
+  runProposedChange?(
+    request: ProposedChangeRequest,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<ProposedChangeSummary>;
 };
 
 export function createLeadExtension(dependencies: LeadDependencies) {
@@ -112,6 +124,76 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       });
     }
 
+    if (dependencies.runProposedChange) {
+      const runProposedChange = dependencies.runProposedChange;
+      pi.registerCommand("lead-change", {
+        description: "Ask an isolated worker for a validated change requiring human review",
+        handler: async (args, context) => {
+          let parsed: ReturnType<typeof parseProposedChangeInput>;
+          try {
+            parsed = parseProposedChangeInput(args);
+          } catch (error) {
+            context.ui.notify(
+              `PI Lead change: ${error instanceof Error ? error.message : String(error)}`,
+              "error",
+            );
+            return;
+          }
+          const request: ProposedChangeRequest = {
+            taskId: randomUUID(),
+            assignmentId: randomUUID(),
+            repositoryPath: context.cwd,
+            ...parsed,
+          };
+          let summary: ProposedChangeSummary;
+          if (activeRuns.size >= MAX_ACTIVE_WORKERS) {
+            summary = {
+              status: "BLOCKED",
+              reason: "CONCURRENCY_LIMIT",
+              detail: `At most ${MAX_ACTIVE_WORKERS} workers may be active`,
+              taskId: request.taskId,
+              assignmentId: request.assignmentId,
+              diagnosticsRetained: false,
+              resourcesStarted: false,
+              vmTerminated: true,
+            } satisfies UnstartedProposedChangeSummary;
+          } else {
+            const controller = new AbortController();
+            activeRuns.add(controller);
+            try {
+              summary = await runProposedChange(
+                request,
+                context.cwd,
+                controller.signal,
+              );
+            } catch (error) {
+              summary = {
+                status: "BLOCKED",
+                reason: "NATIVE_CONTROL_UNAVAILABLE",
+                detail: error instanceof Error ? error.message : String(error),
+                taskId: request.taskId,
+                assignmentId: request.assignmentId,
+                diagnosticsRetained: false,
+                resourcesStarted: false,
+                vmTerminated: false,
+              } satisfies UnstartedProposedChangeSummary;
+            } finally {
+              activeRuns.delete(controller);
+            }
+          }
+          pi.appendEntry("pi-lead:proposed-change-summary", summary);
+          const detail =
+            summary.status === "REVIEW_REQUIRED"
+              ? `${summary.files.length} file(s), validated; human review required`
+              : summary.detail ?? summary.reason;
+          context.ui.notify(
+            `PI Lead change: ${summary.status} — ${detail}`,
+            summary.status === "REVIEW_REQUIRED" ? "info" : "error",
+          );
+        },
+      });
+    }
+
     pi.registerCommand("lead-fixture", {
       description: "Run the PI Lead isolated fixture",
       handler: async (_args, context) => {
@@ -171,5 +253,12 @@ export default createLeadExtension({
     const { createNativeChatGptRuntime } = await import("./native-chatgpt-runtime.ts");
     const runtime = await createNativeChatGptRuntime({ cwd });
     return runReadOnlyChatGptTask(request, runtime, { signal });
+  },
+  async runProposedChange(request, cwd, signal) {
+    const { createNativeProposedChangeRuntime } = await import(
+      "./native-proposed-change-runtime.ts"
+    );
+    const runtime = await createNativeProposedChangeRuntime({ cwd });
+    return runProposedChangeTask(request, runtime, { signal });
   },
 });

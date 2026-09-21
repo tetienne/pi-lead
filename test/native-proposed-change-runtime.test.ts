@@ -1,0 +1,145 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { test } from "node:test";
+
+import { PROPOSAL_REF } from "../src/git-proposal.ts";
+import {
+  createNativeProposedChangeRuntime,
+  type ProposedChangeProcessHost,
+} from "../src/native-proposed-change-runtime.ts";
+import type { HerdrClient } from "../src/native-runtime.ts";
+
+const execFileAsync = promisify(execFile);
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("/usr/bin/git", args, {
+    cwd,
+    encoding: "utf8",
+    env: { HOME: cwd, PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+  });
+  return stdout.trim();
+}
+
+test("native change runtime transfers the named base and collects only its correlated proposal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-native-change-"));
+  const consumer = join(root, "consumer");
+  const stateRoot = join(root, "state");
+  await git(root, "init", "--quiet", "--initial-branch=main", consumer);
+  await writeFile(join(consumer, "value.txt"), "before\n");
+  await git(consumer, "add", "value.txt");
+  await git(
+    consumer,
+    "-c",
+    "user.name=PI Lead Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "base",
+  );
+  await writeFile(join(consumer, "local.txt"), "must remain local\n");
+  const statusBefore = await git(consumer, "status", "--porcelain=v1", "--untracked-files=all");
+  let stateDirectory = "";
+  const herdr: HerdrClient = {
+    async createBackgroundTab(request) {
+      assert.deepEqual(request, {
+        workspaceId: "workspace-1",
+        cwd: consumer,
+        label: "PI Lead · proposed change",
+        focus: false,
+      });
+      return { tabId: "tab-change", paneId: "pane-change" };
+    },
+    async tabExists() {
+      return true;
+    },
+    async closeTab() {},
+  };
+  const processHost: ProposedChangeProcessHost = {
+    async start(request) {
+      stateDirectory = request.stateDirectory;
+      const launch = JSON.parse(await readFile(join(stateDirectory, "launch.json"), "utf8")) as {
+        workerId: string;
+        baseCommit: string;
+        taskId: string;
+        assignmentId: string;
+        tabId: string;
+        paneId: string;
+        piSessionId: string;
+      };
+      const guest = join(root, "guest");
+      await git(root, "clone", "--quiet", "--branch", "main", join(stateDirectory, "base.bundle"), guest);
+      await git(guest, "switch", "--quiet", "-c", "pi-lead-proposal", "HEAD");
+      await writeFile(join(guest, "value.txt"), "after\n");
+      await git(guest, "add", "value.txt");
+      await git(
+        guest,
+        "-c",
+        "user.name=Isolated Worker",
+        "-c",
+        "user.email=worker@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "proposal",
+      );
+      await git(guest, "branch", "-M", PROPOSAL_REF.replace("refs/heads/", ""));
+      const proposedCommit = await git(guest, "rev-parse", "HEAD");
+      await git(guest, "bundle", "create", join(stateDirectory, "proposal.bundle"), PROPOSAL_REF);
+      await writeFile(
+        join(stateDirectory, "resources.json"),
+        JSON.stringify({ workerId: launch.workerId, vmId: "vm-change" }),
+      );
+      await writeFile(
+        join(stateDirectory, "result.json"),
+        JSON.stringify({
+          ...launch,
+          vmId: "vm-change",
+          status: "proposed",
+          proposedCommit,
+          validations: [
+            { task: "test", command: "mise run test", passed: true, exitCode: 0 },
+          ],
+        }),
+      );
+    },
+  };
+  const runtime = await createNativeProposedChangeRuntime({
+    cwd: consumer,
+    workspaceId: "workspace-1",
+    stateRoot,
+    herdr,
+    processHost,
+    pollIntervalMs: 1,
+  });
+
+  const worker = await runtime.launch({
+    taskId: "task-change",
+    assignmentId: "assignment-change",
+    instruction: "Update value.txt.",
+    repositoryPath: consumer,
+    namedBase: "main",
+    validationTasks: ["test"],
+    dependencyHosts: ["registry.npmjs.org"],
+    privateWorkspace: true,
+    focus: false,
+    hostMounts: [],
+    allowedDependencyHosts: ["registry.npmjs.org"],
+  });
+  const result = await runtime.waitForResult(worker);
+  const collected = await runtime.collectResult(result);
+
+  assert.equal(collected.files.length, 1);
+  assert.equal(collected.files[0]?.path, "value.txt");
+  assert.equal(await git(consumer, "status", "--porcelain=v1", "--untracked-files=all"), statusBefore);
+  await writeFile(
+    join(stateDirectory, "termination.json"),
+    JSON.stringify({ vmId: worker.vmId, terminated: true }),
+  );
+  assert.deepEqual(await runtime.terminate(worker), { vmId: "vm-change", terminated: true });
+});

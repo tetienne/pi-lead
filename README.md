@@ -4,7 +4,7 @@ A reusable Pi package for engineering work with visible Herdr workers, whole-wor
 
 ## Project status
 
-The specification, architectural decisions and 16-ticket breakdown are approved. Ticket 01 supplies the native package, thin Lead entry point, isolated fixture lifecycle and the first macOS arm64 Gondolin/Herdr runtime proof. Ticket 02 adds the first real Pi worker path with host-mediated ChatGPT subscription authentication; its fake-provider, cancellation, hostile-reflection and live subscription proofs pass on macOS arm64.
+The specification, architectural decisions and 16-ticket breakdown are approved. Ticket 01 supplies the native package, thin Lead entry point, isolated fixture lifecycle and the first macOS arm64 Gondolin/Herdr runtime proof. Ticket 02 adds the first real Pi worker path with host-mediated ChatGPT subscription authentication; its fake-provider, cancellation, hostile-reflection and live subscription proofs pass on macOS arm64. Ticket 03 adds a private Git workspace, isolated mise checks and a review-required proposed-change artifact without modifying or committing the host checkout.
 
 ## Start here
 
@@ -13,6 +13,7 @@ The specification, architectural decisions and 16-ticket breakdown are approved.
 - [Ticket graph and index](.scratch/pi-lead/ticket-proposal.md)
 - [First ticket: isolated fixture](.scratch/pi-lead/issues/01-isolated-fixture.md)
 - [Second ticket: ChatGPT worker](.scratch/pi-lead/issues/02-chatgpt-worker.md)
+- [Third ticket: validated proposed change](.scratch/pi-lead/issues/03-validated-proposed-change.md)
 - [Domain glossary](CONTEXT.md)
 - [Decisions and research index](docs/planning/decisions.md)
 - [Local tracker conventions](docs/agents/issue-tracker.md)
@@ -71,6 +72,30 @@ The first proves a complete native Pi SSE turn against an in-memory fake upstrea
 `npm run chatgpt-live` performs the minimal real subscription-backed proof. Do not run it until the operator has checked the current Codex usage dashboard and confirmed that no purchased or workspace credits can be consumed. OAuth readiness proves authentication only; it does not prove that usage cannot spill from included plan limits into credits. Quota exhaustion, refresh failure and model unavailability stop the worker with no API-key or paid-provider fallback.
 
 Current runtime evidence covers macOS arm64 only. Ubuntu 24.04 and Linux arm64/x86_64 remain unrun. A missing/incompatible native Herdr pane identity is a feasibility blocker; the implementation does not fall back to host execution or weaken isolation.
+
+## Request a validated proposed change
+
+Use `/lead-change` with a named branch or tag, one or more mise task names, and every dependency destination the guest may contact:
+
+```text
+/lead-change --base main --check test --check typecheck --allow dl-cdn.alpinelinux.org --allow registry.npmjs.org -- update the requested behavior
+```
+
+The Lead transfers only the named committed base through a Git bundle into a private Gondolin workspace. The worker has no host mount or control socket. Git 2.52.0 and mise 2025.8.20 are installed from the explicitly allowed Alpine repository when absent; project tool downloads need their own `--allow` entries. A rejected destination blocks the task and never expands the allowlist automatically.
+
+After the edit, the guest creates a synthetic proposal commit whose only parent is the selected base, resets to that exact commit for each declared `mise run <task>` check, and rejects a check that changes tracked content. The host imports the returned bundle into a fresh bare repository with system/global Git configuration, hooks, filters, external diffs and submodule recursion disabled. It collects bounded changed, added, deleted and renamed files, raw bytes, modes and confined symlink targets without checking out or executing guest content.
+
+A successful command returns `REVIEW_REQUIRED`; it neither creates a host commit nor publishes anything. Review, correction and host commit belong to Ticket 04.
+
+Run the credential-free macOS arm64 proofs inside Herdr:
+
+```bash
+npm run change-fixture
+npm run change-denied-fixture
+npm run change-mutating-check-fixture
+```
+
+The positive fixture executes its controlled edit process inside the VM and proves transfer, isolated mise validation, exact artifact collection, checkout preservation and confirmed cleanup. The negative fixtures prove a precise dependency denial with no policy expansion and rejection of a validation task that mutates the proposed tree. The real Pi/provider path reuses Ticket 02's host-mediated ChatGPT worker, but was not charged again for this ticket; Ubuntu 24.04 coverage remains assigned to Ticket 08.
 
 ## Planning assets
 

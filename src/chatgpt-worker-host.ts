@@ -299,7 +299,7 @@ function resolvePiBundleDirectory(): string {
   return join(dirname(entry), "bundle");
 }
 
-async function stagePiBundle(vm: VM, bundleDirectory: string): Promise<void> {
+export async function stagePiBundle(vm: VM, bundleDirectory: string): Promise<void> {
   await vm.fs.mkdir("/opt/pi", { recursive: true, mode: 0o700 });
   const packageRoot = dirname(dirname(bundleDirectory));
   const archive = spawn(
@@ -362,7 +362,10 @@ function createFakeSafeEnvironment(
   };
 }
 
-async function applyGuestCaEnvironment(vm: VM, environment: Record<string, string>): Promise<string> {
+export async function applyGuestCaEnvironment(
+  vm: VM,
+  environment: Record<string, string>,
+): Promise<string> {
   const candidates = [
     "/run/gondolin/ca-certificates.crt",
     "/etc/gondolin/mitm/ca.crt",

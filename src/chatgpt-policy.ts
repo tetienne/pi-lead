@@ -11,7 +11,7 @@ export type ChatGptCredential = {
 };
 
 export type ChatGptMediation = {
-  allowedHosts: readonly [typeof CHATGPT_HOST];
+  allowedHosts: readonly string[];
   guestEnvironment: Readonly<Record<string, string>>;
   httpHooks: CreateHttpHooksResult["httpHooks"];
   providerOverlay: {
@@ -29,6 +29,7 @@ type ChatGptMediationOptions = {
   initialCredential: ChatGptCredential;
   refreshCredential(signal?: AbortSignal): Promise<ChatGptCredential>;
   placeholderNonce: string;
+  additionalAllowedHosts?: readonly string[];
 };
 
 function requireCredential(credential: ChatGptCredential): void {
@@ -145,15 +146,44 @@ export function createChatGptMediation(options: ChatGptMediationOptions): ChatGp
 
   const accountPlaceholder = `pi-lead-account-${options.placeholderNonce}`;
   const tokenPlaceholder = createSyntheticCodexToken(accountPlaceholder, options.placeholderNonce);
+  const additionalAllowedHosts = [...new Set(options.additionalAllowedHosts ?? [])];
+  if (
+    additionalAllowedHosts.some(
+      (host) =>
+        !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(host) ||
+        host.includes("..") ||
+        host.split(".").some((label) => label.length === 0 || label.length > 63),
+    )
+  ) {
+    throw new Error("Invalid additional dependency host");
+  }
+  if (additionalAllowedHosts.includes(CHATGPT_HOST)) {
+    throw new Error("ChatGPT host cannot be repeated as a dependency destination");
+  }
+  const allowedHosts = Object.freeze([CHATGPT_HOST, ...additionalAllowedHosts]);
+  const dependencyHosts = new Set(additionalAllowedHosts);
+  const isDependencyRequest = (request: Request): boolean => {
+    const url = new URL(request.url);
+    return (
+      url.protocol === "https:" &&
+      url.port === "" &&
+      url.username === "" &&
+      url.password === "" &&
+      dependencyHosts.has(url.hostname)
+    );
+  };
   const sensitiveValues = new Set([
     options.initialCredential.accessToken,
     options.initialCredential.accountId,
   ]);
   let currentCredential = options.initialCredential;
-  let lastPolicyRejection: string | undefined;
+  let firstPolicyRejection: string | undefined;
+  const recordPolicyRejection = (detail: string) => {
+    firstPolicyRejection ??= detail;
+  };
   let hooksResult: CreateHttpHooksResult;
   hooksResult = createHttpHooks({
-    allowedHosts: [CHATGPT_HOST],
+    allowedHosts: [...allowedHosts],
     replaceSecretsInQuery: false,
     secrets: {
       [CHATGPT_TOKEN_ENV]: {
@@ -168,21 +198,39 @@ export function createChatGptMediation(options: ChatGptMediationOptions): ChatGp
       },
     },
     isRequestAllowed(request) {
+      if (isDependencyRequest(request)) {
+        for (const value of [request.url, ...request.headers.values()]) {
+          if (value.includes(tokenPlaceholder) || value.includes(accountPlaceholder)) {
+            recordPolicyRejection("synthetic provider identity sent to a dependency destination");
+            return false;
+          }
+        }
+        return true;
+      }
+      const requestedHost = new URL(request.url).hostname;
+      if (requestedHost !== CHATGPT_HOST) {
+        recordPolicyRejection(
+          `Dependency destination ${requestedHost} is not explicitly allowed`,
+        );
+        return false;
+      }
       const placeholderViolation = providerRequestViolation(
         request,
         tokenPlaceholder,
         accountPlaceholder,
       );
-      lastPolicyRejection = placeholderViolation
+      const currentViolation = placeholderViolation
         ? providerRequestViolation(
             request,
             currentCredential.accessToken,
             currentCredential.accountId,
           )
         : undefined;
-      return lastPolicyRejection === undefined;
+      if (currentViolation) recordPolicyRejection(currentViolation);
+      return currentViolation === undefined;
     },
     async onRequest(request) {
+      if (isDependencyRequest(request)) return;
       const violation = providerRequestViolation(request, tokenPlaceholder, accountPlaceholder);
       if (violation) {
         throw new Error(`ChatGPT request is outside policy: ${violation}`);
@@ -204,8 +252,9 @@ export function createChatGptMediation(options: ChatGptMediationOptions): ChatGp
       hooksResult.secretManager.updateSecret(CHATGPT_TOKEN_ENV, { value: credential.accessToken });
       hooksResult.secretManager.updateSecret(CHATGPT_ACCOUNT_ENV, { value: credential.accountId });
     },
-    onResponse(response) {
-      if (response.status >= 300 && response.status < 400) {
+    onResponse(response, request) {
+      const dependencyRequest = isDependencyRequest(request);
+      if (!dependencyRequest && response.status >= 300 && response.status < 400) {
         return new Response("ChatGPT provider redirects are not allowed", { status: 502 });
       }
       for (const value of response.headers.values()) {
@@ -216,17 +265,17 @@ export function createChatGptMediation(options: ChatGptMediationOptions): ChatGp
         }
       }
       const contentEncoding = response.headers.get("content-encoding");
-      if (contentEncoding && contentEncoding.toLowerCase() !== "identity") {
+      if (!dependencyRequest && contentEncoding && contentEncoding.toLowerCase() !== "identity") {
         return new Response("Compressed ChatGPT responses are not allowed", { status: 502 });
       }
       return credentialGuardedResponse(response, sensitiveValues, () => {
-        lastPolicyRejection = "provider response attempted to reflect host credentials";
+        recordPolicyRejection("provider response attempted to reflect host credentials");
       });
     },
   });
 
   return {
-    allowedHosts: [CHATGPT_HOST],
+    allowedHosts,
     guestEnvironment: Object.freeze({ ...hooksResult.env }),
     httpHooks: hooksResult.httpHooks,
     providerOverlay: {
@@ -237,7 +286,7 @@ export function createChatGptMediation(options: ChatGptMediationOptions): ChatGp
       transport: "sse",
     },
     getLastPolicyRejection() {
-      return lastPolicyRejection;
+      return firstPolicyRejection;
     },
     redactHostSecrets(value) {
       let redacted = value;
