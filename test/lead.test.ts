@@ -216,7 +216,13 @@ test("the planning command dispatches the installed Matt skill flow without star
     appendEntry() {},
     sendUserMessage(content: string, options: unknown) { sent.push({ content, options }); },
   } as unknown as ExtensionAPI;
-  createLeadExtension({ async runFixture() { throw new Error("not used"); } })(pi);
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async routeIntent(_input, workflow) {
+      assert.equal(workflow, "IDEATE");
+      return { status: "ROUTED", workflow: "IDEATE", source: "explicit" };
+    },
+  })(pi);
 
   await planCommand?.handler("Plan safer release notes", {
     cwd: "/consumer",
@@ -239,7 +245,17 @@ test("the Lead exposes native Matt triage and wayfinding commands without starti
     appendEntry() {},
     sendUserMessage(content: string, options: unknown) { sent.push({ content, options }); },
   } as unknown as ExtensionAPI;
-  createLeadExtension({ async runFixture() { throw new Error("not used"); } })(pi);
+  const routed: string[] = [];
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async routeIntent(_input, workflow) {
+      routed.push(workflow ?? "");
+      if (workflow === "TRIAGE" || workflow === "WAYFIND") {
+        return { status: "ROUTED", workflow, source: "explicit" };
+      }
+      throw new Error("not reached");
+    },
+  })(pi);
   const context = {
     cwd: "/consumer",
     ui: { notify(message: string, level: string) { notices.push({ message, level }); } },
@@ -250,6 +266,7 @@ test("the Lead exposes native Matt triage and wayfinding commands without starti
 
   assert.match(sent[0]?.content ?? "", /^\/skill:triage /);
   assert.match(sent[1]?.content ?? "", /^\/skill:wayfinder /);
+  assert.deepEqual(routed, ["TRIAGE", "WAYFIND"]);
   assert.deepEqual(sent.map((message) => message.options), [
     { expandPromptTemplates: true },
     { expandPromptTemplates: true },
