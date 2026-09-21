@@ -4,16 +4,16 @@
 
 **Blocked by:** [04: Review, fix and commit a complete local coding task](04-review-fix-commit.md)
 
-**Status:** ready-for-agent
+**Status:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
 ## Acceptance criteria
 
-- [ ] Build an executed symptom-specific failing feedback loop before diagnosing; preserve reproduction and verification evidence.
-- [ ] Route a fix through the existing validated/reviewed commit path and retry bounds.
-- [ ] Pin branch comparison and originating spec for standalone reviews; handle a missing spec explicitly.
-- [ ] Read-only review produces findings without creating unrelated changes or publishing them.
+- [x] Build an executed symptom-specific failing feedback loop before diagnosing; preserve reproduction and verification evidence.
+- [x] Route a fix through the existing validated/reviewed commit path and retry bounds.
+- [x] Pin branch comparison and originating spec for standalone reviews; handle a missing spec explicitly.
+- [x] Read-only review produces findings without creating unrelated changes or publishing them.
 
 ## Context and constraints
 
@@ -43,3 +43,9 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Pi Contracts](../../../docs/research/pi-contracts.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+Implemented 2026-09-21. `runDebugTask` requires attributable, executed failing feedback before diagnosis, carries the diagnosis into the existing `runReviewFixCommitTask` lifecycle, and accepts completion only after the same feedback loop passes. `runStandaloneBranchReview` resolves the named base and review branch through the trusted Git boundary, verifies supplied document digests, produces independent Standards/Spec reports when a spec exists, reports a missing spec explicitly, and confirms unchanged worktree/ref snapshots even after a reviewer fails. Fulfilled sibling review evidence is retained on failure.
+
+Validation: `npm test` (121 passing), `npm run typecheck`, and `git diff --check`. Independent Standards and Spec reviews were run twice: the first identified review-evidence gaps; the corrected final diff had no findings on either axis. Delivered commits: `6042c55`, `7c3a160`, and `34c1e25`. No live provider, guest execution, or host-security scenario was claimed by these controlled lifecycle tests.
