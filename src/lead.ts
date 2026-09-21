@@ -67,7 +67,14 @@ type LeadDependencies = {
 
 function configuredIntentRouter(): LeadDependencies["routeIntent"] | undefined {
   const apiKey = process.env.PI_LEAD_JEV_OPENROUTER_KEY;
-  if (!apiKey) return undefined;
+  if (!apiKey) {
+    return async (_input, explicitWorkflow) => {
+      if (!explicitWorkflow) return { status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE" };
+      return explicitWorkflow === "CHAT"
+        ? { status: "ROUTED", workflow: "CHAT", source: "explicit" }
+        : { status: "UNAVAILABLE", workflow: explicitWorkflow, reason: "WORKFLOW_UNAVAILABLE" };
+    };
+  }
   const resetHourUtc = Number(process.env.PI_LEAD_JEV_RESET_HOUR_UTC);
   if (
     process.env.PI_LEAD_JEV_DEDICATED_KEY_CONFIRMED !== "yes" ||
@@ -243,6 +250,9 @@ export function createLeadExtension(dependencies: LeadDependencies) {
           return { action: "handled" };
         }
         if (outcome.status === "ROUTED" && outcome.workflow === "CHAT") {
+          return { action: "continue" };
+        }
+        if (outcome.status === "SERVICE_UNAVAILABLE" && !explicitWorkflow) {
           return { action: "continue" };
         }
         if (outcome.status === "CLARIFICATION_REQUIRED") {
