@@ -1,0 +1,39 @@
+{
+  "name": "pi-lead",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    ".mise.toml",
+    "README.md",
+    "src"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "engines": {
+    "node": "24.14.1"
+  },
+  "packageManager": "npm@11.11.0",
+  "scripts": {
+    "fixture": "node src/run-fixture-cli.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": [
+      "./src/lead.ts"
+    ]
+  },
+  "dependencies": {
+    "@earendil-works/gondolin": "0.12.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.86.1",
+    "@types/node": "24.10.0",
+    "typescript": "5.9.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

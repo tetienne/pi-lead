@@ -1,0 +1,8 @@
+[tools]
+node = "24.14.1"
+
+[tasks.test]
+run = "npm test"
+
+[tasks.typecheck]
+run = "npm run typecheck"
