@@ -17,7 +17,11 @@ import {
 } from "./proposed-change-task.ts";
 import { runProposedChangeWorkerHost } from "./proposed-change-worker-host.ts";
 import { writeJsonAtomically } from "./state-files.ts";
-import { prepareToolchainCache } from "./toolchain-cache.ts";
+import {
+  attestToolchainSeed,
+  GUEST_MISE_VERSION,
+  prepareToolchainCache,
+} from "./toolchain-cache.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -79,7 +83,7 @@ const cacheOptions = {
   root: join(stateDirectory, "toolchain-cache"),
   workerId,
   miseConfig: await readFile(join(repository, ".mise.toml"), "utf8"),
-  miseVersion: "2025.8.20-r0",
+  miseVersion: GUEST_MISE_VERSION,
   guestArchitecture: process.arch === "arm64" ? "arm64" : "x64",
 };
 let toolchainCache = await prepareToolchainCache(cacheOptions);
@@ -88,6 +92,7 @@ if (warmCache) {
     recursive: true,
   });
   await writeFile(join(toolchainCache.host.seedDirectory, "data", "trusted-fixture", "seed"), "trusted");
+  await attestToolchainSeed(toolchainCache);
   toolchainCache = await prepareToolchainCache(cacheOptions);
 }
 await writeFile(join(stateDirectory, "heartbeat"), new Date().toISOString(), "utf8");
@@ -113,7 +118,14 @@ const heartbeat = setInterval(() => {
 try {
   await runProposedChangeWorkerHost({
     stateDirectory,
-    fixtureEdit: { path: "value.txt", contents: "after\n" },
+    fixtureEdit: {
+      path: "value.txt",
+      contents: "after\n",
+      assertReadonlySeed: true,
+      ...(warmCache
+        ? { expectedSeedFile: { path: "trusted-fixture/seed", contents: "trusted" } }
+        : {}),
+    },
     debugLog(message) {
       process.stderr.write(`[gondolin] ${message}\n`);
     },

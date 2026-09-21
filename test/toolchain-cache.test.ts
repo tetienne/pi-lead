@@ -6,6 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
+  attestToolchainSeed,
   createReadonlyToolchainSeed,
   prepareToolchainCache,
 } from "../src/toolchain-cache.ts";
@@ -28,6 +29,15 @@ test("a compatible trusted mise seed is reusable but remains read-only to every 
 
   await mkdir(join(first.host.seedDirectory, "data", "installs"), { recursive: true });
   await writeFile(join(first.host.seedDirectory, "data", "installs", "node"), "trusted seed");
+  const unattested = await prepareToolchainCache({
+    root,
+    workerId: "worker-unattested",
+    miseConfig: '[tools]\nnode = "24.14.1"\n',
+    miseVersion: "2025.8.20-r0",
+    guestArchitecture: "arm64",
+  });
+  assert.equal(unattested.state, "COLD");
+  await attestToolchainSeed(first);
 
   const second = await prepareToolchainCache({
     root,

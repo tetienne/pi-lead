@@ -21,7 +21,11 @@ import {
   type ReviewRequiredSummary,
 } from "./proposed-change-task.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
-import { prepareToolchainCache, type GuestArchitecture } from "./toolchain-cache.ts";
+import {
+  GUEST_MISE_VERSION,
+  prepareToolchainCache,
+  type GuestArchitecture,
+} from "./toolchain-cache.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -368,7 +372,7 @@ export async function createNativeProposedChangeRuntime(
           root: options.toolchainCacheRoot ?? join(stateRoot, "toolchain-cache"),
           workerId,
           miseConfig: await readCommittedMiseConfig(options.cwd, prepared.baseCommit),
-          miseVersion: "2025.8.20-r0",
+          miseVersion: GUEST_MISE_VERSION,
           guestArchitecture: options.guestArchitecture ?? defaultGuestArchitecture(),
         });
         const policy = createProposedChangePolicy({

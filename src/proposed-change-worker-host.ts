@@ -18,11 +18,13 @@ import type { ValidationEvidence } from "./proposed-change-task.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
 import {
   createReadonlyToolchainSeed,
+  GUEST_MISE_VERSION,
+  MISE_SEED_CONTENT_DIRECTORIES,
   type ToolchainCachePlan,
 } from "./toolchain-cache.ts";
 
 const GUEST_GIT_PACKAGE = "git=2.52.0-r0";
-const GUEST_MISE_PACKAGE = "mise=2025.8.20-r0";
+const GUEST_MISE_PACKAGE = `mise=${GUEST_MISE_VERSION}`;
 
 type LaunchRecord = {
   taskId: string;
@@ -64,8 +66,8 @@ function parseToolchainCache(value: unknown): ToolchainCachePlan {
   }
   if (
     (value.state !== "COLD" && value.state !== "WARM") ||
-    typeof value.cacheKey !== "string" ||
-    !/^[0-9a-f]{64}$/.test(value.cacheKey) ||
+    typeof value.seedId !== "string" ||
+    !/^[0-9a-f]{64}$/.test(value.seedId) ||
     typeof value.host.seedDirectory !== "string" ||
     !value.host.seedDirectory.startsWith("/") ||
     (value.guest.platform !== "linux-arm64-musl" && value.guest.platform !== "linux-x64-musl") ||
@@ -94,7 +96,7 @@ function parseToolchainCache(value: unknown): ToolchainCachePlan {
   }
   return {
     state: value.state,
-    cacheKey: value.cacheKey,
+    seedId: value.seedId,
     host: { seedDirectory: value.host.seedDirectory },
     guest: { platform: value.guest.platform, seedDirectory: value.guest.seedDirectory },
     environment,
@@ -185,15 +187,37 @@ async function seedPrivateMiseStorage(
   vm: VM,
   environment: Record<string, string>,
 ): Promise<void> {
-  const seed = await vm.exec(
-    [
-      "/bin/sh",
-      "-lc",
-      "mkdir -p \"$MISE_CACHE_DIR\" \"$MISE_CONFIG_DIR\" \"$MISE_DATA_DIR\" \"$MISE_STATE_DIR\" && if [ -d \"$PI_LEAD_MISE_SEED/cache\" ]; then cp -a \"$PI_LEAD_MISE_SEED/cache/.\" \"$MISE_CACHE_DIR\"; fi && if [ -d \"$PI_LEAD_MISE_SEED/data\" ]; then cp -a \"$PI_LEAD_MISE_SEED/data/.\" \"$MISE_DATA_DIR\"; fi",
-    ],
+  const destinations = {
+    cache: environment.MISE_CACHE_DIR,
+    data: environment.MISE_DATA_DIR,
+  } as const;
+  const directories = await vm.exec(
+    ["/bin/mkdir", "-p", environment.MISE_CACHE_DIR, environment.MISE_CONFIG_DIR, environment.MISE_DATA_DIR, environment.MISE_STATE_DIR],
     { env: environment },
   );
-  if (!seed.ok) throw new Error(`Read-only mise seed copy failed: ${seed.stderr.trim()}`);
+  if (!directories.ok) throw new Error(`Private mise storage setup failed: ${directories.stderr.trim()}`);
+  for (const directory of MISE_SEED_CONTENT_DIRECTORIES) {
+    const source = `${environment.PI_LEAD_MISE_SEED}/${directory}`;
+    try {
+      await vm.fs.access(source);
+    } catch {
+      continue;
+    }
+    const copy = await vm.exec(["/bin/cp", "-a", `${source}/.`, destinations[directory]], {
+      env: environment,
+    });
+    if (!copy.ok) throw new Error(`Read-only mise seed copy failed: ${copy.stderr.trim()}`);
+  }
+}
+
+async function assertGuestPlatform(vm: VM, plan: ToolchainCachePlan): Promise<void> {
+  const architecture = await vm.exec(["/bin/uname", "-m"]);
+  const expectedArchitecture = plan.guest.platform === "linux-arm64-musl" ? "aarch64" : "x86_64";
+  if (!architecture.ok || architecture.stdout.trim() !== expectedArchitecture) {
+    throw new Error(`Guest architecture does not match cache seed: expected ${expectedArchitecture}`);
+  }
+  const musl = await vm.exec(["/bin/sh", "-lc", "test -e /lib/ld-musl-*.so.1"]);
+  if (!musl.ok) throw new Error("Guest ABI does not match the musl cache seed");
 }
 
 function identity(launch: LaunchRecord, vmId: string) {
@@ -421,7 +445,12 @@ export type RunProposedChangeWorkerHostOptions = {
   liveOutput?: (message: string) => void;
   upstreamFetch?: VMOptions["fetch"];
   piBundleDirectory?: string;
-  fixtureEdit?: { path: string; contents: string };
+  fixtureEdit?: {
+    path: string;
+    contents: string;
+    assertReadonlySeed?: boolean;
+    expectedSeedFile?: { path: string; contents: string };
+  };
 };
 
 export async function runProposedChangeWorkerHost(
@@ -527,6 +556,7 @@ export async function runProposedChangeWorkerHost(
     resourcesStarted = true;
     abortController.signal.throwIfAborted();
     await applyGuestCaEnvironment(vm, environment);
+    await assertGuestPlatform(vm, launch.toolchainCache);
     const seedCopyStartedAt = performance.now();
     await seedPrivateMiseStorage(vm, environment);
     const seedCopyMs = performance.now() - seedCopyStartedAt;
@@ -535,6 +565,26 @@ export async function runProposedChangeWorkerHost(
     const guestToolchainPreparationMs = performance.now() - toolchainPreparationStartedAt;
     await preparePrivateWorkspace(vm, launch, options.stateDirectory, environment);
     if (options.fixtureEdit) {
+      if (options.fixtureEdit.assertReadonlySeed) {
+        const probe = await vm.exec(
+          [
+            "/bin/sh",
+            "-lc",
+            "if touch \"$PI_LEAD_MISE_SEED/.pi-lead-write-probe\" 2>/dev/null; then exit 20; fi",
+          ],
+          { env: environment },
+        );
+        if (!probe.ok) throw new Error("Guest could write to the shared mise seed");
+      }
+      if (options.fixtureEdit.expectedSeedFile) {
+        const copiedSeed = await vm.fs.readFile(
+          `${environment.MISE_DATA_DIR}/${options.fixtureEdit.expectedSeedFile.path}`,
+          { encoding: "utf8" },
+        );
+        if (copiedSeed !== options.fixtureEdit.expectedSeedFile.contents) {
+          throw new Error("Trusted mise seed was not copied into private worker storage");
+        }
+      }
       const editPath = requireFixturePath(options.fixtureEdit.path);
       await vm.fs.writeFile(
         "/tmp/pi-lead-fixture-edit.json",
@@ -656,7 +706,7 @@ export async function runProposedChangeWorkerHost(
       proposedCommit,
       validations: validation.validations,
       toolchainCache: {
-        seedId: launch.toolchainCache.cacheKey,
+        seedId: launch.toolchainCache.seedId,
         state: launch.toolchainCache.state,
         seedCopyMs,
         guestToolchainPreparationMs,

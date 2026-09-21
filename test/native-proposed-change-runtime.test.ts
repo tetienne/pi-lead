@@ -73,7 +73,7 @@ test("native change runtime transfers the named base and collects only its corre
         piSessionId: string;
         toolchainCache: {
           state: string;
-          cacheKey: string;
+          seedId: string;
           host: { seedDirectory: string };
           guest: { platform: string; seedDirectory: string };
           environment: { MISE_DATA_DIR: string };
@@ -120,7 +120,7 @@ test("native change runtime transfers the named base and collects only its corre
             { task: "test", command: "mise run test", passed: true, exitCode: 0 },
           ],
           toolchainCache: {
-            seedId: launch.toolchainCache.cacheKey,
+            seedId: launch.toolchainCache.seedId,
             state: launch.toolchainCache.state,
             seedCopyMs: 3,
             guestToolchainPreparationMs: 11,
@@ -157,7 +157,7 @@ test("native change runtime transfers the named base and collects only its corre
   });
   const result = await runtime.waitForResult(worker);
   assert.deepEqual(result.toolchainCache, {
-    seedId: (JSON.parse(await readFile(join(stateDirectory, "launch.json"), "utf8")) as { toolchainCache: { cacheKey: string } }).toolchainCache.cacheKey,
+    seedId: (JSON.parse(await readFile(join(stateDirectory, "launch.json"), "utf8")) as { toolchainCache: { seedId: string } }).toolchainCache.seedId,
     state: "COLD",
     seedCopyMs: 3,
     guestToolchainPreparationMs: 11,
