@@ -16,6 +16,10 @@ import { PROPOSAL_REF } from "./git-proposal.ts";
 import { observeProcessExit } from "./process-observation.ts";
 import type { ValidationEvidence } from "./proposed-change-task.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
+import {
+  createReadonlyToolchainSeed,
+  type ToolchainCachePlan,
+} from "./toolchain-cache.ts";
 
 const GUEST_GIT_PACKAGE = "git=2.52.0-r0";
 const GUEST_MISE_PACKAGE = "mise=2025.8.20-r0";
@@ -33,6 +37,7 @@ type LaunchRecord = {
   modelId: string;
   dependencyHosts: string[];
   validationTasks: string[];
+  toolchainCache: ToolchainCachePlan;
   controllerHeartbeatTimeoutMs: number;
 };
 
@@ -51,6 +56,49 @@ function stringArray(value: unknown, field: string, maxEntries: number): string[
     if (typeof entry !== "string") throw new Error(`Invalid ${field} entry`);
     return entry;
   });
+}
+
+function parseToolchainCache(value: unknown): ToolchainCachePlan {
+  if (!isRecord(value) || !isRecord(value.host) || !isRecord(value.guest) || !isRecord(value.environment)) {
+    throw new Error("Invalid toolchain cache launch record");
+  }
+  if (
+    (value.state !== "COLD" && value.state !== "WARM") ||
+    typeof value.cacheKey !== "string" ||
+    !/^[0-9a-f]{64}$/.test(value.cacheKey) ||
+    typeof value.host.seedDirectory !== "string" ||
+    !value.host.seedDirectory.startsWith("/") ||
+    (value.guest.platform !== "linux-arm64-musl" && value.guest.platform !== "linux-x64-musl") ||
+    value.guest.seedDirectory !== "/opt/pi-lead/mise-seed"
+  ) {
+    throw new Error("Invalid toolchain cache launch record");
+  }
+  const environmentValue = value.environment;
+  const environment = Object.fromEntries(
+    ["MISE_CACHE_DIR", "MISE_CONFIG_DIR", "MISE_DATA_DIR", "MISE_STATE_DIR", "PI_LEAD_MISE_SEED"].map(
+      (name) => {
+        const field = environmentValue[name];
+        if (typeof field !== "string") throw new Error("Invalid toolchain cache environment");
+        return [name, field];
+      },
+    ),
+  ) as ToolchainCachePlan["environment"];
+  if (
+    environment.PI_LEAD_MISE_SEED !== value.guest.seedDirectory ||
+    !environment.MISE_CACHE_DIR.startsWith("/tmp/pi-lead-") ||
+    !environment.MISE_CONFIG_DIR.startsWith("/tmp/pi-lead-") ||
+    !environment.MISE_DATA_DIR.startsWith("/tmp/pi-lead-") ||
+    !environment.MISE_STATE_DIR.startsWith("/tmp/pi-lead-")
+  ) {
+    throw new Error("Toolchain cache writes are not private to the guest worker");
+  }
+  return {
+    state: value.state,
+    cacheKey: value.cacheKey,
+    host: { seedDirectory: value.host.seedDirectory },
+    guest: { platform: value.guest.platform, seedDirectory: value.guest.seedDirectory },
+    environment,
+  } as ToolchainCachePlan;
 }
 
 function parseLaunchRecord(value: unknown): LaunchRecord {
@@ -104,6 +152,7 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
     modelId: requireString(value, "modelId", 160),
     dependencyHosts: allowedHosts.slice(1),
     validationTasks: validation,
+    toolchainCache: parseToolchainCache(value.toolchainCache),
     controllerHeartbeatTimeoutMs: timeout,
   };
 }
@@ -118,10 +167,7 @@ function guestEnvironment(launch: LaunchRecord, secrets: Readonly<Record<string,
   return {
     HOME: `${privateRoot}/home`,
     PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-    MISE_CACHE_DIR: `${privateRoot}/mise/cache`,
-    MISE_CONFIG_DIR: `${privateRoot}/mise/config`,
-    MISE_DATA_DIR: `${privateRoot}/mise/data`,
-    MISE_STATE_DIR: `${privateRoot}/mise/state`,
+    ...launch.toolchainCache.environment,
     MISE_YES: "1",
     PI_CODING_AGENT_DIR: `${privateRoot}/pi-agent`,
     PI_CODING_AGENT_SESSION_DIR: `${privateRoot}/pi-sessions`,
@@ -133,6 +179,21 @@ function guestEnvironment(launch: LaunchRecord, secrets: Readonly<Record<string,
     PI_SKIP_VERSION_CHECK: "1",
     ...secrets,
   };
+}
+
+async function seedPrivateMiseStorage(
+  vm: VM,
+  environment: Record<string, string>,
+): Promise<void> {
+  const seed = await vm.exec(
+    [
+      "/bin/sh",
+      "-lc",
+      "mkdir -p \"$MISE_CACHE_DIR\" \"$MISE_CONFIG_DIR\" \"$MISE_DATA_DIR\" \"$MISE_STATE_DIR\" && if [ -d \"$PI_LEAD_MISE_SEED/cache\" ]; then cp -a \"$PI_LEAD_MISE_SEED/cache/.\" \"$MISE_CACHE_DIR\"; fi && if [ -d \"$PI_LEAD_MISE_SEED/data\" ]; then cp -a \"$PI_LEAD_MISE_SEED/data/.\" \"$MISE_DATA_DIR\"; fi",
+    ],
+    { env: environment },
+  );
+  if (!seed.ok) throw new Error(`Read-only mise seed copy failed: ${seed.stderr.trim()}`);
 }
 
 function identity(launch: LaunchRecord, vmId: string) {
@@ -215,7 +276,8 @@ async function runValidationTasks(
   proposedCommit: string,
   environment: Record<string, string>,
   onOutput: (message: string) => Promise<void>,
-): Promise<ValidationEvidence[]> {
+): Promise<{ validations: ValidationEvidence[]; miseReadinessMs: number; validationExecutionMs: number }> {
+  const readinessStartedAt = performance.now();
   await runChecked(vm, ["/usr/bin/mise", "trust", "--all", "--yes"], {
     cwd: "/workspace",
     env: environment,
@@ -230,17 +292,21 @@ async function runValidationTasks(
   if (!install.ok) {
     throw new Error(`mise tool installation failed with exit code ${install.exitCode}`);
   }
+  const miseReadinessMs = performance.now() - readinessStartedAt;
   const validations: ValidationEvidence[] = [];
+  let validationExecutionMs = 0;
   for (const task of launch.validationTasks) {
     await runChecked(vm, ["/usr/bin/git", "reset", "--hard", proposedCommit], {
       cwd: "/workspace",
       env: environment,
       label: `validation workspace reset for ${task}`,
     });
+    const executionStartedAt = performance.now();
     const result = await vm.exec(["/usr/bin/mise", "run", task], {
       cwd: "/workspace",
       env: environment,
     });
+    validationExecutionMs += performance.now() - executionStartedAt;
     await onOutput(result.stdout);
     await onOutput(result.stderr);
     const drift = await vm.exec(["/usr/bin/git", "diff", "--quiet", proposedCommit, "--"], {
@@ -262,7 +328,7 @@ async function runValidationTasks(
     env: environment,
     label: "final validation workspace reset",
   });
-  return validations;
+  return { validations, miseReadinessMs, validationExecutionMs };
 }
 
 async function packageProposal(
@@ -446,7 +512,11 @@ export async function runProposedChangeWorkerHost(
       httpHooks,
       sessionLabel: `pi-lead:${launch.workerId}`,
       startTimeoutMs: 30_000,
-      vfs: { mounts: {} },
+      vfs: {
+        mounts: {
+          [launch.toolchainCache.guest.seedDirectory]: createReadonlyToolchainSeed(launch.toolchainCache),
+        },
+      },
     });
     vmId = vm.id;
     hostPid = vm.getHostPid();
@@ -457,7 +527,12 @@ export async function runProposedChangeWorkerHost(
     resourcesStarted = true;
     abortController.signal.throwIfAborted();
     await applyGuestCaEnvironment(vm, environment);
+    const seedCopyStartedAt = performance.now();
+    await seedPrivateMiseStorage(vm, environment);
+    const seedCopyMs = performance.now() - seedCopyStartedAt;
+    const toolchainPreparationStartedAt = performance.now();
     await ensureGuestToolchain(vm, environment);
+    const guestToolchainPreparationMs = performance.now() - toolchainPreparationStartedAt;
     await preparePrivateWorkspace(vm, launch, options.stateDirectory, environment);
     if (options.fixtureEdit) {
       const editPath = requireFixturePath(options.fixtureEdit.path);
@@ -561,7 +636,7 @@ export async function runProposedChangeWorkerHost(
       environment,
       options.stateDirectory,
     );
-    const validations = await runValidationTasks(
+    const validation = await runValidationTasks(
       vm,
       launch,
       proposedCommit,
@@ -579,7 +654,15 @@ export async function runProposedChangeWorkerHost(
       ...identity(launch, vmId),
       status: "proposed",
       proposedCommit,
-      validations,
+      validations: validation.validations,
+      toolchainCache: {
+        seedId: launch.toolchainCache.cacheKey,
+        state: launch.toolchainCache.state,
+        seedCopyMs,
+        guestToolchainPreparationMs,
+        miseReadinessMs: validation.miseReadinessMs,
+        validationExecutionMs: validation.validationExecutionMs,
+      },
     });
   } catch (error) {
     const policyRejection = getPolicyRejection();

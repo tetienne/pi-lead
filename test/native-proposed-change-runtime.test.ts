@@ -71,7 +71,21 @@ test("native change runtime transfers the named base and collects only its corre
         tabId: string;
         paneId: string;
         piSessionId: string;
+        toolchainCache: {
+          state: string;
+          cacheKey: string;
+          host: { seedDirectory: string };
+          guest: { platform: string; seedDirectory: string };
+          environment: { MISE_DATA_DIR: string };
+        };
       };
+      assert.deepEqual(launch.toolchainCache.guest, {
+        platform: "linux-x64-musl",
+        seedDirectory: "/opt/pi-lead/mise-seed",
+      });
+      assert.equal(launch.toolchainCache.state, "COLD");
+      assert.equal(launch.toolchainCache.host.seedDirectory.startsWith(join(root, "cache")), true);
+      assert.match(launch.toolchainCache.environment.MISE_DATA_DIR, /pi-lead-.+\/mise\/data$/);
       const guest = join(root, "guest");
       await git(root, "clone", "--quiet", "--branch", "main", join(stateDirectory, "base.bundle"), guest);
       await git(guest, "switch", "--quiet", "-c", "pi-lead-proposal", "HEAD");
@@ -105,6 +119,14 @@ test("native change runtime transfers the named base and collects only its corre
           validations: [
             { task: "test", command: "mise run test", passed: true, exitCode: 0 },
           ],
+          toolchainCache: {
+            seedId: launch.toolchainCache.cacheKey,
+            state: launch.toolchainCache.state,
+            seedCopyMs: 3,
+            guestToolchainPreparationMs: 11,
+            miseReadinessMs: 7,
+            validationExecutionMs: 5,
+          },
         }),
       );
     },
@@ -113,6 +135,8 @@ test("native change runtime transfers the named base and collects only its corre
     cwd: consumer,
     workspaceId: "workspace-1",
     stateRoot,
+    toolchainCacheRoot: join(root, "cache"),
+    guestArchitecture: "x64",
     herdr,
     processHost,
     pollIntervalMs: 1,
@@ -132,6 +156,14 @@ test("native change runtime transfers the named base and collects only its corre
     allowedDependencyHosts: ["registry.npmjs.org"],
   });
   const result = await runtime.waitForResult(worker);
+  assert.deepEqual(result.toolchainCache, {
+    seedId: (JSON.parse(await readFile(join(stateDirectory, "launch.json"), "utf8")) as { toolchainCache: { cacheKey: string } }).toolchainCache.cacheKey,
+    state: "COLD",
+    seedCopyMs: 3,
+    guestToolchainPreparationMs: 11,
+    miseReadinessMs: 7,
+    validationExecutionMs: 5,
+  });
   const collected = await runtime.collectResult(result);
 
   assert.equal(collected.files.length, 1);

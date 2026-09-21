@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -17,6 +17,7 @@ import {
 } from "./proposed-change-task.ts";
 import { runProposedChangeWorkerHost } from "./proposed-change-worker-host.ts";
 import { writeJsonAtomically } from "./state-files.ts";
+import { prepareToolchainCache } from "./toolchain-cache.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +38,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
 const root = await mkdtemp(join(tmpdir(), "pi-lead-change-fixture-"));
 const denyBootstrap = process.argv.includes("--deny-bootstrap");
 const mutatingCheck = process.argv.includes("--mutating-check");
+const warmCache = process.argv.includes("--warm-cache");
 const repository = join(root, "consumer");
 const stateDirectory = join(root, "state");
 await git(root, ["init", "--quiet", "--initial-branch=main", repository]);
@@ -73,6 +75,21 @@ const policy = createProposedChangePolicy({
   dependencyHosts,
   validationTasks: ["test"],
 });
+const cacheOptions = {
+  root: join(stateDirectory, "toolchain-cache"),
+  workerId,
+  miseConfig: await readFile(join(repository, ".mise.toml"), "utf8"),
+  miseVersion: "2025.8.20-r0",
+  guestArchitecture: process.arch === "arm64" ? "arm64" : "x64",
+};
+let toolchainCache = await prepareToolchainCache(cacheOptions);
+if (warmCache) {
+  await mkdir(join(toolchainCache.host.seedDirectory, "data", "trusted-fixture"), {
+    recursive: true,
+  });
+  await writeFile(join(toolchainCache.host.seedDirectory, "data", "trusted-fixture", "seed"), "trusted");
+  toolchainCache = await prepareToolchainCache(cacheOptions);
+}
 await writeFile(join(stateDirectory, "heartbeat"), new Date().toISOString(), "utf8");
 await writeJsonAtomically(join(stateDirectory, "launch.json"), {
   schemaVersion: 1,
@@ -86,6 +103,7 @@ await writeJsonAtomically(join(stateDirectory, "launch.json"), {
   tabId: "fixture-tab",
   paneId: "fixture-pane",
   modelId: "gpt-5.6-luna",
+  toolchainCache,
   policy,
   controllerHeartbeatTimeoutMs: 60_000,
 });
@@ -183,6 +201,7 @@ if (denyBootstrap) {
   assert.equal(summary.status, "REVIEW_REQUIRED");
   if (summary.status === "REVIEW_REQUIRED") {
     assert.equal(summary.files.some((file) => file.path === "value.txt"), true);
+    if (warmCache) assert.equal(summary.toolchainCache?.state, "WARM");
   }
 }
 process.stdout.write(
@@ -192,6 +211,7 @@ process.stdout.write(
       stateDirectory,
       hostCheckoutPreserved: true,
       ...(denyBootstrap ? { allowedDependencyHosts: [], policyExpanded: false } : {}),
+      ...(warmCache ? { expectedCacheState: "WARM" } : {}),
     },
     null,
     2,

@@ -16,10 +16,12 @@ import {
   ProposedChangeRuntimeFailure,
   type ProposedChangeWorker,
   type ProposedChangeWorkerResult,
+  type ToolchainCacheTiming,
   type ValidationEvidence,
   type ReviewRequiredSummary,
 } from "./proposed-change-task.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
+import { prepareToolchainCache, type GuestArchitecture } from "./toolchain-cache.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -42,9 +44,11 @@ export type NativeProposedChangeRuntime = ProposedChangeRuntime & {
 
 type NativeProposedChangeRuntimeOptions = {
   cwd: string;
+  guestArchitecture?: GuestArchitecture;
   modelId?: string;
   workspaceId?: string;
   stateRoot?: string;
+  toolchainCacheRoot?: string;
   herdr?: HerdrClient;
   processHost?: ProposedChangeProcessHost;
   pollIntervalMs?: number;
@@ -204,6 +208,31 @@ function requireString(value: unknown, field: string, maxLength = 16_384): strin
   return value[field];
 }
 
+async function readCommittedMiseConfig(repositoryPath: string, baseCommit: string): Promise<string> {
+  if (!/^[0-9a-f]{40}$/.test(baseCommit)) throw new Error("Invalid committed base for mise config");
+  try {
+    const { stdout } = await execFileAsync("/usr/bin/git", ["show", `${baseCommit}:.mise.toml`], {
+      cwd: repositoryPath,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+    });
+    return stdout;
+  } catch (error) {
+    const detail = `${error instanceof Error ? error.message : String(error)}\n${
+      typeof error === "object" && error !== null && "stderr" in error && typeof error.stderr === "string"
+        ? error.stderr
+        : ""
+    }`;
+    if (/does not exist in|exists on disk, but not in|Path '.mise\.toml'/.test(detail)) return "";
+    throw error;
+  }
+}
+
+function defaultGuestArchitecture(): GuestArchitecture {
+  if (process.arch === "arm64" || process.arch === "x64") return process.arch;
+  throw new Error(`Unsupported host architecture for Linux guest toolchains: ${process.arch}`);
+}
+
 function parseValidations(value: unknown): ValidationEvidence[] {
   if (!isRecord(value) || !Array.isArray(value.validations) || value.validations.length > 8) {
     throw new Error("Invalid proposed-change validations");
@@ -228,6 +257,33 @@ function parseValidations(value: unknown): ValidationEvidence[] {
   });
 }
 
+function parseToolchainCacheTiming(value: unknown): ToolchainCacheTiming | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !isRecord(value) ||
+    typeof value.seedId !== "string" ||
+    !/^[0-9a-f]{64}$/.test(value.seedId) ||
+    (value.state !== "COLD" && value.state !== "WARM")
+  ) {
+    throw new Error("Invalid toolchain cache timing evidence");
+  }
+  const duration = (field: string): number => {
+    const result = value[field];
+    if (typeof result !== "number" || !Number.isFinite(result) || result < 0) {
+      throw new Error("Invalid toolchain cache timing evidence");
+    }
+    return result;
+  };
+  return {
+    seedId: value.seedId,
+    state: value.state,
+    seedCopyMs: duration("seedCopyMs"),
+    guestToolchainPreparationMs: duration("guestToolchainPreparationMs"),
+    miseReadinessMs: duration("miseReadinessMs"),
+    validationExecutionMs: duration("validationExecutionMs"),
+  };
+}
+
 function parseResult(value: unknown): ProposedChangeWorkerResult {
   if (!isRecord(value) || value.status !== "proposed") {
     throw new Error("Invalid proposed-change result");
@@ -244,6 +300,7 @@ function parseResult(value: unknown): ProposedChangeWorkerResult {
     baseCommit: requireString(value, "baseCommit", 64),
     proposedCommit: requireString(value, "proposedCommit", 64),
     validations: parseValidations(value),
+    toolchainCache: parseToolchainCacheTiming(value.toolchainCache),
   };
 }
 
@@ -307,6 +364,13 @@ export async function createNativeProposedChangeRuntime(
           namedBase: request.namedBase,
           outputPath: join(directory, "base.bundle"),
         });
+        const toolchainCache = await prepareToolchainCache({
+          root: options.toolchainCacheRoot ?? join(stateRoot, "toolchain-cache"),
+          workerId,
+          miseConfig: await readCommittedMiseConfig(options.cwd, prepared.baseCommit),
+          miseVersion: "2025.8.20-r0",
+          guestArchitecture: options.guestArchitecture ?? defaultGuestArchitecture(),
+        });
         const policy = createProposedChangePolicy({
           workerId,
           dependencyHosts: request.dependencyHosts,
@@ -336,6 +400,7 @@ export async function createNativeProposedChangeRuntime(
           tabId: tab.tabId,
           paneId: tab.paneId,
           modelId: options.modelId ?? "gpt-5.6-luna",
+          toolchainCache,
           policy,
           controllerHeartbeatTimeoutMs: 5_000,
         });

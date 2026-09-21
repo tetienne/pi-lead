@@ -34,10 +34,20 @@ export type ValidationEvidence = {
   exitCode: number;
 };
 
+export type ToolchainCacheTiming = {
+  seedId: string;
+  state: "COLD" | "WARM";
+  seedCopyMs: number;
+  guestToolchainPreparationMs: number;
+  miseReadinessMs: number;
+  validationExecutionMs: number;
+};
+
 export type ProposedChangeWorkerResult = ProposedChangeWorker & {
   status: "proposed";
   proposedCommit: string;
   validations: readonly ValidationEvidence[];
+  toolchainCache?: ToolchainCacheTiming;
 };
 
 export type ProposedFile = {
@@ -102,6 +112,7 @@ export type ReviewRequiredSummary = ProposedChangeWorker &
     hostCommitted: false;
     published: false;
     vmTerminated: true;
+    toolchainCache?: ToolchainCacheTiming;
   };
 
 export type ProposedChangeBlockedSummary = ProposedChangeWorker & {
@@ -319,6 +330,7 @@ export async function runProposedChangeTask(
     ...worker,
     proposedCommit: result.proposedCommit,
     validations: result.validations,
+    ...(result.toolchainCache === undefined ? {} : { toolchainCache: result.toolchainCache }),
     ...collected,
     humanGate: true,
     hostCommitted: false,
