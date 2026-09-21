@@ -55,7 +55,7 @@ Final deterministic validation:
 
 - `npm test`: 15/15 passing.
 - `npm run typecheck`: passing.
-- `npm pack --dry-run --cache /private/tmp/pi-lead-npm-cache`: passing; 12 intended package files, 38.6 kB unpacked.
+- `npm pack --dry-run --cache /private/tmp/pi-lead-npm-cache`: passing; 12 intended package files, 38.8 kB unpacked.
 - Package activation: `pi install -l /Users/Thibaut/git/pi-lead` succeeded in `/private/tmp/pi-lead-consumer.5hswhV`.
 
 Native runtime evidence:
