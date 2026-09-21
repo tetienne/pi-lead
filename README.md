@@ -4,7 +4,7 @@ A reusable Pi package for engineering work with visible Herdr workers, whole-wor
 
 ## Project status
 
-The specification, architectural decisions and 16-ticket breakdown are approved. Ticket 01 supplies the native package, thin Lead entry point, isolated fixture lifecycle and the first macOS arm64 Gondolin/Herdr runtime proof. Ticket 02 adds the first real Pi worker path with host-mediated ChatGPT subscription authentication; its fake-provider, cancellation, hostile-reflection and live subscription proofs pass on macOS arm64. Ticket 03 adds a private Git workspace, isolated mise checks and a review-required proposed-change artifact without modifying or committing the host checkout.
+The specification, architectural decisions and 16-ticket breakdown are approved. Ticket 01 supplies the native package, thin Lead entry point, isolated fixture lifecycle and the first macOS arm64 Gondolin/Herdr runtime proof. Ticket 02 adds the first real Pi worker path with host-mediated ChatGPT subscription authentication; its fake-provider, cancellation, hostile-reflection and live subscription proofs pass on macOS arm64. Ticket 03 adds a private Git workspace, isolated mise checks and a review-required proposed-change artifact without modifying or committing the host checkout. Ticket 05 adds controlled publication of a reviewed task branch to one explicitly configured consuming-project remote.
 
 ## Start here
 
@@ -96,6 +96,16 @@ npm run change-mutating-check-fixture
 ```
 
 The positive fixture executes its controlled edit process inside the VM and proves transfer, isolated mise validation, exact artifact collection, checkout preservation and confirmed cleanup. The negative fixtures prove a precise dependency denial with no policy expansion and rejection of a validation task that mutates the proposed tree. The real Pi/provider path reuses Ticket 02's host-mediated ChatGPT worker, but was not charged again for this ticket; Ubuntu 24.04 coverage remains assigned to Ticket 08.
+
+## Controlled task-branch publication
+
+After a validated implementation has passed its independent review and been delivered locally, the trusted host can publish only its exact `pi-lead/task-<task-id>` branch. Configure the consuming project's permitted remote in the trusted Lead environment, not in guest-visible worker inputs:
+
+```bash
+export PI_LEAD_GIT_REMOTE=origin
+```
+
+The value must name one existing remote with exactly one push URL. PI Lead never creates a remote, chooses among remotes, uses a force refspec, overwrites an existing different remote task branch, or publishes a protected/arbitrary branch. Before each attempt it records the exact intended remote/ref/commit in its host-owned run state; it records the observed result after reconciliation. A failed or unreconciled push leaves the reviewed local branch intact and reports `BLOCKED`; retrying starts by observing the remote branch again. PR creation, merges, deployment and privileged operations have no automatic publication path and remain human gates.
 
 ## Planning assets
 

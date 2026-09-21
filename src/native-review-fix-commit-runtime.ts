@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 
 import { MAX_CHATGPT_TASK_CHARS } from "./chatgpt-input.ts";
 import { runReadOnlyChatGptTask } from "./chatgpt-task.ts";
@@ -11,7 +12,8 @@ import {
   type ReviewInput,
   type ReviewReport,
 } from "./review-fix-commit-task.ts";
-import { isRecord } from "./state-files.ts";
+import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
+import { publishTaskBranch, type PublicationEvent } from "./git-publication.ts";
 
 function displayFile(file: ReviewInput["proposal"]["files"][number]): string {
   const header = [
@@ -101,6 +103,7 @@ export async function createNativeReviewFixCommitRuntime(options: {
   stateRoot?: string;
   workspaceId?: string;
   modelId?: string;
+  gitRemoteName?: string;
 }): Promise<ReviewFixCommitRuntime> {
   const proposedChanges = await createNativeProposedChangeRuntime(options);
   const reviewers = await createNativeChatGptRuntime(options);
@@ -143,6 +146,25 @@ export async function createNativeReviewFixCommitRuntime(options: {
     },
     async commit(input, _signal?: AbortSignal) {
       return proposedChanges.commitProposal(input.proposal, input.branchName);
+    },
+    async publish(input, _signal?: AbortSignal) {
+      const stateDirectory = proposedChanges.publicationStateDirectory(input.proposal);
+      const record = async (event: PublicationEvent) => {
+        const path = join(stateDirectory, "publication.json");
+        const previous = await readJsonIfPresent(path);
+        const events =
+          isRecord(previous) && Array.isArray(previous.events)
+            ? previous.events.filter(isRecord)
+            : [];
+        await writeJsonAtomically(path, { schemaVersion: 1, events: [...events, event] });
+      };
+      return publishTaskBranch({
+        repositoryPath: options.cwd,
+        configuredRemoteName: options.gitRemoteName ?? process.env.PI_LEAD_GIT_REMOTE,
+        branchName: input.commit.branchName,
+        commit: input.commit.commit,
+        journal: { record },
+      });
     },
   };
 }

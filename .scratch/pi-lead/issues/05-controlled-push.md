@@ -4,7 +4,7 @@
 
 **Blocked by:** [04: Review, fix and commit a complete local coding task](04-review-fix-commit.md)
 
-**Status:** ready-for-agent
+**Status:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -43,3 +43,9 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Workspace And Mise](../../../docs/research/workspace-and-mise.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+Implemented 2026-09-21. The host-owned publication boundary accepts only the already-reviewed `pi-lead/task-<task-id>` branch and one explicitly configured `PI_LEAD_GIT_REMOTE`. It validates local and remote refs against the final commit, rejects missing or multi-push-URL remotes, protected/arbitrary branch names and existing different remote task branches, and has no force/refspec/remote-creation mode. Intent is journaled before dispatch and the observed outcome is journaled after reconciliation; failed or uncertain outcomes retain the local commit and return `BLOCKED / PUBLICATION_BLOCKED`. PRs, merges, deployments and privileged actions have no automatic route.
+
+Validation: focused disposable-remote publication tests, task-lifecycle publication/uncertainty tests, `npm test`, `npm run typecheck`, `git diff --check`, and independent Standards/Spec review. No live remote, protected-branch provider policy, provider, host-architecture or security scenario is claimed by this slice.

@@ -37,6 +37,7 @@ export type NativeProposedChangeRuntime = ProposedChangeRuntime & {
     committed: true;
     activeCheckoutPreserved: true;
   }>;
+  publicationStateDirectory(proposal: ReviewRequiredSummary): string;
 };
 
 type NativeProposedChangeRuntimeOptions = {
@@ -445,6 +446,20 @@ export async function createNativeProposedChangeRuntime(
         collectionDirectory: join(run.directory, "commit-collection"),
         branchName,
       });
+    },
+
+    publicationStateDirectory(proposal: ReviewRequiredSummary): string {
+      const run = runs.get(proposal.vmId);
+      if (
+        !run ||
+        run.worker.taskId !== proposal.taskId ||
+        run.worker.assignmentId !== proposal.assignmentId ||
+        run.worker.workerId !== proposal.workerId ||
+        run.worker.baseCommit !== proposal.baseCommit
+      ) {
+        throw new Error("Cannot publish a proposal that is not owned by this runtime");
+      }
+      return run.directory;
     },
 
     async terminate(worker: ProposedChangeWorker): Promise<{ vmId: string; terminated: boolean }> {
