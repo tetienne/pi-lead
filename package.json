@@ -16,6 +16,10 @@
   },
   "packageManager": "npm@11.11.0",
   "scripts": {
+    "chatgpt-fixture": "node src/run-chatgpt-fake-cli.ts",
+    "chatgpt-cancel-fixture": "node src/run-chatgpt-fake-cli.ts --cancel",
+    "chatgpt-reflection-fixture": "node src/run-chatgpt-fake-cli.ts --reflect-secret",
+    "chatgpt-live": "node src/run-chatgpt-live-cli.ts",
     "fixture": "node src/run-fixture-cli.ts",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit"

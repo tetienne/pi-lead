@@ -4,7 +4,7 @@ A reusable Pi package for engineering work with visible Herdr workers, whole-wor
 
 ## Project status
 
-The specification, architectural decisions and 16-ticket breakdown are approved. Ticket 01 supplies the native package, thin Lead entry point, isolated fixture lifecycle and the first macOS arm64 Gondolin/Herdr runtime proof. Later tickets add real Pi workers, providers, Git delivery and recovery.
+The specification, architectural decisions and 16-ticket breakdown are approved. Ticket 01 supplies the native package, thin Lead entry point, isolated fixture lifecycle and the first macOS arm64 Gondolin/Herdr runtime proof. Ticket 02 adds the first real Pi worker path with host-mediated ChatGPT subscription authentication; its fake-provider, cancellation, hostile-reflection and live subscription proofs pass on macOS arm64.
 
 ## Start here
 
@@ -12,6 +12,7 @@ The specification, architectural decisions and 16-ticket breakdown are approved.
 - [Approved specification](.scratch/pi-lead/spec.md)
 - [Ticket graph and index](.scratch/pi-lead/ticket-proposal.md)
 - [First ticket: isolated fixture](.scratch/pi-lead/issues/01-isolated-fixture.md)
+- [Second ticket: ChatGPT worker](.scratch/pi-lead/issues/02-chatgpt-worker.md)
 - [Domain glossary](CONTEXT.md)
 - [Decisions and research index](docs/planning/decisions.md)
 - [Local tracker conventions](docs/agents/issue-tracker.md)
@@ -40,7 +41,36 @@ npm run fixture
 
 `npm run fixture` is the direct integration harness and must itself run inside Herdr. It does not use a model or provider account.
 
-Current runtime evidence covers macOS arm64 only. Ubuntu 24.04 and Linux arm64/x86_64 remain unrun, as do a real guest Pi worker and ChatGPT authentication. A missing/incompatible native Herdr pane identity is a feasibility blocker; the implementation does not fall back to host execution or weaken isolation.
+## Run the ChatGPT worker proofs
+
+The extension admits a ChatGPT worker only for an explicit idle-session request:
+
+```text
+Lead: ask worker <question>
+/lead-read <question>
+Lead: ask worker --inputs CONTEXT.md,docs/adr/0001-isolate-first-real-worker.md -- <question>
+/lead-read --inputs CONTEXT.md,docs/adr/0001-isolate-first-real-worker.md -- <question>
+```
+
+Ordinary chat, steering, follow-ups and extension-originated messages cannot create workers. Both admission forms use the same two-worker concurrency limit as `/lead-fixture`.
+
+`--input`/`--inputs` explicitly selects one to three regular UTF-8 project files. Selection rejects absolute paths, traversal and symlinks, and caps the combined input at 12 KiB. The trusted Lead embeds those inputs in the bounded assignment; the guest still receives no project mount.
+
+The worker runs the pinned native Pi JSON lifecycle in a Gondolin PTY inside the named Herdr tab and streams its native events there without taking Lead focus. The guest sees only synthetic provider placeholders. A trusted host hook refreshes and injects the ChatGPT OAuth bearer and account identity for the exact HTTPS `POST https://chatgpt.com/backend-api/codex/responses` request, rejects redirects, compressed responses and credential-bearing response headers or bodies, and never mounts the host filesystem. The streaming body guard detects credentials split across chunks before those bytes reach the guest. Cache warming and provider fallback are disabled. Success requires correlated native `agent_start`, authoritative assistant `message_end` and `agent_end` events; an idle or settled screen is not completion.
+
+Run the credential-free proofs inside Herdr:
+
+```bash
+npm run chatgpt-fixture
+npm run chatgpt-cancel-fixture
+npm run chatgpt-reflection-fixture
+```
+
+The first proves a complete native Pi SSE turn against an in-memory fake upstream, including host-only credential injection and guest-storage scanning. The second proves cancellation before the provider call and zero upstream requests. The third makes the allowed upstream reflect the injected bearer across response chunks and proves that the host blocks it before it reaches Pi, guest storage remains clean and host artifacts remain redacted.
+
+`npm run chatgpt-live` performs the minimal real subscription-backed proof. Do not run it until the operator has checked the current Codex usage dashboard and confirmed that no purchased or workspace credits can be consumed. OAuth readiness proves authentication only; it does not prove that usage cannot spill from included plan limits into credits. Quota exhaustion, refresh failure and model unavailability stop the worker with no API-key or paid-provider fallback.
+
+Current runtime evidence covers macOS arm64 only. Ubuntu 24.04 and Linux arm64/x86_64 remain unrun. A missing/incompatible native Herdr pane identity is a feasibility blocker; the implementation does not fall back to host execution or weaken isolation.
 
 ## Planning assets
 
