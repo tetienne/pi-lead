@@ -4,7 +4,7 @@
 
 **Blocked by:** [02: Complete a ChatGPT Pro read-only worker task](02-chatgpt-worker.md)
 
-**Status:** ready-for-agent
+**Status:** IN PROGRESS
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -45,3 +45,9 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Pi Contracts](../../../docs/research/pi-contracts.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+Implemented deterministic Jev intent routing, OpenRouter's native TypeSafe SDK transport, bounded retry/deadline handling, prompt limits, response/state/cost validation, conservative reservations, and Lead intake/explicit workflow admission. `npm test` passed 101 tests and `npm run typecheck` passed on 2026-09-21. Independent Standards review found no issues; Spec review drove fail-closed accounting and intake corrections.
+
+The ticket remains in progress for the authorized live-evaluation gate: create and verify a dedicated OpenRouter key capped at $1 per aligned reset period, then run representative paid routing checks and provider accounting/restart reconciliation. No credential was requested, stored, or used, and no live Jev call was made.
