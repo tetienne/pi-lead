@@ -268,7 +268,10 @@ async function ensureGuestToolchain(vm: VM, environment: Record<string, string>)
   const installed = ready
     ? await vm.exec(["/usr/bin/mise", "--version"], { env: environment })
     : undefined;
-  if (!hasPinnedMise(installed)) {
+  const pinnedPackage = ready
+    ? await vm.exec(["/sbin/apk", "info", "-e", GUEST_MISE_PACKAGE], { env: environment })
+    : undefined;
+  if (!hasPinnedMise(installed) || !pinnedPackage?.ok) {
     await runChecked(
       vm,
       ["/sbin/apk", "add", "--no-cache", GUEST_GIT_PACKAGE, GUEST_MISE_PACKAGE],
@@ -279,7 +282,10 @@ async function ensureGuestToolchain(vm: VM, environment: Record<string, string>)
     );
   }
   const verified = await vm.exec(["/usr/bin/mise", "--version"], { env: environment });
-  if (!hasPinnedMise(verified)) {
+  const verifiedPackage = await vm.exec(["/sbin/apk", "info", "-e", GUEST_MISE_PACKAGE], {
+    env: environment,
+  });
+  if (!hasPinnedMise(verified) || !verifiedPackage.ok) {
     throw new Error(`Pinned guest mise ${GUEST_MISE_VERSION} is unavailable`);
   }
 }
