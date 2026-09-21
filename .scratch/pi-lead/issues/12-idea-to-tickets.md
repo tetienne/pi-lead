@@ -4,7 +4,7 @@
 
 **Blocked by:** [02: Complete a ChatGPT Pro read-only worker task](02-chatgpt-worker.md)
 
-**Status:** ready-for-agent
+**Status:** IN PROGRESS
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -45,3 +45,9 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Sandbox Boundary](../../../docs/research/sandbox-boundary.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+`lead-plan` and natural IDEATE routing now dispatch the installed Ask Matt flow through Pi skill expansion. The bounded prompt requires grill-with-docs, explicitly gated primary-source research, to-spec, human seam approval, to-tickets, human ticket-granularity approval, and separate local tracker publication. Wayfinder is explicitly unavailable. The former local pseudo-skill state machine was removed.
+
+Automated validation passed through the full suite before the final prompt-boundary correction. The remaining completion gate is a real sample planning request: it must be carried through the actual skills and both human approvals, producing a cited research note when needed, durable context/ADR/spec files and separately published dependent ticket files. No planning request or approval is fabricated automatically.

@@ -185,7 +185,7 @@ test("the planning command dispatches the installed Matt skill flow without star
     cwd: "/consumer",
     ui: { notify(message: string, level: string) { notices.push({ message, level }); } },
   });
-  assert.match(sent[0]?.content ?? "", /^\/ask-matt /);
+  assert.match(sent[0]?.content ?? "", /^\/skill:ask-matt /);
   assert.deepEqual(sent[0]?.options, { expandPromptTemplates: true });
   assert.deepEqual(notices, [{ message: "PI Lead plan: sent to Ask Matt; no build was started", level: "info" }]);
 });
