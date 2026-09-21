@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { MAX_ACTIVE_WORKERS } from "./policy.ts";
 import { createJevIntentRouter, JEV_WORKFLOWS, type JevRoutingOutcome, type JevWorkflow } from "./jev-intent-routing.ts";
 import { createOpenRouterJevTransport } from "./openrouter-jev-transport.ts";
+import { planningSkillPrompt } from "./planning-intake.ts";
 import { prepareChatGptQuestion } from "./chatgpt-input.ts";
 import { parseProposedChangeInput } from "./proposed-change-input.ts";
 import { pinReviewSpecification, pinReviewStandards } from "./review-context.ts";
@@ -495,6 +496,18 @@ export function createLeadExtension(dependencies: LeadDependencies) {
           );
         } finally {
           releaseWorkerSlots(controller);
+        }
+      },
+    });
+
+    pi.registerCommand("lead-plan", {
+      description: "Plan an engineering idea through the installed Matt workflow",
+      handler: async (args, context) => {
+        try {
+          pi.sendUserMessage(planningSkillPrompt(args), { expandPromptTemplates: true });
+          context.ui.notify("PI Lead plan: sent to Ask Matt; no build was started", "info");
+        } catch (error) {
+          context.ui.notify(`PI Lead plan: ${error instanceof Error ? error.message : String(error)}`, "error");
         }
       },
     });

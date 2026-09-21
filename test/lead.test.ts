@@ -21,8 +21,7 @@ test("the Lead fixture command delegates once and records its correlated summary
       return () => undefined;
     },
     registerCommand(name: string, definition: typeof command) {
-      assert.equal(name, "lead-fixture");
-      command = definition;
+      if (name === "lead-fixture") command = definition;
     },
     appendEntry(type: string, data: unknown) {
       entries.push({ type, data });
@@ -88,8 +87,8 @@ test("the Lead admits at most two fixture workers concurrently", async () => {
     on() {
       return () => undefined;
     },
-    registerCommand(_name: string, definition: { handler: typeof handler }) {
-      handler = definition.handler;
+    registerCommand(name: string, definition: { handler: typeof handler }) {
+      if (name === "lead-fixture") handler = definition.handler;
     },
     appendEntry(_type: string, data: unknown) {
       entries.push(data);
@@ -166,4 +165,27 @@ test("natural-language routing keeps chat in Lead and makes ambiguous intake vis
     message: "PI Lead intent: clarification required; no worker was started",
     level: "info",
   }]);
+});
+
+test("the planning command dispatches the installed Matt skill flow without starting a build", async () => {
+  let planCommand: { handler: (args: string, context: unknown) => Promise<void> } | undefined;
+  const sent: Array<{ content: string; options: unknown }> = [];
+  const notices: Array<{ message: string; level: string }> = [];
+  const pi = {
+    on() { return () => undefined; },
+    registerCommand(name: string, definition: typeof planCommand) {
+      if (name === "lead-plan") planCommand = definition;
+    },
+    appendEntry() {},
+    sendUserMessage(content: string, options: unknown) { sent.push({ content, options }); },
+  } as unknown as ExtensionAPI;
+  createLeadExtension({ async runFixture() { throw new Error("not used"); } })(pi);
+
+  await planCommand?.handler("Plan safer release notes", {
+    cwd: "/consumer",
+    ui: { notify(message: string, level: string) { notices.push({ message, level }); } },
+  });
+  assert.match(sent[0]?.content ?? "", /^\/ask-matt /);
+  assert.deepEqual(sent[0]?.options, { expandPromptTemplates: true });
+  assert.deepEqual(notices, [{ message: "PI Lead plan: sent to Ask Matt; no build was started", level: "info" }]);
 });
