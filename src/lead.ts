@@ -86,7 +86,7 @@ function configuredIntentRouter(): LeadDependencies["routeIntent"] | undefined {
   }
   const router = createJevIntentRouter({
     transport: createOpenRouterJevTransport({ apiKey }),
-    getState: () => ({ version: 1, availability: { CHAT: true } }),
+    getState: () => ({ version: 1, availability: { CHAT: true, IDEATE: true } }),
     budget: { dailyCapUsd: 1, reservationUsd: 0.01, resetHourUtc },
   });
   return router.route;
@@ -132,6 +132,10 @@ export function createLeadExtension(dependencies: LeadDependencies) {
     const releaseWorkerSlots = (controller: AbortController) => {
       activeRuns.delete(controller);
       startQueuedRuns();
+    };
+    const startPlanning = (idea: string, context: { ui: { notify(message: string, level: "info" | "error"): void } }) => {
+      pi.sendUserMessage(planningSkillPrompt(idea), { expandPromptTemplates: true });
+      context.ui.notify("PI Lead plan: sent to Ask Matt; no build was started", "info");
     };
 
     const runChatGpt = async (
@@ -255,6 +259,11 @@ export function createLeadExtension(dependencies: LeadDependencies) {
         }
         if (outcome.status === "ROUTED" && outcome.workflow === "CHAT") {
           return { action: "continue" };
+        }
+        if (outcome.status === "ROUTED" && outcome.workflow === "IDEATE") {
+          try { startPlanning(event.text, context); }
+          catch (error) { context.ui.notify(`PI Lead plan: ${error instanceof Error ? error.message : String(error)}`, "error"); }
+          return { action: "handled" };
         }
         if (outcome.status === "SERVICE_UNAVAILABLE" && !explicitWorkflow) {
           return { action: "continue" };
@@ -504,8 +513,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       description: "Plan an engineering idea through the installed Matt workflow",
       handler: async (args, context) => {
         try {
-          pi.sendUserMessage(planningSkillPrompt(args), { expandPromptTemplates: true });
-          context.ui.notify("PI Lead plan: sent to Ask Matt; no build was started", "info");
+          startPlanning(args, context);
         } catch (error) {
           context.ui.notify(`PI Lead plan: ${error instanceof Error ? error.message : String(error)}`, "error");
         }
