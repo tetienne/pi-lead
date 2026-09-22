@@ -25,6 +25,8 @@ you ─► Lead (Pi, your tab)
                                  worker Pi: tools inside a Gondolin VM, /skill:implement …
                                  Jev guards egress; worker calls finish
                                  branch fetched back, Jev checks the verdict, tab closed
+                                 (delegate returns at once; the result comes back as a message)
+        worker tool         → list workers, relay an answer to one waiting on you, stop one
 ```
 
 - The **Lead** is ordinary Pi plus a short workflow section in its system
@@ -53,7 +55,8 @@ Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
 ## Requirements
 
 - Pi 0.86.x, Node ≥ 23.6 (Gondolin), git, QEMU (`brew install qemu`).
-- Herdr: start the Lead's Pi inside a Herdr pane.
+- Herdr: start the Lead's Pi inside a Herdr pane; `herdr integration install pi`
+  for worker status badges and reliable Lead → worker messages.
 - A Gondolin image with git and mise, built once (Docker or Podman):
 
   ```bash

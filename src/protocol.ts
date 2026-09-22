@@ -25,6 +25,8 @@ export type WorkerTask = {
 export type WorkerResult = {
   version: 1;
   id: string;
+  /** 1 for the first `finish`, +1 each time the worker finishes again after a message. */
+  seq: number;
   status: WorkerVerdict;
   summary: string;
   /** Review findings, when the work was a review. */
@@ -42,6 +44,8 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
   if (
     result?.version !== 1 ||
     result.id !== id ||
+    !Number.isInteger(result.seq) ||
+    (result.seq as number) < 1 ||
     !WORKER_STATUSES.includes(result.status as WorkerVerdict) ||
     typeof result.summary !== "string" ||
     (result.findings !== undefined && typeof result.findings !== "string")
@@ -87,8 +91,10 @@ opens your tab.
   report it instead of working around it.
 - Commit your work on the current branch. Do not push, merge or rebase other
   branches.
-- When you are done, or cannot continue, call \`finish\` exactly once with an
-  honest status and a short summary (what changed, how it was verified, what
-  is left). Use \`needs_human\` when a decision, credential or manual step is
-  required.
+- When you are done, or cannot continue, call \`finish\` with an honest status
+  and a short summary (what changed, how it was verified, what is left). Use
+  \`needs_human\` when a decision, credential or manual step is required, and
+  say exactly what you need.
+- Messages starting with "[PI Lead]" come from the Lead (often relaying the
+  user's answer). Continue the task with them and call \`finish\` again.
 `;

@@ -5,8 +5,10 @@ const execFileAsync = promisify(execFile);
 
 /** Host-side Herdr presentation. Workers never receive the Herdr socket. */
 export type Herdr = {
-  /** Open a named tab without stealing focus and run `argv` in its pane. */
-  openWorkerTab(input: { label: string; cwd: string; argv: string[] }): Promise<{ tabId: string; paneId: string }>;
+  /** Open a named tab without stealing focus and type `command` into its shell. */
+  openWorkerTab(input: { label: string; cwd: string; command: string }): Promise<{ tabId: string; paneId: string }>;
+  /** Submit text to the Pi running in a pane, as if typed (bracketed paste, then Enter). */
+  sendToAgent(paneId: string, text: string): Promise<void>;
   closeTab(tabId: string): Promise<void>;
 };
 
@@ -35,13 +37,22 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     return stdout.trim() ? (JSON.parse(stdout) as unknown) : undefined;
   };
   return {
-    async openWorkerTab({ label, cwd, argv }) {
+    async openWorkerTab({ label, cwd, command }) {
       const created = await herdr(["tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus"]);
       const tabId = findString(created, "tab_id");
       const paneId = findString(created, "pane_id");
       if (!tabId || !paneId) throw new Error("herdr did not return tab_id and pane_id");
-      await herdr(["pane", "run", paneId, ...argv]);
+      await herdr(["pane", "run", paneId, command]);
       return { tabId, paneId };
+    },
+    async sendToAgent(paneId, text) {
+      try {
+        // Targets accept the pane id hosting a detected agent (HERDR_AGENT=pi, Herdr's Pi integration).
+        await herdr(["agent", "prompt", paneId, text]);
+      } catch {
+        // Not detected as an agent: type the text into Pi's editor as one line, then Enter.
+        await herdr(["pane", "run", paneId, text.replace(/\s*\n\s*/g, " ")]);
+      }
     },
     async closeTab(tabId) {
       await herdr(["tab", "close", tabId]);

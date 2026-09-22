@@ -1,8 +1,9 @@
 import { rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import type { VM } from "@earendil-works/gondolin";
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { createAskJev, createJudge, createLedger } from "../jev.ts";
@@ -22,7 +23,7 @@ export default function worker(pi: ExtensionAPI) {
   let task: WorkerTask | undefined;
   let latestContext: ExtensionContext | undefined;
   let running: Promise<{ vm: VM; shellPath: string; env: Record<string, string> }> | undefined;
-  let finished = false;
+  let seq = 0;
 
   const loadTask = async () => {
     if (task) return task;
@@ -34,7 +35,7 @@ export default function worker(pi: ExtensionAPI) {
 
   const startVm = async (ctx?: ExtensionContext) => {
     const current = await loadTask();
-    const judge = createJudge({ ask: createAskJev(current.jev), config: current.jev, ledger: createLedger() });
+    const judge = createJudge({ ask: createAskJev(current.jev), config: current.jev, ledger: createLedger(join(getAgentDir(), "pi-lead", "jev-usage.json")) });
     const allow = createEgressPolicy({
       allowedHosts: current.sandbox.allowedHosts,
       task: current.task,
@@ -73,7 +74,7 @@ export default function worker(pi: ExtensionAPI) {
   pi.registerTool({
     name: "finish",
     label: "Finish",
-    description: "Report the outcome of this delegated task to the PI Lead. Call exactly once, at the end.",
+    description: "Report the outcome of this delegated task to the PI Lead. Call it when done or stuck, and again after the Lead sends you more input.",
     promptSnippet: "finish: report the outcome of this delegated task to the PI Lead",
     parameters: Type.Object({
       status: StringEnum(WORKER_STATUSES, { description: "Honest outcome of the task" }),
@@ -82,7 +83,6 @@ export default function worker(pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = await loadTask();
-      if (finished) throw new Error("finish was already called");
       const { vm } = await ensureVm(ctx);
       // Commit anything left in the tree, inside the guest, so the host only
       // ever fetches from the clone.
@@ -93,6 +93,7 @@ export default function worker(pi: ExtensionAPI) {
       const result: WorkerResult = {
         version: 1,
         id: current.id,
+        seq: ++seq,
         status: params.status,
         summary: params.summary,
         ...(params.findings ? { findings: params.findings } : {}),
@@ -106,7 +107,6 @@ export default function worker(pi: ExtensionAPI) {
       const temporary = `${current.resultPath}.tmp`;
       await writeFile(temporary, JSON.stringify(result));
       await rename(temporary, current.resultPath);
-      finished = true;
       if (params.status === "done") setTimeout(() => ctx.shutdown(), 200);
       return {
         content: [

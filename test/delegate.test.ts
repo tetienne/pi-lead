@@ -2,10 +2,17 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 
 import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
-import { createDelegator, isSafeBranchName, shellQuote, slugify, type DelegateIO } from "../src/delegate.ts";
+import {
+  createDelegator,
+  isSafeBranchName,
+  shellQuote,
+  slugify,
+  type DelegateIO,
+  type DelegateOutcome,
+} from "../src/delegate.ts";
 import type { Herdr } from "../src/herdr.ts";
 import type { Judge, WorkerVerdict } from "../src/jev.ts";
 import type { WorkerTask } from "../src/protocol.ts";
@@ -24,6 +31,7 @@ const noJudge: Judge = {
 };
 
 type Log = string[];
+type Reply = { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number } | "exit" | "silent";
 
 function fakeWorkspace(log: Log): Workspace {
   return {
@@ -33,28 +41,47 @@ function fakeWorkspace(log: Log): Workspace {
       return { base: "abc123" };
     },
     collect: async ({ branch }) => ({ commits: `def456 work on ${branch}`, diffStat: " src/a.ts | 3 ++-" }),
-    remove: async (path) => void log.push(`remove ${path.endsWith("repo") ? "clone" : path}`),
+    remove: async () => void log.push("remove clone"),
   };
 }
 
-/** Simulates the worker: reads the task file the script points at and writes a result. */
-function fakeHerdr(log: Log, outcome: { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number }): Herdr {
+const scriptOf = (command: string) => /^\/bin\/sh '([^']+)'$/.exec(command)![1]!;
+
+/**
+ * A fake Herdr whose "worker" reads the task file from the launch script and
+ * replies: first with `replies[0]`, then with the next reply after each message.
+ */
+function fakeHerdr(log: Log, replies: Reply[], seen: { task?: WorkerTask; script?: string } = {}): Herdr {
   let tabs = 0;
+  const workers = new Map<string, { task: WorkerTask; exitPath: string; seq: number; turn: number }>();
+  const reply = (paneId: string) => {
+    const worker = workers.get(paneId)!;
+    const next = replies[Math.min(worker.turn++, replies.length - 1)]!;
+    if (next === "silent") return;
+    if (next === "exit") return void setTimeout(() => void writeFile(worker.exitPath, "1\n"), 5);
+    setTimeout(() => {
+      void writeFile(
+        worker.task.resultPath,
+        JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}) }),
+      );
+    }, next.delayMs ?? 5);
+  };
   return {
-    async openWorkerTab({ label, argv }) {
+    async openWorkerTab({ label, command }) {
       const tabId = `tab-${++tabs}`;
+      const paneId = `pane-${tabs}`;
       log.push(`open ${label}`);
-      const script = await readFile(argv[1]!, "utf8");
-      const taskPath = /'--pi-lead-task' '([^']+)'/.exec(script)?.[1];
-      assert.ok(taskPath, "script passes the task file");
-      const task = JSON.parse(await readFile(taskPath, "utf8")) as WorkerTask;
-      setTimeout(() => {
-        void writeFile(
-          task.resultPath,
-          JSON.stringify({ version: 1, id: task.id, status: outcome.status, summary: outcome.summary ?? "did it", ...(outcome.findings ? { findings: outcome.findings } : {}) }),
-        );
-      }, outcome.delayMs ?? 5);
-      return { tabId, paneId: `pane-${tabs}` };
+      const script = await readFile(scriptOf(command), "utf8");
+      seen.script = script;
+      const task = JSON.parse(await readFile(/'--pi-lead-task' '([^']+)'/.exec(script)![1]!, "utf8")) as WorkerTask;
+      seen.task = task;
+      workers.set(paneId, { task, exitPath: /echo \$\? > '([^']+)'/.exec(script)![1]!, seq: 0, turn: 0 });
+      reply(paneId);
+      return { tabId, paneId };
+    },
+    async sendToAgent(paneId, text) {
+      log.push(`send ${paneId}: ${text}`);
+      reply(paneId);
     },
     async closeTab(tabId) {
       log.push(`close ${tabId}`);
@@ -62,34 +89,52 @@ function fakeHerdr(log: Log, outcome: { status: WorkerVerdict; summary?: string;
   };
 }
 
-const io = (progress: string[] = []): DelegateIO => ({
+const io: DelegateIO = {
   cwd: "/repo",
   lead: { provider: "anthropic", id: "claude-sonnet-5" },
   available: [{ provider: "anthropic", id: "claude-sonnet-5" }],
   projectTrusted: true,
-  progress: (text) => void progress.push(text),
-});
+};
 
-async function setup(options: {
+async function setup(t: TestContext, options: {
   judge?: Partial<Judge>;
-  outcome?: Parameters<typeof fakeHerdr>[1];
+  replies?: Reply[];
   herdr?: Herdr | false;
   maxWorkers?: number;
   toolchains?: Toolchains;
+  seen?: { task?: WorkerTask; script?: string };
 } = {}) {
   const log: Log = [];
+  const outcomes: DelegateOutcome[] = [];
+  const waiters: Array<(outcome: DelegateOutcome) => void> = [];
+  const progress: string[] = [];
   const delegator = createDelegator({
     config: mergeConfig(DEFAULT_CONFIG, { maxWorkers: options.maxWorkers ?? 2 }),
     judge: { ...noJudge, ...options.judge },
-    herdr: options.herdr === false ? undefined : options.herdr ?? fakeHerdr(log, options.outcome ?? { status: "done" }),
+    herdr: options.herdr === false ? undefined : options.herdr ?? fakeHerdr(log, options.replies ?? [{ status: "done" }], options.seen),
     workspace: fakeWorkspace(log),
     ...(options.toolchains ? { toolchains: options.toolchains } : {}),
     workerCommand: ({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt],
     stateRoot: await mkdtemp(join(tmpdir(), "pi-lead-state-")),
+    onOutcome: (outcome) => {
+      outcomes.push(outcome);
+      waiters.shift()?.(outcome);
+    },
+    onProgress: (text) => void progress.push(text),
     pollMs: 2,
     heartbeatMs: 20,
   });
-  return { delegator, log };
+  // Workers left waiting on a question are watched until stopped.
+  t.after(() => delegator.shutdown());
+  const nextOutcome = () =>
+    new Promise<DelegateOutcome>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("no outcome")), 3_000);
+      waiters.push((outcome) => {
+        clearTimeout(timer);
+        resolve(outcome);
+      });
+    });
+  return { delegator, log, outcomes, nextOutcome, progress };
 }
 
 test("helpers: slug, branch validation and shell quoting", () => {
@@ -100,126 +145,138 @@ test("helpers: slug, branch validation and shell quoting", () => {
   assert.equal(shellQuote("it's"), `'it'"'"'s'`);
 });
 
-test("a finished worker returns its summary, branch and diff, then cleans up", async () => {
-  const { delegator, log } = await setup();
-  const outcome = await delegator.run({ kind: "implement", title: "Add CSV export", task: "Add CSV export. AC: test passes." }, io());
+test("delegate returns at once; the result arrives later, then the worker is cleaned up", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", delayMs: 30 }] });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Add CSV export", task: "Add CSV export. AC: test passes." }, io);
+  assert.equal(started.status, "started");
+  assert.match(started.text, /result will arrive as a message/);
+  assert.equal(delegator.list()[0]!.state === "done", false, "not finished when start returns");
+
+  const outcome = await pending;
   assert.equal(outcome.status, "done");
   assert.match(outcome.text, /Branch: pi-lead\/add-csv-export-/);
   assert.match(outcome.text, /src\/a\.ts/);
   assert.match(outcome.text, /anthropic\/claude-sonnet-5 · thinking medium · tier standard \(default tier; Jev unavailable\)/);
   assert.deepEqual(log.filter((line) => !line.startsWith("create")), ["open lead: Add CSV export", "close tab-1", "remove clone"]);
-  assert.equal(delegator.activeCount(), 0);
+  assert.equal(delegator.list()[0]!.state, "done");
 });
 
-test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async () => {
-  const { delegator, log } = await setup({
-    judge: {
-      available: true,
-      modelTier: async () => ({ tier: "deep", difficulty: 3.4 }),
-      verdict: async () => "partial",
-    },
+test("a worker waiting on a question gets the relayed answer and reports again", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    replies: [{ status: "needs_human", summary: "Which date format?" }, { status: "done", summary: "Used ISO 8601" }],
   });
-  const outcome = await delegator.run({ kind: "implement", title: "Hard", task: "t" }, io());
+  const first = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Dates", task: "t" }, io);
+  assert.ok(started.status === "started");
+  const question = await first;
+  assert.equal(question.status, "needs_human");
+  assert.match(question.text, /relay what it needs with `worker`/);
+  assert.equal(delegator.list()[0]!.state, "waiting");
+  assert.ok(!log.some((line) => line.startsWith("close")), "tab stays open");
+
+  const second = nextOutcome();
+  assert.match(await delegator.message(started.worker.id.slice(0, 8), "ISO 8601, please"), /Sent to "Dates"/);
+  assert.ok(log.includes("send pane-1: [PI Lead] ISO 8601, please"));
+  const answer = await second;
+  assert.equal(answer.status, "done");
+  assert.match(answer.text, /Used ISO 8601/);
+  assert.ok(log.includes("close tab-1"));
+});
+
+test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    judge: { available: true, modelTier: async () => ({ tier: "deep", difficulty: 3.4 }), verdict: async () => "partial" },
+  });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Hard", task: "t" }, io);
+  assert.match(started.text, /thinking high, tier deep, Jev difficulty 3\.4\/4/);
+  const outcome = await pending;
   assert.equal(outcome.status, "partial");
-  assert.match(outcome.text, /thinking high · tier deep \(Jev difficulty 3\.4\/4\)/);
   assert.match(outcome.text, /worker said done, Jev said partial/);
   assert.ok(!log.some((line) => line.startsWith("close")));
 });
 
-test("a ticket Jev judges not ready is not delegated unless the user confirmed it", async () => {
-  const judge = { readiness: async () => ({ ready: false, missing: ["acceptance"] }) };
-  const { delegator, log } = await setup({ judge });
-  const refused = await delegator.run({ kind: "implement", title: "Vague", task: "make it nicer" }, io());
+test("a ticket Jev judges not ready is not delegated unless the user confirmed it", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, { judge: { readiness: async () => ({ ready: false, missing: ["acceptance"] }) } });
+  const refused = await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer" }, io);
   assert.equal(refused.status, "not_ready");
   assert.match(refused.text, /no verifiable acceptance criteria/);
   assert.equal(log.length, 0);
-  const confirmed = await delegator.run({ kind: "implement", title: "Vague", task: "make it nicer", confirmedReady: true }, io());
-  assert.equal(confirmed.status, "done");
+  const pending = nextOutcome();
+  assert.equal((await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer", confirmedReady: true }, io)).status, "started");
+  assert.equal((await pending).status, "done");
 });
 
-test("reviews start from the reviewed branch and report Jev's severity", async () => {
-  const { delegator, log } = await setup({
-    outcome: { status: "done", findings: "SQL injection in search" },
+test("reviews start from the reviewed branch and report Jev's severity", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    replies: [{ status: "done", findings: "SQL injection in search" }],
     judge: { reviewSeverity: async () => ({ severity: 3.8, action: "escalate" }) },
   });
-  const outcome = await delegator.run({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io());
+  const pending = nextOutcome();
+  await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
+  const outcome = await pending;
   assert.ok(log.some((line) => line.endsWith("from feature/login")));
   assert.match(outcome.text, /SQL injection/);
   assert.match(outcome.text, /serious issues: show them to the user/);
 });
 
-test("overlapping code tickets run one after the other", async () => {
-  const { delegator, log } = await setup({ outcome: { status: "done", delayMs: 30 }, judge: { overlap: async () => true } });
-  const progress: string[] = [];
-  const [first, second] = await Promise.all([
-    delegator.run({ kind: "implement", title: "One", task: "a" }, io()),
-    (async () => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      return delegator.run({ kind: "implement", title: "Two", task: "b" }, io(progress));
-    })(),
-  ]);
-  assert.equal(first.status, "done");
-  assert.equal(second.status, "done");
+test("overlapping code tickets run one after the other", async (t) => {
+  const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", delayMs: 30 }], judge: { overlap: async () => true } });
+  const both = [nextOutcome(), nextOutcome()];
+  await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await delegator.start({ kind: "implement", title: "Two", task: "b" }, io);
+  await Promise.all(both);
   assert.ok(log.indexOf("close tab-1") < log.indexOf("open lead: Two"));
-  assert.ok(progress.some((line) => line.startsWith("waiting for overlapping worker")));
+  assert.ok(progress.some((line) => line.includes('waits for overlapping "One"')));
 });
 
-test("independent tickets run in parallel", async () => {
-  const { delegator, log } = await setup({ outcome: { status: "done", delayMs: 30 }, judge: { overlap: async () => false } });
-  await Promise.all([
-    delegator.run({ kind: "implement", title: "One", task: "a" }, io()),
-    delegator.run({ kind: "implement", title: "Two", task: "b" }, io()),
-  ]);
+test("independent tickets run in parallel", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", delayMs: 30 }], judge: { overlap: async () => false } });
+  const both = [nextOutcome(), nextOutcome()];
+  await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
+  await delegator.start({ kind: "implement", title: "Two", task: "b" }, io);
+  await Promise.all(both);
   assert.ok(log.indexOf("open lead: Two") < log.indexOf("close tab-1"));
 });
 
-test("without Herdr or with a bad branch name nothing starts", async () => {
-  const { delegator } = await setup({ herdr: false });
-  assert.match((await delegator.run({ kind: "debug", title: "x", task: "y" }, io())).text, /need Herdr/);
-  const { delegator: other, log } = await setup();
-  assert.equal((await other.run({ kind: "review", title: "x", task: "y", startFrom: "--upload-pack=evil" }, io())).status, "failed");
+test("without Herdr or with a bad branch name nothing starts", async (t) => {
+  const { delegator } = await setup(t, { herdr: false });
+  assert.match((await delegator.start({ kind: "debug", title: "x", task: "y" }, io)).text, /need Herdr/);
+  const { delegator: other, log } = await setup(t);
+  assert.equal((await other.start({ kind: "review", title: "x", task: "y", startFrom: "--upload-pack=evil" }, io)).status, "failed");
   assert.equal(log.length, 0);
 });
 
-test("cancelling the tool stops waiting and cleans up", async () => {
-  const { delegator, log } = await setup({ outcome: { status: "done", delayMs: 10_000 } });
-  const controller = new AbortController();
-  setTimeout(() => controller.abort(new Error("user pressed escape")), 20);
-  const outcome = await delegator.run({ kind: "research", title: "Slow", task: "q" }, { ...io(), signal: controller.signal });
-  assert.equal(outcome.status, "cancelled");
+test("stopping a worker closes its tab and reports it", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, { replies: ["silent"] });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "research", title: "Slow", task: "q" }, io);
+  assert.ok(started.status === "started");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.match(await delegator.stop("slow"), /Stopping "Slow"/);
+  const outcome = await pending;
+  assert.equal(outcome.status, "stopped");
   assert.ok(log.includes("close tab-1"));
+  assert.match(await delegator.message("slow", "hello"), /is stopped; it cannot receive messages/);
 });
 
-test("the project's toolchain cache is handed to the worker", async () => {
-  let seen: WorkerTask | undefined;
-  const herdr: Herdr = {
-    async openWorkerTab({ argv }) {
-      const script = await readFile(argv[1]!, "utf8");
-      assert.match(script, /export HERDR_AGENT=pi/);
-      const taskPath = /'--pi-lead-task' '([^']+)'/.exec(script)![1]!;
-      seen = JSON.parse(await readFile(taskPath, "utf8")) as WorkerTask;
-      await writeFile(seen.resultPath, JSON.stringify({ version: 1, id: seen.id, status: "done", summary: "ok" }));
-      return { tabId: "t", paneId: "p" };
-    },
-    closeTab: async () => {},
-  };
-  const { delegator } = await setup({ herdr, toolchains: { prepare: async () => "/cache/project" } });
-  assert.equal((await delegator.run({ kind: "implement", title: "x", task: "y" }, io())).status, "done");
-  assert.equal(seen?.toolchainCache, "/cache/project");
-});
-
-test("a worker whose Pi exits without finish is reported as failed", async () => {
-  const herdr: Herdr = {
-    async openWorkerTab({ argv }) {
-      const script = await readFile(argv[1]!, "utf8");
-      const exitPath = /echo \$\? > '([^']+)'/.exec(script)![1]!;
-      setTimeout(() => void writeFile(exitPath, "1\n"), 5);
-      return { tabId: "t", paneId: "p" };
-    },
-    closeTab: async () => {},
-  };
-  const { delegator } = await setup({ herdr });
-  const outcome = await delegator.run({ kind: "debug", title: "x", task: "y" }, io());
+test("a worker whose Pi exits without finish is reported as failed", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, { replies: ["exit"] });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "x", task: "y" }, io);
+  const outcome = await pending;
   assert.equal(outcome.status, "failed");
   assert.match(outcome.text, /exited \(status 1\) without calling finish/);
+});
+
+test("the launch script and the task carry the toolchain cache and Herdr hint", async (t) => {
+  const seen: { task?: WorkerTask; script?: string } = {};
+  const { delegator, nextOutcome } = await setup(t, { seen, toolchains: { prepare: async () => "/cache/project" } });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
+  await pending;
+  assert.equal(seen.task?.toolchainCache, "/cache/project");
+  assert.match(seen.script!, /export HERDR_AGENT=pi/);
 });

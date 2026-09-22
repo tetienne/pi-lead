@@ -57,8 +57,13 @@ Workers run in Gondolin VMs, in background Herdr tabs, on a model chosen for
 the task. Do not implement code changes yourself; you may write specs, tickets
 and docs.
 
-When \`delegate\` returns, tell the user the outcome in a few lines and follow
-its "Next" section. Never push, merge or delete branches unless the user asks.
+\`delegate\` does not wait: it starts the worker and returns, so keep helping
+the user (questions included) while workers run. Each worker result arrives
+later as a message: tell the user the outcome in a few lines and follow its
+"Next" section. When a worker waits on a question (needs_human, partial,
+blocked), ask the user and relay the answer with \`worker\` (action
+\`message\`); the worker resumes and reports again. Use \`worker\` to list or
+stop workers too. Never push, merge or delete branches unless the user asks.
 
 Skill files:
 ${skills.map((skill) => `- ${skill.name}: \`${skill.path}\``).join("\n")}

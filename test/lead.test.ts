@@ -35,7 +35,7 @@ test("the Lead never intercepts user input: the model answers questions itself",
   lead(pi.api as any);
   assert.equal(pi.handlers.has("input"), false);
   assert.deepEqual(pi.commands, []);
-  assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate"]);
+  assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker"]);
 });
 
 test("the workflow guidance is appended to the system prompt", async () => {
@@ -89,12 +89,12 @@ test("workers get the Lead's skills and, in trusted projects, the repo's skills 
   assert.ok(!untrusted.includes("--prompt-template"));
 });
 
-test("Herdr's Pi integration is found in the user's extensions", async () => {
-  const home = await mkdtemp(join(tmpdir(), "pi-lead-home-"));
+test("Herdr's Pi integration is found where `herdr integration install pi` writes it", async () => {
+  const home = await mkdtemp(join(tmpdir(), "pi-lead-agent-dir-"));
   assert.equal(findHerdrPiExtension(home), undefined);
-  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
-  await writeFile(join(home, ".pi", "agent", "extensions", "herdr-agent-state.ts"), "");
-  assert.equal(findHerdrPiExtension(home), join(home, ".pi", "agent", "extensions", "herdr-agent-state.ts"));
+  await mkdir(join(home, "extensions"), { recursive: true });
+  await writeFile(join(home, "extensions", "herdr-agent-state.ts"), "");
+  assert.equal(findHerdrPiExtension(home), join(home, "extensions", "herdr-agent-state.ts"));
 });
 
 test("worker prompts invoke Matt skills explicitly and results are validated", () => {
@@ -102,7 +102,8 @@ test("worker prompts invoke Matt skills explicitly and results are validated", (
   assert.match(workerPrompt("debug", "T"), /^\/skill:diagnosing-bugs T/);
   assert.match(workerPrompt("review", "T"), /^\/skill:code-review T/);
   assert.match(workerPrompt("prototype", "T"), /^\/skill:prototype T/);
-  assert.equal(parseWorkerResult({ version: 1, id: "a", status: "done", summary: "s" }, "a").status, "done");
-  assert.throws(() => parseWorkerResult({ version: 1, id: "b", status: "done", summary: "s" }, "a"));
-  assert.throws(() => parseWorkerResult({ version: 1, id: "a", status: "merged", summary: "s" }, "a"));
+  assert.equal(parseWorkerResult({ version: 1, id: "a", seq: 1, status: "done", summary: "s" }, "a").status, "done");
+  assert.throws(() => parseWorkerResult({ version: 1, id: "b", seq: 1, status: "done", summary: "s" }, "a"));
+  assert.throws(() => parseWorkerResult({ version: 1, id: "a", status: "done", summary: "s" }, "a"), "seq is required");
+  assert.throws(() => parseWorkerResult({ version: 1, id: "a", seq: 1, status: "merged", summary: "s" }, "a"));
 });

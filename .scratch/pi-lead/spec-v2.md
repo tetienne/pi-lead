@@ -22,8 +22,12 @@ a model Jev picked for the task. Nothing needs a command.
 | asks for a branch review | `delegate` (review) from that branch, worker follows code-review |
 | needs web research | `delegate` (research), network filtered by Jev |
 
-`delegate` returns the worker's summary, local branch, commits, diff stat,
-Jev's verdict and a "Next" section. Nothing is pushed or merged.
+`delegate` returns immediately; each worker result (summary, local branch,
+commits, diff stat, Jev's verdict, "Next") arrives later as a message, so the
+conversation goes on while workers run. A worker that stops on a question
+(needs_human, partial, blocked) keeps its tab; the Lead relays the user's
+answer with `worker` (message) and the worker reports again. `worker` also
+lists and stops workers. Nothing is pushed or merged.
 
 ## Jev judgments
 
@@ -74,9 +78,8 @@ dailyBudgetUsd,minConfidence}`, `keepFailedWorkers`.
 
 1. The Debian image and the mise warm-up have not been run end to end yet
    (the development sandbox has no Docker and blocks the Alpine CDN).
-2. The Lead cannot yet send a message to a running worker (for example the
-   answer to a `needs_human` question); Herdr's `agent prompt` is the
-   candidate.
+2. Lead → worker messages use `herdr agent prompt`; not yet exercised
+   against a live Herdr.
 3. The Lead itself still runs Pi's tools on the host (it writes specs and
    tickets); optionally sandbox it with the same tools.
 4. Jev thresholds are defaults, not calibrated; collect real judgments and tune.

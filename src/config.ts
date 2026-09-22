@@ -98,15 +98,16 @@ async function readJson(path: string): Promise<PartialConfig | undefined> {
 }
 
 /**
- * Global `~/.pi/agent/pi-lead.json`, then project `.pi/pi-lead.json`. The
- * project file can widen egress, so it is read only for trusted projects.
+ * Global `<agent dir>/pi-lead.json` (`~/.pi/agent` unless PI_CODING_AGENT_DIR
+ * moves it), then project `.pi/pi-lead.json`. The project file can widen
+ * egress, so it is read only for trusted projects.
  */
 export async function loadConfig(
   cwd: string,
-  options: { projectTrusted: boolean; home?: string },
+  options: { projectTrusted: boolean; agentDir?: string },
 ): Promise<LeadConfig> {
   let config = DEFAULT_CONFIG;
-  const paths = [join(options.home ?? homedir(), ".pi", "agent", "pi-lead.json")];
+  const paths = [join(options.agentDir ?? join(homedir(), ".pi", "agent"), "pi-lead.json")];
   if (options.projectTrusted) paths.push(join(cwd, ".pi", "pi-lead.json"));
   for (const path of paths) {
     const override = await readJson(path);

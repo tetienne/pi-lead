@@ -21,11 +21,20 @@ Decided 2026-09-22.
    exception: project and global extensions would run on the host, outside the
    VM, so workers load only the PI Lead worker extension and Herdr's own Pi
    integration.
-3. **Herdr shows, files decide.** Workers run with `HERDR_AGENT=pi` and, when
-   installed, Herdr's Pi integration, so Herdr shows their working/idle state.
-   Completion is still the worker's `finish` result file; `run.sh` records Pi's
-   exit status so a worker that dies without `finish` is reported at once.
-4. **Toolchains: mise inside the guest, cached per project.** The host's mise
+3. **Herdr shows and carries messages; files decide.** Workers run with
+   `HERDR_AGENT=pi` and, when installed (`herdr integration install pi`),
+   Herdr's Pi integration, so Herdr shows their working/idle state. Results
+   are the worker's `finish` file (numbered, so a worker can finish again);
+   `run.sh` records Pi's exit status so a worker that dies without `finish` is
+   reported at once. The Lead talks to a worker with `herdr agent prompt`
+   (messages prefixed `[PI Lead]`), falling back to `herdr pane run`.
+4. **Delegation does not block the Lead.** `delegate` returns as soon as the
+   worker is queued; each result arrives as a message that wakes the Lead, so
+   the user can keep asking questions while workers run. A worker that stops
+   on a question stays open and watched; the `worker` tool lists, messages or
+   stops workers, and the worker's next `finish` is reported whether the
+   answer came from the Lead or from the user typing in its tab.
+5. **Toolchains: mise inside the guest, cached per project.** The host's mise
    cache holds host binaries (macOS on a Mac) that a Linux guest cannot run.
    The first worker of a project (or of a changed mise configuration) runs
    `mise install` in a warm-up VM that writes to a per-project cache; workers

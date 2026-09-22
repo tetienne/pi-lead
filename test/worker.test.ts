@@ -28,5 +28,6 @@ test("the worker replaces every file/shell tool with a sandboxed one and adds fi
     systemPrompt: `BASE\nCurrent working directory: ${process.cwd()}`,
   });
   assert.match(systemPrompt, /Current working directory: \/workspace \(Gondolin VM; branch pi-lead\/x-1\)/);
-  assert.match(systemPrompt, /call `finish` exactly once/);
+  assert.match(systemPrompt, /call `finish` with an honest status/);
+  assert.match(systemPrompt, /"\[PI Lead\]" come from the Lead/);
 });

@@ -1,14 +1,13 @@
-import { existsSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { loadConfig, type LeadConfig } from "./config.ts";
-import { createDelegator, type DelegateOutcome, type WorkerCommand } from "./delegate.ts";
+import { createDelegator, type Delegator, type WorkerCommand } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
 import { createAskJev, createJudge, createLedger } from "./jev.ts";
@@ -27,18 +26,14 @@ function piInvocation(): string[] {
 }
 
 /**
- * Herdr's own Pi integration (working/idle/blocked badges, session identity).
- * It is trusted host code that only talks to the Herdr socket, which the
- * worker's Pi can use now that Pi runs on the host; the guest never sees it.
+ * Herdr's own Pi integration (working/idle/blocked, session identity), written
+ * by `herdr integration install pi`. It is trusted host code that only talks
+ * to the Herdr socket; now that worker Pi runs on the host it works as is. The
+ * guest never sees the socket.
  */
-export function findHerdrPiExtension(home = homedir()): string | undefined {
-  const dir = join(home, ".pi", "agent", "extensions");
-  try {
-    const entry = readdirSync(dir).find((name) => /herdr/i.test(name));
-    return entry ? join(dir, entry) : undefined;
-  } catch {
-    return undefined;
-  }
+export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefined {
+  const path = join(agentDir, "extensions", "herdr-agent-state.ts");
+  return existsSync(path) ? path : undefined;
 }
 
 /** A worker is a Pi like the Lead: same skills and prompts, but no host-side extensions. */
@@ -81,25 +76,54 @@ export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, c
   ];
 };
 
+const WORKER_ACTIONS = ["list", "message", "stop"] as const;
+
 export default function lead(pi: ExtensionAPI) {
-  let delegator: ReturnType<typeof createDelegator> | undefined;
-  let config: LeadConfig | undefined;
+  let delegator: Delegator | undefined;
+  let ui: ExtensionContext["ui"] | undefined;
+  let lastProgress = "";
+
+  const status = () => {
+    const workers = delegator?.list() ?? [];
+    const running = workers.filter((w) => w.state === "queued" || w.state === "starting" || w.state === "running").length;
+    const waiting = workers.filter((w) => w.state === "waiting").length;
+    ui?.setStatus(
+      "pi-lead",
+      running || waiting
+        ? `workers: ${running} running${waiting ? ` · ${waiting} waiting for you` : ""}${lastProgress ? ` · ${lastProgress}` : ""}`
+        : undefined,
+    );
+  };
 
   const setup = async (ctx: ExtensionContext) => {
-    config = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted() });
-    const judge = createJudge({ ask: createAskJev(config.jev), config: config.jev, ledger: createLedger() });
+    ui = ctx.ui;
+    const agentDir = getAgentDir();
+    const config: LeadConfig = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
+    const judge = createJudge({
+      ask: createAskJev(config.jev),
+      config: config.jev,
+      ledger: createLedger(join(agentDir, "pi-lead", "jev-usage.json")),
+    });
     delegator = createDelegator({
       config,
       judge,
       herdr: createHerdrCli(),
       workspace: gitWorkspace,
       workerCommand,
-      toolchains: createToolchains({
-        root: join(homedir(), ".pi", "agent", "pi-lead", "toolchains"),
-        sandbox: config.sandbox,
-        judge,
-      }),
-      stateRoot: join(homedir(), ".pi", "agent", "pi-lead", "workers"),
+      toolchains: createToolchains({ root: join(agentDir, "pi-lead", "toolchains"), sandbox: config.sandbox, judge }),
+      stateRoot: join(agentDir, "pi-lead", "workers"),
+      // Each result wakes the Lead, which tells the user and follows "Next".
+      onOutcome(outcome) {
+        status();
+        pi.sendMessage(
+          { customType: "pi-lead-worker", content: outcome.text, display: true, details: { status: outcome.status, worker: outcome.worker } },
+          { triggerTurn: true, deliverAs: "followUp" },
+        );
+      },
+      onProgress(text) {
+        lastProgress = text;
+        status();
+      },
     });
     return delegator;
   };
@@ -114,17 +138,22 @@ export default function lead(pi: ExtensionAPI) {
     await setup(ctx);
   });
 
+  pi.on("session_shutdown", async () => {
+    delegator?.shutdown();
+  });
+
   pi.on("before_agent_start", async (event) => ({ systemPrompt: `${event.systemPrompt}\n${leadGuidance(SKILLS_DIR)}` }));
 
   pi.registerTool({
     name: "delegate",
     label: "Delegate",
     description:
-      "Hand one engineering task to a sandboxed worker (Gondolin VM, background Herdr tab, model chosen by Jev) and wait for its result. Runs the execution skills: implement, prototype, diagnosing-bugs (debug), code-review (review), research. Never for questions you can answer yourself.",
-    promptSnippet: "delegate: run implement/prototype/debug/review/research work in a sandboxed background worker",
+      "Start one engineering task in a sandboxed worker (Gondolin VM, background Herdr tab, model chosen by Jev). Returns at once; the result arrives later as a message. Runs the execution skills: implement, prototype, diagnosing-bugs (debug), code-review (review), research. Never for questions you can answer yourself.",
+    promptSnippet: "delegate: start implement/prototype/debug/review/research work in a sandboxed background worker",
     promptGuidelines: [
       "Pass the complete ticket or request in `task`; the worker does not see this conversation.",
       "Only use kind implement for a ready ticket; shape vague ideas with the user first.",
+      "delegate does not wait: keep talking with the user; worker results arrive as messages.",
     ],
     parameters: Type.Object({
       kind: StringEnum(["implement", "prototype", "debug", "review", "research"] as const, { description: "Kind of work" }),
@@ -135,27 +164,50 @@ export default function lead(pi: ExtensionAPI) {
         Type.Boolean({ description: "The user explicitly confirmed the ticket is ready although Jev doubted it" }),
       ),
     }),
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
-      const progress = (text: string) => {
-        onUpdate?.({ content: [{ type: "text", text }], details: undefined });
-        ctx.ui.setStatus("pi-lead", `${current.activeCount()} worker(s) · ${text}`);
-      };
-      let outcome: DelegateOutcome;
-      try {
-        outcome = await current.run(params, {
-          cwd: ctx.cwd,
-          lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-          available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
-          projectTrusted: ctx.isProjectTrusted(),
-          ...(ctx.hasUI ? { confirm: (question: string) => ctx.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) } : {}),
-          ...(signal ? { signal } : {}),
-          progress,
-        });
-      } finally {
-        ctx.ui.setStatus("pi-lead", current.activeCount() ? `${current.activeCount()} worker(s)` : undefined);
+      const started = await current.start(params, {
+        cwd: ctx.cwd,
+        lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+        available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
+        projectTrusted: ctx.isProjectTrusted(),
+        ...(ctx.hasUI ? { confirm: (question: string) => ctx.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) } : {}),
+      });
+      status();
+      return { content: [{ type: "text", text: started.text }], details: started };
+    },
+  });
+
+  pi.registerTool({
+    name: "worker",
+    label: "Worker",
+    description:
+      "List delegated workers, send a message to one (relay the user's answer to a worker waiting on a question, or steer a running one), or stop one.",
+    promptSnippet: "worker: list workers, message one (relay answers), or stop one",
+    parameters: Type.Object({
+      action: StringEnum(WORKER_ACTIONS, { description: "list, message or stop" }),
+      id: Type.Optional(Type.String({ description: "Worker id prefix, title or branch (message and stop)" })),
+      message: Type.Optional(Type.String({ description: "Text for the worker (message)" })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const current = delegator ?? (await setup(ctx));
+      let text: string;
+      if (params.action === "list") {
+        const workers = current.list();
+        text = workers.length
+          ? workers
+              .map((w) => `- [${w.id.slice(0, 8)}] ${w.title} · ${w.kind} · ${w.state}${w.branch ? ` · ${w.branch}` : ""} · ${w.route.model}`)
+              .join("\n")
+          : "No workers.";
+      } else if (!params.id) {
+        text = "Give the worker's id, title or branch.";
+      } else if (params.action === "message") {
+        text = params.message ? await current.message(params.id, params.message) : "Give the message to send.";
+      } else {
+        text = await current.stop(params.id);
       }
-      return { content: [{ type: "text", text: outcome.text }], details: { status: outcome.status, ...outcome.details } };
+      status();
+      return { content: [{ type: "text", text }], details: undefined };
     },
   });
 }
