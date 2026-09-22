@@ -10,10 +10,10 @@
 
 ## Acceptance criteria
 
-- [ ] Restrict destinations and refs; refuse force/protected/arbitrary pushes and preserve unrelated branches.
-- [ ] Missing or ambiguous remotes produce a precise local result and blocked publication step; no silent remote/repository creation.
-- [ ] PR creation, merges, deployment and privileged actions remain gated; approvals bind to the intended operation and relevant state.
-- [ ] Record publication intent and observed outcome; report failed/uncertain pushes honestly and reconcile before retrying.
+- [x] Restrict destinations and refs; refuse force/protected/arbitrary pushes and preserve unrelated branches.
+- [x] Missing or ambiguous remotes produce a precise local result and blocked publication step; no silent remote/repository creation.
+- [x] PR creation, merges, deployment and privileged actions remain gated; approvals bind to the intended operation and relevant state.
+- [x] Record publication intent and observed outcome; report failed/uncertain pushes honestly and reconcile before retrying.
 
 ## Context and constraints
 
@@ -45,6 +45,12 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
 
 ## Comments
+
+2026-09-22 scope decision: the policy implementation and evidence remain DONE,
+but automatic publication is deferred from the refocused current release. The
+product now completes at validated, independently reviewed local task-branch
+commits and reports publication as deferred. A later contract may deliberately
+reuse this module; its existence does not make push part of the Lead interface.
 
 Implemented 2026-09-21. The host-owned publication boundary accepts only the already-reviewed `pi-lead/task-<task-id>` branch and one explicitly configured `PI_LEAD_GIT_REMOTE` plus `PI_LEAD_GIT_REMOTE_URL`. It validates local and remote refs against the final commit, rejects missing or ambiguous configuration, protected/arbitrary branch names and existing different remote task branches, and has no force/refspec/remote-creation mode. Intent is journaled before dispatch and the observed commit/diagnostic outcome is journaled after reconciliation; failed or uncertain outcomes retain the local commit and return `BLOCKED / PUBLICATION_BLOCKED`. PRs, merges, deployments and privileged actions have no automatic route; their approval token binds the operation and exact branch revision.
 

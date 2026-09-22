@@ -4,7 +4,7 @@
 
 **Blocked by:** [04: Review, fix and commit a complete local coding task](04-review-fix-commit.md)
 
-**Status:** DONE
+**Status:** IN PROGRESS
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -45,6 +45,12 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
 
 ## Comments
+
+2026-09-22 scope audit: the debug and standalone-review lifecycles satisfy
+their controlled tests, but neither is called by the main Lead extension.
+Consequently the promised natural-language requests are not available through
+the product interface. Ticket 18 owns that integration; the checked criteria
+above record the completed lifecycle implementation, not end-to-end admission.
 
 Implemented 2026-09-21. `runDebugTask` requires attributable, executed failing feedback before diagnosis, carries the diagnosis into the existing `runReviewFixCommitTask` lifecycle, and accepts completion only after the same feedback loop passes. `runStandaloneBranchReview` resolves the named base and review branch through the trusted Git boundary, verifies supplied document digests, produces independent Standards/Spec reports when a spec exists, reports a missing spec explicitly, and confirms unchanged worktree/ref snapshots even after a reviewer fails. Fulfilled sibling review evidence is retained on failure.
 

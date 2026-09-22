@@ -4,7 +4,7 @@
 
 **Blocked by:** [05: Push validated task branches through explicit policy](05-controlled-push.md)
 
-**Status:** DONE
+**Status:** IN PROGRESS
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -48,6 +48,13 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
 
 ## Comments
+
+2026-09-22 scope audit: the recovery store and reconciliation behavior exist and
+are covered by controlled tests, but the main Lead extension does not call this
+module. The ticket is not DONE until an interrupted real Lead task enters this
+reconciliation path and exposes the required confirmation to the user. Ticket
+18 will place recovery behind the unified orchestration interface; Ticket 20
+will provide final end-to-end evidence.
 
 Implemented 2026-09-21. Host-owned durable task records now atomically retain correlated task/attempt/worker/VM/Pi/Herdr identity, Git revisions, action intent/outcome pairs, approvals, verification and review evidence, artifacts, cleanup state and diagnostic retention metadata. A per-project writer lease serializes recovery state transitions. Reconciliation stops and re-observes surviving workers, validates VM/Pi/Herdr/Git identity and state, records uncertain prompts/pushes without replaying them, and requires explicit confirmation before a clean recovery returns to READY. It has no guest-session restore operation. DONE is rejected without final-revision verification, two independent review artifacts, collected artifacts, resolved actions and confirmed cleanup. Successful diagnostic logs are removed after seven days; failed diagnostics require explicit clearing and neither path touches delivered branches or commits.
 

@@ -10,11 +10,11 @@
 
 ## Acceptance criteria
 
-- [ ] Drive Matt implement/TDD at approved seams, with independent Standards and Spec reports and a pinned comparison/spec source.
-- [ ] Tie checks and reviews to the final changes; fixes invalidate affected evidence and trigger revalidation.
-- [ ] Permit no more than two review/fix cycles after the initial review; unresolved work becomes BLOCKED with diagnostics.
-- [ ] Run no more than two workers concurrently, including reviewer workers; queue excess work and retain separate review contexts.
-- [ ] Deliver and retain commits, collect evidence, verify teardown and clean successful tabs before reporting local task completion.
+- [x] Drive Matt implement/TDD at approved seams, with independent Standards and Spec reports and a pinned comparison/spec source.
+- [x] Tie checks and reviews to the final changes; fixes invalidate affected evidence and trigger revalidation.
+- [x] Permit no more than two review/fix cycles after the initial review; unresolved work becomes BLOCKED with diagnostics.
+- [x] Run no more than two workers concurrently, including reviewer workers; queue excess work and retain separate review contexts.
+- [x] Deliver and retain commits, collect evidence, verify teardown and clean successful tabs before reporting local task completion.
 
 ## Context and constraints
 

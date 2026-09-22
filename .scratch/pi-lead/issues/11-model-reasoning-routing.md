@@ -4,7 +4,7 @@
 
 **Blocked by:** [10: Route natural-language intent through bounded Jev calls](10-jev-intent-routing.md)
 
-**Status:** DONE
+**Status:** IN PROGRESS
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -48,6 +48,12 @@ Read source version caveats before using an API; research is source evidence, no
 
 ## Comments
 
+2026-09-22 scope audit: the deterministic selection and verification module is
+implemented and tested, but no production source caller invokes it when the
+Lead spawns a worker. The ticket remains IN PROGRESS until the unified
+orchestrator uses it and reports the effective route. Ticket 18 owns that
+integration. Ticket 10 also remains IN PROGRESS pending its live Jev gate.
+
 Implemented the deterministic worker model/reasoning policy seam on 2026-09-21. It accepts only bounded semantic resource judgments, then independently admits configured native Pi provider/model/reasoning pairs using current catalog, authentication, quota, budget, confidence, context and a hard two-worker ceiling. A changed state or forged selection cannot be attested; the observed Pi model and effective/clamped thinking level are accepted only when they re-pass the same policy. Two configured ChatGPT choices are covered, and OpenCode Go enters automatically only when its native provider state makes it an adequate fallback.
 
-Validation: focused routing-policy tests pass (11/11), the final full suite passed 114 tests, and `npm run typecheck` passed. No live provider or host integration was run for this policy-only slice. Independent Standards and Spec reviews led to budget, capacity, confidence, catalog, fallback, state-revalidation and duplication corrections. Ticket 10 is complete per the user, clearing this ticket's final dependency.
+Validation: focused routing-policy tests pass (11/11), the final full suite passed 114 tests, and `npm run typecheck` passed. No live provider or host integration was run for this policy-only slice. Independent Standards and Spec reviews led to budget, capacity, confidence, catalog, fallback, state-revalidation and duplication corrections. The earlier statement that Ticket 10 was complete is superseded by the 2026-09-22 audit.

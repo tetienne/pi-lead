@@ -10,11 +10,11 @@
 
 ## Acceptance criteria
 
-- [ ] Reuse official skills/resources and their actual contracts; do not manufacture one machine state per skill.
-- [ ] Preserve resolved decisions, primary-source references and human checkpoints; ask decisions rather than facts the worker can research.
-- [ ] Keep broader research network access explicit and separate from ordinary dependency/provider access.
-- [ ] Local tracker output supports fresh implementation contexts; ticket granularity review precedes ticket publication.
-- [ ] Wayfinder remains an explicit unavailable detour until its dedicated slice exists.
+- [x] Reuse official skills/resources and their actual contracts; do not manufacture one machine state per skill.
+- [x] Preserve resolved decisions, primary-source references and human checkpoints; ask decisions rather than facts the worker can research.
+- [x] Keep broader research network access explicit and separate from ordinary dependency/provider access.
+- [x] Local tracker output supports fresh implementation contexts; ticket granularity review precedes ticket publication.
+- [x] Wayfinder remains an explicit unavailable detour until its dedicated slice exists.
 
 ## Context and constraints
 

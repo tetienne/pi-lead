@@ -6,10 +6,10 @@
 
 **Status:** BLOCKED
 
-**Execution gate:** the user approved this plan and its ticket granularity, and
-authorized implementation on 2026-09-22. The remaining blocker is the existing
-human gate for a publication destination that supports a native Pi version pin;
-this ticket does not authorize creating or publishing that destination.
+**Execution gate:** superseded by [20: Validate the refocused product in a
+consuming project](20-refocused-product-acceptance.md). The publication gate
+recorded here remains historical evidence, but it no longer defines acceptance
+for the refocused product.
 
 ## Acceptance criteria
 
@@ -55,6 +55,12 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
 
 ## Comments
+
+2026-09-22 scope audit: this acceptance ticket validated the broad 16-ticket
+program rather than the original conversation-first product. It is superseded,
+not completed. Ticket 20 replaces it with acceptance of the single Lead
+interface and treats provider publication, Linux, OpenCode Go and advanced
+scheduling as separate or deferred concerns.
 
 2026-09-22: The user explicitly approved bypassing Tickets 08 and 09 for this release. Ticket 16 now accepts only macOS arm64/ChatGPT Pro evidence. Ubuntu 24.04 x86_64/arm64 and a successful OpenCode Go worker remain deferred, with no compatibility or successful-provider claim; Ticket 08 and Ticket 09 remain BLOCKED rather than DONE.
 

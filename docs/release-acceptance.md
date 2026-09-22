@@ -1,4 +1,10 @@
-# Current release acceptance evidence
+# Historical broad-program acceptance evidence
+
+Superseded on 2026-09-22 by the refocused product contract in
+[Ticket 17](../.scratch/pi-lead/issues/17-refocus-product-contract.md). This
+document preserves the runtime and packaging evidence gathered for Ticket 16;
+it does not establish acceptance of the conversation-first Lead interface.
+Ticket 20 owns current release acceptance.
 
 Recorded 2026-09-22 for the approved current scope: macOS arm64 and ChatGPT
 Pro. This is an evidence record, not a compatibility claim for a host or

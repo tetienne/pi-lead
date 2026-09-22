@@ -1,7 +1,143 @@
 # PI Lead: isolated, visible engineering workers
 
-Status: ready-for-agent
-Approval: approved by the user, including test seams and architectural decisions. Ticket granularity review precedes repository initialization and implementation.
+Status: approved; refocused by Ticket 17 on 2026-09-22
+Approval: approved by the user, including test seams, architectural decisions and the Ticket 17–20 cleanup sequence.
+
+## Authoritative product contract — 2026-09-22
+
+This section narrows the original program after the approved scope audit and
+governs the current release. Later sections retain the requirements and design
+evidence that produced the implementation, but they do not expand this release
+boundary.
+
+### Public interaction surface
+
+PI Lead has one product interface: the user talks normally to the persistent
+Lead in Pi. Requests such as “implement X”, “debug Y”, “review this branch”,
+“research Z” and “help me shape this idea” enter through the same native Pi
+input seam. Ordinary chat stays in the Lead and creates no worker.
+
+The only PI Lead command in the approved product surface is:
+
+```text
+/lead <request>
+```
+
+It is an escape hatch for explicitly admitting the same natural-language
+request when automatic routing is unavailable or uncertain. It calls the same
+orchestrator as ordinary conversation and does not select a provider, model,
+Matt skill or lifecycle stage. Cancellation uses Pi's native interruption and
+session-shutdown behavior; status and completion are reported in the Lead
+conversation, so neither needs another PI Lead command.
+
+Jev may classify the request as CHAT, IMPLEMENT, IDEATE, DEBUG, REVIEW,
+RESEARCH, TRIAGE, WAYFIND or OPERATE. The Lead applies deterministic policy to
+the judgment and selects the applicable installed Matt workflow. Consequential
+ambiguity asks the user for clarification. OPERATE can identify a concrete
+operation, but publication, deployment, privileged actions and other human
+gates remain unavailable until separately authorized. The user never has to
+choose Jev, a Matt skill, a worker provider, a model/reasoning level, a worker
+count or an internal BUILD/VERIFY/FIX stage.
+
+The currently registered `/lead-read`, `/lead-read-go`, `/lead-change`,
+`/lead-implement`, `/lead-fixture`, `/lead-plan`, `/lead-triage` and
+`/lead-wayfind` commands, plus the `Lead: ask worker …` and explicit
+`Lead: <workflow> …` text forms, are historical compatibility entry points.
+They are not the approved product interface. Ticket 18 must route any
+temporarily retained compatibility entry through the unified orchestrator;
+Ticket 19 removes them from command discovery and normal documentation.
+
+### Current release boundary
+
+The current release supports a locally activated package on macOS arm64 and
+uses ChatGPT Pro as its worker provider. Provider identity and availability are
+internal routing facts, not request vocabulary. Jev uses its dedicated
+OpenRouter configuration with the existing $1/day ceiling when that human
+credential gate is satisfied; deterministic unavailable, malformed,
+ambiguous, stale and over-budget outcomes remain valid product behavior.
+
+A code-changing task may finish with validated, independently reviewed local
+task-branch commits. The Lead reports checks, review corrections, branch and
+commit state, collected results and confirmed cleanup. It does not
+automatically push, create a PR, merge, deploy or choose a remote in this
+release. A mutable local package/archive is sufficient for current acceptance;
+publishing an npm or Git pin is not a release prerequisite.
+
+The release retains the safeguards that justify their complexity:
+
+- deterministic policy owns permissions, allowed resources, concurrency,
+  retries, budgets, Git effects and DONE/BLOCKED;
+- each autonomous worker runs wholly inside Gondolin with mediated credentials,
+  explicit network access and private writable storage;
+- task, assignment, attempt, worker, VM, Pi session and Herdr identities bind
+  results to the work that produced them;
+- code changes require final-revision validation and independent Standards and
+  Spec review with bounded correction cycles;
+- successful results are collected before resources close, worker/VM
+  termination is confirmed, and interrupted work is reconciled without replay
+  before any human-confirmed resumption.
+
+### Explicitly deferred work
+
+Implemented code is not automatically release scope. The following decisions
+are authoritative for Tickets 18–20:
+
+| Capability | Current decision |
+| --- | --- |
+| Recovery and diagnostic retention | Product core. Ticket 18 must connect the existing host-owned reconciliation path to the unified Lead; interrupted work still requires human confirmation before resumption. |
+| Automatic publication | Deferred. Retain its policy and evidence for later reuse, but current completion ends at reviewed local commits and reports any publication need. |
+| Advanced dependency-frontier scheduling | Deferred. The Lead may use at most two workers inside one task, including parallel reviewers, but does not autonomously execute multiple tracker tickets. |
+| Cache optimization and seed promotion | Deferred. Keep private worker storage and no shared writable cache as security requirements; do not claim or ship the measured seed-reuse experiment as a performance feature. |
+| Ubuntu 24.04 x86_64/arm64 | Deferred. No Linux compatibility claim belongs to this release. |
+| OpenCode Go | Deferred. Its adapter and controlled proof remain historical evidence; provider availability must never add a user command. |
+
+### Source and command inventory
+
+The categories below describe release intent, not current reachability. “Product
+core” must be reachable through the unified Lead after Ticket 18. “Internal
+adapter” may be called by core but is never user vocabulary. “Development-only
+evidence” stays callable only through repository scripts/tests. “Deferred work”
+is excluded from the active package path by Ticket 19 while its tracker and test
+history remain available.
+
+| Current Lead command or text form | Classification and disposition |
+| --- | --- |
+| Ordinary native Pi input | Product core and primary interface; Ticket 18 expands it to every supported intent. |
+| `/lead <request>` | Product core and sole explicit escape hatch; Ticket 18 adds it over the same orchestrator. |
+| `Lead: ask worker …` | Internal compatibility adapter for the old ChatGPT read path; remove in Ticket 19. |
+| `Lead: [workflow] …` | Internal compatibility adapter for explicit workflow routing; replace with `/lead` and remove in Ticket 19. |
+| `/lead-read` | Internal compatibility adapter leaking the ChatGPT read stage; remove in Ticket 19. |
+| `/lead-read-go` | Deferred-provider compatibility adapter; remove in Ticket 19. |
+| `/lead-change` | Internal compatibility adapter leaking the proposal stage; remove in Ticket 19. |
+| `/lead-implement` | Internal compatibility adapter leaking the implementation stage; remove in Ticket 19. |
+| `/lead-fixture` | Development-only evidence exposed accidentally as a product command; remove from command discovery in Ticket 19. |
+| `/lead-plan`, `/lead-triage`, `/lead-wayfind` | Internal compatibility adapters leaking Matt skill selection; remove in Ticket 19. |
+
+Every current `src/` feature module is classified here:
+
+| Classification | Modules | Disposition |
+| --- | --- | --- |
+| Product core | `lead.ts`; `policy.ts`; `chatgpt-policy.ts`; `chatgpt-task.ts`; `proposed-change-policy.ts`; `proposed-change-task.ts`; `review-context.ts`; `review-fix-commit-task.ts`; `debug-review-task.ts`; `jev-intent-routing.ts`; `model-reasoning-routing.ts`; `planning-intake.ts`; `tracker-intake.ts`; `task-recovery.ts` | Preserve the policies and lifecycle behavior. Ticket 18 places them behind one orchestration interface and completes missing reachability; Ticket 19 removes their legacy public entry points. |
+| Internal adapters | `chatgpt-input.ts`; `chatgpt-launcher.ts`; `chatgpt-worker-host.ts`; `git-proposal.ts`; `native-chatgpt-runtime.ts`; `native-proposed-change-runtime.ts`; `native-review-fix-commit-runtime.ts`; `openrouter-jev-transport.ts`; `process-observation.ts`; `proposed-change-input.ts`; `proposed-change-launcher.ts`; `proposed-change-worker-host.ts`; `state-files.ts` | Retain only behind the core. Provider, credential, Herdr, Gondolin, Git and storage mechanics do not create public workflows. Decouple the review runtime from deferred publication. |
+| Development-only evidence | `fixture-launcher.ts`; `fixture-viewer.ts`; `native-runtime.ts`; `task-lifecycle.ts`; `host-matrix.ts`; `run-fixture-cli.ts`; `run-chatgpt-fake-cli.ts`; `run-chatgpt-live-cli.ts`; `run-opencode-go-fake-cli.ts`; `run-proposed-change-fixture-cli.ts` | Keep as direct repository scripts/tests and historical integration evidence. Do not register them as Lead workflows or infer release support from an unrun proof. |
+| Deferred work | `dependency-scheduler.ts`; `git-publication.ts`; `toolchain-cache.ts`; `native-opencode-go-runtime.ts`; `opencode-go-launcher.ts`; `opencode-go-policy.ts`; `opencode-go-task.ts`; `opencode-go-worker-host.ts` | Exclude from the active release path in Ticket 19. Preserve implementation and ticket evidence until a later approved contract deliberately restores a capability. |
+
+This inventory covers all 45 source modules present at the audit. The runtime
+entry point remains `src/lead.ts`; direct CLI files are development harnesses,
+not additional package interfaces.
+
+The reachability audit explains why classification is necessary. Today,
+`lead.ts` handles only CHAT, IDEATE, TRIAGE and WAYFIND from ordinary input; it
+reaches ChatGPT, OpenCode Go, proposal, review/commit and fixture lifecycles only
+through the specialized forms listed above. `debug-review-task.ts`,
+`model-reasoning-routing.ts` and `task-recovery.ts` have no production Lead
+caller. `dependency-scheduler.ts` is reached by production code only as a type
+dependency, not through `runDependencyFrontier`; `host-matrix.ts` is reached
+only by acceptance tests. Conversely, `toolchain-cache.ts` is currently pulled
+into the proposal runtime, `git-publication.ts` into the review/commit runtime,
+and the OpenCode Go modules directly into `lead.ts` even though those features
+are now deferred. Tickets 18 and 19 must correct those mismatches rather than
+treating import reachability as product approval.
 
 ## Problem Statement
 
@@ -11,9 +147,9 @@ The user wants to stay in one Lead tab and request engineering work in natural l
 
 Provide a pinned Pi package activated explicitly in each consuming project. A thin Lead extension selects and follows the official Matt engineering workflows. A trusted host controller enforces deterministic policy and owns isolated workers, their Herdr tabs, results and cleanup. Each real worker runs its entire Pi process inside a Gondolin VM; Herdr provides human visibility and terminal control, not isolation.
 
-Start with ChatGPT Pro because the user currently has available quota there and reports OpenCode Go exhausted. Support OpenCode Go when its included quota returns. Add Jev through OpenRouter for bounded intent and resource judgments, with a maximum of $1/day and an objective of substantially lower actual spend. Routine control uses native Pi, Herdr, Gondolin, mise, Git and TypeSafe primitives.
+Start with ChatGPT Pro because the user currently has available quota there and reports OpenCode Go exhausted. OpenCode Go is a deferred roadmap provider and does not belong to the current release path. Add Jev through OpenRouter for bounded intent and resource judgments, with a maximum of $1/day and an objective of substantially lower actual spend. Routine control uses native Pi, Herdr, Gondolin, mise, Git and TypeSafe primitives.
 
-The completed experience is: natural-language request → appropriate workflow → only necessary visible workers → validated and independently reviewed result → collection and cleanup → final summary with branch/commit/push information and no unnecessary active workers.
+The completed experience is: natural-language request → appropriate workflow → only necessary visible workers → validated and independently reviewed result → collection and cleanup → final summary with branch/commit information and no unnecessary active workers. Publication state may be reported, but automatic push is deferred from the current release.
 
 ## Release-scope amendment — 2026-09-22
 
@@ -47,7 +183,7 @@ The user authorized the current release to bypass Ticket 08 (Ubuntu 24.04 x86_64
 24. As a user, I want broader research access handled separately, so that dependency access does not imply unrestricted browsing.
 25. As a user, I want worker-private writable storage and caches, so that one worker cannot poison another's environment.
 26. As a user, I want my existing checkout and uncommitted changes preserved, so that autonomous work does not overwrite my work.
-27. As a user, I want automatic task branches, validated commits and task-branch pushes, so that routine Git operations need little attention.
+27. As a user, I want automatic task branches and validated local commits, so that routine local Git operations need little attention; automatic task-branch pushes are deferred from the current release.
 28. As a user, I want explicit approval for PR creation, merges, deployment and privileged actions, so that publication and elevated effects remain controlled.
 29. As a user, I want ChatGPT Pro usable for the first isolated worker, so that exhausted OpenCode Go quota does not block the initial path.
 30. As a user, I want worker usage to stay within subscriptions, so that exhaustion does not silently trigger paid fallback.
@@ -98,7 +234,7 @@ Set an explicit network allowlist; Gondolin's omitted allowlist permits all host
 
 Real access and refresh tokens stay on the host. ChatGPT Pro is first; its native Pi adapter parses token claims before sending a request, so a generic opaque credential placeholder is insufficient. Source research supports a native candidate: a unique synthetic JWT-shaped guest placeholder containing only the needed account metadata; an explicit native provider credential overlay retaining Pi's Codex subscription adapter; host-native OAuth refresh; and Gondolin's existing secret manager to rotate the real host value while the guest placeholder stays stable. A bare command-line key override alone does not enable this OAuth-only provider. This configuration does not switch to the OpenAI Platform API or its billing path.
 
-Restrict credential-bearing requests to the exact approved HTTPS endpoint, method and headers, including redirects; a hostname allowlist alone is insufficient. Use explicit SSE and disable guest WebSocket upgrades for the initial provider integration so each request remains mediated. Synchronize host refresh and account selection across workers, stop on revoked/failed credentials, and test that the secret cannot be reflected into guest-visible output. These are source-supported candidate decisions with mandatory runtime proof before accepting a real worker. Copying the host auth file or giving the guest a real token is not a fallback. OpenCode Go remains supported but is not required to be currently available for the first milestone.
+Restrict credential-bearing requests to the exact approved HTTPS endpoint, method and headers, including redirects; a hostname allowlist alone is insufficient. Use explicit SSE and disable guest WebSocket upgrades for the initial provider integration so each request remains mediated. Synchronize host refresh and account selection across workers, stop on revoked/failed credentials, and test that the secret cannot be reflected into guest-visible output. These are source-supported candidate decisions with mandatory runtime proof before accepting a real worker. Copying the host auth file or giving the guest a real token is not a fallback. The existing OpenCode Go adapter is deferred evidence, not a current supported-provider claim.
 
 Use subscription authentication for worker providers, with no authorization for extra billed usage. Subscription sign-in alone does not prove that purchased credits cannot be consumed; verify applicable account settings and quota behavior before unattended operation. Stop or offer an already-approved provider with available included quota on exhaustion. Disable optional Pi cache warming initially; account for compaction and summarization/transport retries.
 
@@ -118,7 +254,7 @@ The trusted controller owns task branches and integration. The default input is 
 
 Validate the collected changes, including binary files, modes, renames and symlinks, against the exact base and resulting revision. Host collection/integration must not execute repository-provided hooks, filters, configuration or shell strings. Project tests execute inside isolation. A changed final revision invalidates earlier review/check evidence that no longer covers it.
 
-Automatic local task branches, validated commits and pushes to the configured consuming-project remote's task branch are allowed. This excludes force pushes, protected branches, arbitrary destinations and history rewriting. PR creation, main-branch merges, deployment and privileged operations require explicit approval. If the remote is absent or ambiguous, retain local work and report the publication requirement; do not create or choose a remote silently.
+Automatic local task branches and validated commits are allowed. Automatic push is deferred from the current release. The retained publication policy still excludes force pushes, protected branches, arbitrary destinations and history rewriting; later reactivation requires a separately approved contract. PR creation, main-branch merges, deployment and privileged operations require explicit approval. Retain local work and report any publication requirement; do not create or choose a remote silently.
 
 ### Lifecycle and persistence
 
@@ -139,7 +275,7 @@ Record intended external actions before dispatch and their observed outcomes aft
 
 Chat without work need not allocate a task/worker. Verification failures lead to FIX only while within the bound; otherwise BLOCKED. A canceled task is recorded as BLOCKED with a cancellation reason and no automatic restart. Status reason preserves the distinction from failure or waiting for approval without expanding the initial state machine.
 
-DONE requires: the requested outcome is evidenced; required checks and independent review pass for the final revision; correction cycles are resolved; artifacts and transcripts are durably collected; permitted commits/pushes are recorded or an explicitly scoped publication step is left awaiting approval; worker execution and VM teardown are confirmed; owned temporary tabs/resources are cleaned; and the final summary contains validation, review, Git and cleanup results. Required cleanup failure prevents DONE. Do not claim a requested push succeeded when it did not.
+DONE requires: the requested outcome is evidenced; required checks and independent review pass for the final revision; correction cycles are resolved; artifacts and transcripts are durably collected; local commits are recorded; worker execution and VM teardown are confirmed; owned temporary tabs/resources are cleaned; and the final summary contains validation, review, Git and cleanup results. Required cleanup failure prevents DONE. Publication is reported as deferred rather than attempted automatically.
 
 On failure or BLOCKED, stop autonomous worker execution and preserve its diagnostic tab, transcript and artifacts. Cancellation must reach actual processes/VMs; rejecting a local promise does not prove guest termination. Abrupt tab closure, host-wrapper failure and Lead restart require reconciliation. Successful logs expire after seven days; failed diagnostics remain until explicitly cleared. Retention never requires keeping a VM alive, and successful cleanup never deletes the delivered branch or commits.
 

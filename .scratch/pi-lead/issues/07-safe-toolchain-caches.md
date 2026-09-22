@@ -10,10 +10,10 @@
 
 ## Acceptance criteria
 
-- [ ] Demonstrate cache reuse and malicious/cross-worker cache-write isolation using representative project dependencies.
-- [ ] Respect pinned versions and guest architecture/ABI; never mount the host mise home or reuse incompatible host binaries.
-- [ ] Compare cold preparation, warm readiness and execution timings on a repeatable task.
-- [ ] Limit cache work to demonstrated value; no automatic promotion of untrusted writable cache content.
+- [x] Demonstrate cache reuse and malicious/cross-worker cache-write isolation using representative project dependencies.
+- [x] Respect pinned versions and guest architecture/ABI; never mount the host mise home or reuse incompatible host binaries.
+- [x] Compare cold preparation, warm readiness and execution timings on a repeatable task.
+- [x] Limit cache work to demonstrated value; no automatic promotion of untrusted writable cache content.
 
 ## Context and constraints
 
@@ -46,6 +46,11 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
 
 ## Comments
+
+2026-09-22 scope decision: cache optimization is deferred from the refocused
+current release because the measured warm path did not improve. The private
+writable-storage and no-shared-writable-cache invariants remain product core;
+the seed-reuse implementation and measurements remain development evidence.
 
 Implemented 2026-09-21. Proposed-change workers now key mise seeds by the committed `.mise.toml`, exact `mise=2025.8.20-r0`, verified Linux guest architecture and musl ABI. A seed is reusable only after a trusted host attests an integrity manifest; Gondolin mounts it read-only and copies it into worker-private mise storage. Worker content has no route to promote back into a seed.
 
