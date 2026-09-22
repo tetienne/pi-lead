@@ -1,14 +1,15 @@
 import { rename, writeFile } from "node:fs/promises";
 
-import { createHttpHooks, RealFSProvider, VM } from "@earendil-works/gondolin";
+import type { VM } from "@earendil-works/gondolin";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { createAskJev, createJudge, createLedger } from "../jev.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
+import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
-import { GUEST_WORKSPACE, registerSandboxTools } from "./sandbox-tools.ts";
+import { registerSandboxTools } from "./sandbox-tools.ts";
 
 /**
  * Loaded only into worker Pi processes (`--no-extensions -e`). Pi and this
@@ -20,7 +21,7 @@ export default function worker(pi: ExtensionAPI) {
 
   let task: WorkerTask | undefined;
   let latestContext: ExtensionContext | undefined;
-  let running: Promise<{ vm: VM; shellPath: string }> | undefined;
+  let running: Promise<{ vm: VM; shellPath: string; env: Record<string, string> }> | undefined;
   let finished = false;
 
   const loadTask = async () => {
@@ -42,30 +43,20 @@ export default function worker(pi: ExtensionAPI) {
         latestContext?.hasUI ? latestContext.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) : false,
       log: (line) => latestContext?.ui.notify(line, "info"),
     });
-    const { httpHooks } = createHttpHooks({
-      // Hosts are decided per request below; internal ranges stay blocked.
-      allowedHosts: ["*"],
-      blockInternalRanges: true,
-      isRequestAllowed: (request) => allow({ method: request.method, url: request.url }),
-    });
     ctx?.ui.setStatus("pi-lead", "Gondolin: starting");
-    const vm = await VM.create({
-      sessionLabel: `pi-lead ${current.title}`,
-      ...(current.sandbox.image ? { sandbox: { imagePath: current.sandbox.image } } : {}),
-      ...(current.sandbox.memory ? { memory: current.sandbox.memory } : {}),
-      ...(current.sandbox.cpus ? { cpus: current.sandbox.cpus } : {}),
-      httpHooks,
-      allowWebSockets: false,
-      vfs: { mounts: { [GUEST_WORKSPACE]: new RealFSProvider(current.clonePath) } },
-    });
-    const probe = await vm.exec(["/bin/sh", "-lc", "command -v bash || true; command -v git || true"]);
+    const mounts: Record<string, Mount> = { [GUEST_WORKSPACE]: { host: current.clonePath } };
+    // Read-only: a worker must not be able to poison the toolchains of the next one.
+    if (current.toolchainCache) mounts[GUEST_MISE_DIR] = { host: current.toolchainCache, readonly: true };
+    const vm = await createSandboxVm({ label: `pi-lead ${current.title}`, sandbox: current.sandbox, mounts, allowRequest: allow });
+    const env = guestEnv(current.toolchainCache !== undefined);
+    const probe = await vm.exec(["/bin/sh", "-lc", "command -v bash || true; command -v git || true"], { env });
     const [bash, gitPath] = probe.stdout.split("\n").map((line) => line.trim());
     if (!gitPath) {
       await vm.close();
       throw new Error("the Gondolin image has no git; build one with `npm run sandbox:image`");
     }
     ctx?.ui.setStatus("pi-lead", `Gondolin: ${vm.id.slice(0, 8)} · ${current.branch}`);
-    return { vm, shellPath: bash || "/bin/sh" };
+    return { vm, shellPath: bash || "/bin/sh", env };
   };
 
   const ensureVm = (ctx?: ExtensionContext) => {
@@ -97,7 +88,7 @@ export default function worker(pi: ExtensionAPI) {
       // ever fetches from the clone.
       await vm.exec(
         ["/bin/sh", "-lc", 'git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes")'],
-        { cwd: GUEST_WORKSPACE },
+        { cwd: GUEST_WORKSPACE, env: guestEnv(false) },
       );
       const result: WorkerResult = {
         version: 1,

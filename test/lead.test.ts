@@ -3,8 +3,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import lead, { workerCommand } from "../src/lead.ts";
-import { parseWorkerResult, workerPrompt, WORKER_SKILLS } from "../src/protocol.ts";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+
+import { DELEGATED_SKILLS } from "../src/guidance.ts";
+import lead, { findHerdrPiExtension, workerCommand } from "../src/lead.ts";
+import { parseWorkerResult, workerPrompt } from "../src/protocol.ts";
 
 type Handler = (event: any, ctx?: any) => any;
 
@@ -40,8 +44,10 @@ test("the workflow guidance is appended to the system prompt", async () => {
   const [handler] = pi.handlers.get("before_agent_start")!;
   const result = await handler!({ systemPrompt: "BASE" });
   assert.match(result.systemPrompt, /^BASE\n/);
-  assert.match(result.systemPrompt, /A question.*answer\s+it directly/s);
-  assert.match(result.systemPrompt, /grill-with-docs\/SKILL\.md.*to-spec\/SKILL\.md.*to-tickets\/SKILL\.md/s);
+  assert.match(result.systemPrompt, /\*\*Questions\*\*.*answer them\s+directly/s);
+  assert.match(result.systemPrompt, /read Matt Pocock's router `[^`]*ask-matt\/SKILL\.md`/);
+  assert.match(result.systemPrompt, /`\/diagnosing-bugs` → `delegate` kind `debug`/);
+  assert.match(result.systemPrompt, /- to-tickets: `[^`]*to-tickets\/SKILL\.md`/);
 });
 
 test("the Matt skills ship with the package and are discovered", async () => {
@@ -50,31 +56,52 @@ test("the Matt skills ship with the package and are discovered", async () => {
   const [handler] = pi.handlers.get("resources_discover")!;
   const result = await handler!({ cwd: "/elsewhere", reason: "startup" });
   assert.equal(result.skillPaths.length, 1);
-  for (const skills of Object.values(WORKER_SKILLS)) {
-    for (const skill of skills) assert.ok(existsSync(join(result.skillPaths[0], skill, "SKILL.md")), skill);
+  for (const skill of ["ask-matt", ...Object.keys(DELEGATED_SKILLS)]) {
+    assert.ok(existsSync(join(result.skillPaths[0], skill, "SKILL.md")), skill);
   }
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.ok(manifest.files.includes(".agents/skills/"));
 });
 
-test("workers load only the sandbox extension and their skills", () => {
-  const argv = workerCommand({
+test("workers get the Lead's skills and, in trusted projects, the repo's skills and prompts", async () => {
+  const clone = await mkdtemp(join(tmpdir(), "pi-lead-clone-"));
+  await mkdir(join(clone, ".agents", "skills"), { recursive: true });
+  await mkdir(join(clone, ".pi", "prompts"), { recursive: true });
+  const base = {
     taskPath: "/tmp/t/task.json",
     prompt: "/skill:implement do it",
-    route: { model: "anthropic/claude-sonnet-5", thinking: "high", tier: "deep" },
-    skills: ["implement", "tdd"],
+    route: { model: "anthropic/claude-sonnet-5", thinking: "high" as const, tier: "deep" as const },
     label: "lead: x",
-  });
-  for (const flag of ["--no-approve", "--no-extensions", "--no-builtin-tools", "--no-skills"]) assert.ok(argv.includes(flag), flag);
-  assert.match(argv[argv.indexOf("-e") + 1]!, /src\/worker\/extension\.ts$/);
-  assert.equal(argv.filter((arg) => arg === "--skill").length, 2);
-  assert.deepEqual(argv.slice(-2), ["--", "/skill:implement do it"]);
+    clonePath: clone,
+  };
+  const trusted = workerCommand({ ...base, projectTrusted: true });
+  for (const flag of ["--no-approve", "--no-extensions", "--no-builtin-tools"]) assert.ok(trusted.includes(flag), flag);
+  assert.ok(!trusted.includes("--no-skills"), "global skills load like in the Lead");
+  assert.match(trusted[trusted.indexOf("-e") + 1]!, /src\/worker\/extension\.ts$/);
+  const skillArgs = trusted.flatMap((arg, i) => (arg === "--skill" ? [trusted[i + 1]!] : []));
+  assert.equal(skillArgs.length, 2);
+  assert.ok(skillArgs.includes(join(clone, ".agents", "skills")));
+  assert.equal(trusted[trusted.indexOf("--prompt-template") + 1], join(clone, ".pi", "prompts"));
+  assert.deepEqual(trusted.slice(-2), ["--", "/skill:implement do it"]);
+
+  const untrusted = workerCommand({ ...base, projectTrusted: false });
+  assert.equal(untrusted.filter((arg) => arg === "--skill").length, 1);
+  assert.ok(!untrusted.includes("--prompt-template"));
+});
+
+test("Herdr's Pi integration is found in the user's extensions", async () => {
+  const home = await mkdtemp(join(tmpdir(), "pi-lead-home-"));
+  assert.equal(findHerdrPiExtension(home), undefined);
+  await mkdir(join(home, ".pi", "agent", "extensions"), { recursive: true });
+  await writeFile(join(home, ".pi", "agent", "extensions", "herdr-agent-state.ts"), "");
+  assert.equal(findHerdrPiExtension(home), join(home, ".pi", "agent", "extensions", "herdr-agent-state.ts"));
 });
 
 test("worker prompts invoke Matt skills explicitly and results are validated", () => {
   assert.match(workerPrompt("implement", "T"), /^\/skill:implement T/);
   assert.match(workerPrompt("debug", "T"), /^\/skill:diagnosing-bugs T/);
   assert.match(workerPrompt("review", "T"), /^\/skill:code-review T/);
+  assert.match(workerPrompt("prototype", "T"), /^\/skill:prototype T/);
   assert.equal(parseWorkerResult({ version: 1, id: "a", status: "done", summary: "s" }, "a").status, "done");
   assert.throws(() => parseWorkerResult({ version: 1, id: "b", status: "done", summary: "s" }, "a"));
   assert.throws(() => parseWorkerResult({ version: 1, id: "a", status: "merged", summary: "s" }, "a"));

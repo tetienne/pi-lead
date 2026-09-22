@@ -9,6 +9,7 @@ import { createDelegator, isSafeBranchName, shellQuote, slugify, type DelegateIO
 import type { Herdr } from "../src/herdr.ts";
 import type { Judge, WorkerVerdict } from "../src/jev.ts";
 import type { WorkerTask } from "../src/protocol.ts";
+import type { Toolchains } from "../src/toolchains.ts";
 import type { Workspace } from "../src/workspace.ts";
 
 const noJudge: Judge = {
@@ -65,16 +66,24 @@ const io = (progress: string[] = []): DelegateIO => ({
   cwd: "/repo",
   lead: { provider: "anthropic", id: "claude-sonnet-5" },
   available: [{ provider: "anthropic", id: "claude-sonnet-5" }],
+  projectTrusted: true,
   progress: (text) => void progress.push(text),
 });
 
-async function setup(options: { judge?: Partial<Judge>; outcome?: Parameters<typeof fakeHerdr>[1]; herdr?: false; maxWorkers?: number } = {}) {
+async function setup(options: {
+  judge?: Partial<Judge>;
+  outcome?: Parameters<typeof fakeHerdr>[1];
+  herdr?: Herdr | false;
+  maxWorkers?: number;
+  toolchains?: Toolchains;
+} = {}) {
   const log: Log = [];
   const delegator = createDelegator({
     config: mergeConfig(DEFAULT_CONFIG, { maxWorkers: options.maxWorkers ?? 2 }),
     judge: { ...noJudge, ...options.judge },
-    herdr: options.herdr === false ? undefined : fakeHerdr(log, options.outcome ?? { status: "done" }),
+    herdr: options.herdr === false ? undefined : options.herdr ?? fakeHerdr(log, options.outcome ?? { status: "done" }),
     workspace: fakeWorkspace(log),
+    ...(options.toolchains ? { toolchains: options.toolchains } : {}),
     workerCommand: ({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt],
     stateRoot: await mkdtemp(join(tmpdir(), "pi-lead-state-")),
     pollMs: 2,
@@ -179,4 +188,38 @@ test("cancelling the tool stops waiting and cleans up", async () => {
   const outcome = await delegator.run({ kind: "research", title: "Slow", task: "q" }, { ...io(), signal: controller.signal });
   assert.equal(outcome.status, "cancelled");
   assert.ok(log.includes("close tab-1"));
+});
+
+test("the project's toolchain cache is handed to the worker", async () => {
+  let seen: WorkerTask | undefined;
+  const herdr: Herdr = {
+    async openWorkerTab({ argv }) {
+      const script = await readFile(argv[1]!, "utf8");
+      assert.match(script, /export HERDR_AGENT=pi/);
+      const taskPath = /'--pi-lead-task' '([^']+)'/.exec(script)![1]!;
+      seen = JSON.parse(await readFile(taskPath, "utf8")) as WorkerTask;
+      await writeFile(seen.resultPath, JSON.stringify({ version: 1, id: seen.id, status: "done", summary: "ok" }));
+      return { tabId: "t", paneId: "p" };
+    },
+    closeTab: async () => {},
+  };
+  const { delegator } = await setup({ herdr, toolchains: { prepare: async () => "/cache/project" } });
+  assert.equal((await delegator.run({ kind: "implement", title: "x", task: "y" }, io())).status, "done");
+  assert.equal(seen?.toolchainCache, "/cache/project");
+});
+
+test("a worker whose Pi exits without finish is reported as failed", async () => {
+  const herdr: Herdr = {
+    async openWorkerTab({ argv }) {
+      const script = await readFile(argv[1]!, "utf8");
+      const exitPath = /echo \$\? > '([^']+)'/.exec(script)![1]!;
+      setTimeout(() => void writeFile(exitPath, "1\n"), 5);
+      return { tabId: "t", paneId: "p" };
+    },
+    closeTab: async () => {},
+  };
+  const { delegator } = await setup({ herdr });
+  const outcome = await delegator.run({ kind: "debug", title: "x", task: "y" }, io());
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.text, /exited \(status 1\) without calling finish/);
 });

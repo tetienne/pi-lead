@@ -17,6 +17,8 @@ export type WorkerTask = {
   resultPath: string;
   sandbox: LeadConfig["sandbox"];
   jev: LeadConfig["jev"];
+  /** Host directory with the project's mise toolchains, mounted read-only at /opt/mise. */
+  toolchainCache?: string;
 };
 
 /** Written by the worker's `finish` tool. */
@@ -49,19 +51,13 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
   return result as WorkerResult;
 }
 
-/** Matt Pocock skills each kind of worker loads. */
-export const WORKER_SKILLS: Record<WorkKind, readonly string[]> = {
-  implement: ["implement", "tdd", "code-review", "codebase-design", "domain-modeling"],
-  debug: ["diagnosing-bugs", "tdd", "codebase-design"],
-  review: ["code-review", "codebase-design"],
-  research: ["codebase-design"],
-};
-
 /** First message of the worker session; explicit `/skill:` invocation. */
 export function workerPrompt(kind: WorkKind, task: string): string {
   switch (kind) {
     case "implement":
       return `/skill:implement ${task}`;
+    case "prototype":
+      return `/skill:prototype ${task}`;
     case "debug":
       return `/skill:diagnosing-bugs ${task}\n\nOnce the root cause is found, fix it with a regression test.`;
     case "review":
@@ -87,6 +83,8 @@ opens your tab.
   checkout are available as \`origin/<name>\`.
 - Network access is filtered; if a request is refused, work without it or
   report it.
+- Project toolchains (mise) are preinstalled and read-only; if one is missing,
+  report it instead of working around it.
 - Commit your work on the current branch. Do not push, merge or rebase other
   branches.
 - When you are done, or cannot continue, call \`finish\` exactly once with an

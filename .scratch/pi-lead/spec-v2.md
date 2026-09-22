@@ -15,8 +15,9 @@ a model Jev picked for the task. Nothing needs a command.
 | The user… | The Lead… |
 |---|---|
 | asks a question | answers it from the code; no worker, no file change |
-| brings a vague idea | runs grill-with-docs → to-spec → to-tickets in the conversation, with the skills' approval gates |
+| brings anything else | reads ask-matt and follows the flow it names (grill-with-docs → to-spec → to-tickets, triage, wayfinder…) in the conversation |
 | hands over a ready ticket | calls `delegate` (implement); Jev checks readiness first |
+| needs a throwaway prototype | `delegate` (prototype) |
 | reports a bug | `delegate` (debug), worker follows diagnosing-bugs |
 | asks for a branch review | `delegate` (review) from that branch, worker follows code-review |
 | needs web research | `delegate` (research), network filtered by Jev |
@@ -45,13 +46,22 @@ workers through `~/.pi/agent/pi-lead/jev-usage.json`.
 ## Isolation
 
 - Worker Pi runs on the host with `--no-approve --no-extensions
-  --no-builtin-tools --no-skills`, the worker extension and its skills only.
+  --no-builtin-tools`, the worker extension and Herdr's Pi integration only.
+  It gets the same skills and prompts as the Lead (package, global, and the
+  repo's own when the project is trusted); see ADR 0006.
 - `read/write/edit/bash/ls/find/grep` and `!` shell commands run in a Gondolin
   VM. The guest gets a fixed minimal environment (never the host's), a
-  disposable clone at `/workspace`, and HTTP(S) egress filtered per request;
-  internal ranges and WebSockets are blocked.
+  disposable clone at `/workspace`, the project's mise toolchains read-only at
+  `/opt/mise`, and HTTP(S) egress filtered per request; internal ranges and
+  WebSockets are blocked.
 - The host only `git fetch`es the worker branch from the clone; it never runs
   git inside the guest-writable directory.
+
+## Toolchains
+
+`mise install` runs once per project and mise configuration in a warm-up VM
+(egress: mise's download hosts, then Jev, then the human in the Lead), into
+`~/.pi/agent/pi-lead/toolchains/<project>`. Workers mount it read-only.
 
 ## Configuration
 
@@ -62,12 +72,11 @@ dailyBudgetUsd,minConfidence}`, `keepFailedWorkers`.
 
 ## Known limits / follow-ups
 
-1. A worker that dies without calling `finish` is only noticed when the user
-   cancels the tool (Esc); add a pane-exit check through Herdr.
-2. Herdr's `herdr:pi` status integration is not loaded in workers
-   (`--no-extensions`); load it explicitly for working/idle badges.
-3. Project toolchains (mise, compilers) must exist in the Gondolin image; the
-   shipped image adds only git.
-4. The Lead itself still runs Pi's tools on the host (it writes specs and
+1. The Debian image and the mise warm-up have not been run end to end yet
+   (the development sandbox has no Docker and blocks the Alpine CDN).
+2. The Lead cannot yet send a message to a running worker (for example the
+   answer to a `needs_human` question); Herdr's `agent prompt` is the
+   candidate.
+3. The Lead itself still runs Pi's tools on the host (it writes specs and
    tickets); optionally sandbox it with the same tools.
-5. Jev thresholds are defaults, not calibrated; collect real judgments and tune.
+4. Jev thresholds are defaults, not calibrated; collect real judgments and tune.

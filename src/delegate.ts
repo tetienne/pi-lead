@@ -6,7 +6,8 @@ import type { LeadConfig, Tier } from "./config.ts";
 import type { Herdr } from "./herdr.ts";
 import type { FailureKind, Judge, ReviewAction, WorkKind, WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, workerPrompt, WORKER_SKILLS, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, workerPrompt, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import type { Toolchains } from "./toolchains.ts";
 import type { Workspace } from "./workspace.ts";
 
 export type DelegateParams = {
@@ -23,8 +24,12 @@ export type DelegateIO = {
   cwd: string;
   lead: ModelRef | undefined;
   available: readonly ModelRef[];
+  /** Whether the Lead trusts this project; workers then get its skills and prompts too. */
+  projectTrusted: boolean;
   signal?: AbortSignal;
   progress(text: string): void;
+  /** Ask the human in the Lead's UI (egress during toolchain installation). */
+  confirm?: (question: string) => Promise<boolean>;
 };
 
 export type DelegateStatus = WorkerVerdict | "not_ready" | "failed" | "cancelled";
@@ -50,8 +55,9 @@ export type WorkerCommand = (input: {
   taskPath: string;
   prompt: string;
   route: WorkerRoute;
-  skills: readonly string[];
   label: string;
+  clonePath: string;
+  projectTrusted: boolean;
 }) => string[];
 
 export type DelegateDeps = {
@@ -60,6 +66,7 @@ export type DelegateDeps = {
   herdr: Herdr | undefined;
   workspace: Workspace;
   workerCommand: WorkerCommand;
+  toolchains?: Toolchains;
   stateRoot: string;
   pollMs?: number;
   heartbeatMs?: number;
@@ -67,7 +74,7 @@ export type DelegateDeps = {
 
 type ActiveWorker = { id: string; kind: WorkKind; task: string; done: Promise<void> };
 
-const WRITES_CODE: readonly WorkKind[] = ["implement", "debug"];
+const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debug"];
 
 export function slugify(text: string): string {
   return (
@@ -128,14 +135,29 @@ export function createDelegator(deps: DelegateDeps) {
     }
   };
 
-  const waitForResult = async (path: string, id: string, label: string, io: DelegateIO): Promise<WorkerResult> => {
+  const readIfPresent = async (path: string) => {
+    try {
+      return await readFile(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  };
+
+  const waitForResult = async (
+    paths: { result: string; exit: string },
+    id: string,
+    label: string,
+    io: DelegateIO,
+  ): Promise<WorkerResult> => {
     let lastBeat = Date.now();
     while (true) {
-      try {
-        return parseWorkerResult(JSON.parse(await readFile(path, "utf8")), id);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
+      const result = await readIfPresent(paths.result);
+      if (result !== undefined) return parseWorkerResult(JSON.parse(result), id);
+      // run.sh records Pi's exit status: a worker that dies without `finish` is a failure, not a hang.
+      // An empty file is `echo $? >` caught between truncate and write.
+      const exit = (await readIfPresent(paths.exit))?.trim();
+      if (exit) throw new Error(`worker Pi exited (status ${exit}) without calling finish`);
       if (Date.now() - lastBeat >= heartbeatMs) {
         io.progress(`worker "${label}" is still running in its Herdr tab`);
         lastBeat = Date.now();
@@ -146,7 +168,7 @@ export function createDelegator(deps: DelegateDeps) {
 
   const chooseRoute = async (params: DelegateParams, io: DelegateIO) => {
     const judged = await deps.judge.modelTier({ task: params.task, kind: params.kind });
-    const tier: Tier = judged?.tier ?? (params.kind === "implement" || params.kind === "research" ? "standard" : "deep");
+    const tier: Tier = judged?.tier ?? (params.kind === "debug" || params.kind === "review" ? "deep" : "standard");
     const route = resolveRoute(tier, deps.config.tiers, io.lead, io.available);
     return { route, difficulty: judged?.difficulty };
   };
@@ -167,39 +189,59 @@ export function createDelegator(deps: DelegateDeps) {
       ...(params.startFrom ? { startFrom: params.startFrom } : {}),
     });
 
-    const task: WorkerTask = {
-      version: 1,
-      id,
-      kind: params.kind,
-      title: params.title,
-      task: params.task,
-      branch,
-      clonePath,
-      resultPath: join(taskDir, "result.json"),
-      sandbox: deps.config.sandbox,
-      jev: deps.config.jev,
-    };
-    const taskPath = join(taskDir, "task.json");
-    await writeFile(taskPath, JSON.stringify(task, null, 2));
-    const argv = deps.workerCommand({
-      taskPath,
-      prompt: workerPrompt(params.kind, params.task),
-      route,
-      skills: WORKER_SKILLS[params.kind],
-      label,
-    });
-    // `herdr pane run` gets one script path; the script owns argument quoting.
-    const script = join(taskDir, "run.sh");
-    await writeFile(script, `#!/bin/sh\ncd ${shellQuote(clonePath)} || exit 1\n${argv.map(shellQuote).join(" ")}\n`, { mode: 0o700 });
-
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => (resolveDone = resolve));
     active.set(id, { id, kind: params.kind, task: params.task, done });
     let tabId: string | undefined;
     try {
+      const toolchainCache = await deps.toolchains?.prepare({
+        repoRoot,
+        clonePath,
+        progress: io.progress,
+        ...(io.confirm ? { confirm: io.confirm } : {}),
+      });
+      const task: WorkerTask = {
+        version: 1,
+        id,
+        kind: params.kind,
+        title: params.title,
+        task: params.task,
+        branch,
+        clonePath,
+        resultPath: join(taskDir, "result.json"),
+        sandbox: deps.config.sandbox,
+        jev: deps.config.jev,
+        ...(toolchainCache ? { toolchainCache } : {}),
+      };
+      const taskPath = join(taskDir, "task.json");
+      await writeFile(taskPath, JSON.stringify(task, null, 2));
+      const argv = deps.workerCommand({
+        taskPath,
+        prompt: workerPrompt(params.kind, params.task),
+        route,
+        label,
+        clonePath,
+        projectTrusted: io.projectTrusted,
+      });
+      // `herdr pane run` gets one script path; the script owns argument quoting.
+      const script = join(taskDir, "run.sh");
+      const exitPath = join(taskDir, "exit");
+      await writeFile(
+        script,
+        [
+          "#!/bin/sh",
+          `cd ${shellQuote(clonePath)} || exit 1`,
+          // Lets Herdr recognise the Pi behind the node process as a Pi agent.
+          "export HERDR_AGENT=pi",
+          argv.map(shellQuote).join(" "),
+          `echo $? > ${shellQuote(exitPath)}`,
+          "",
+        ].join("\n"),
+        { mode: 0o700 },
+      );
       ({ tabId } = await deps.herdr!.openWorkerTab({ label, cwd: clonePath, argv: ["/bin/sh", script] }));
       io.progress(`worker "${label}" started on ${route.model} (${route.thinking}) in a background Herdr tab`);
-      const result = await waitForResult(task.resultPath, id, label, io);
+      const result = await waitForResult({ result: task.resultPath, exit: exitPath }, id, label, io);
       const collected = await deps.workspace.collect({ repoRoot, path: clonePath, branch, base });
       return { id, branch, base, tabId, taskDir, clonePath, result, collected };
     } catch (error) {

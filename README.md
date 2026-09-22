@@ -7,46 +7,59 @@ real work to sandboxed workers that run in background [Herdr](https://herdr.dev)
 tabs on a model chosen by [Jev](https://docs.typesafe.ai).
 
 No commands. Ask "how does the session store work?" and you get an answer.
-Say "let's add CSV export" and the Lead grills you, writes a spec and tickets,
-then delegates each ready ticket.
+Say "let's add CSV export" and the Lead reads Matt's own router, `ask-matt`,
+grills you, writes a spec and tickets, then delegates each ready ticket.
 
 ## How it works
 
 ```
 you ─► Lead (Pi, your tab)
         question            → answered directly
-        vague idea          → grill-with-docs → to-spec → to-tickets (in the conversation)
-        ready ticket / bug / branch review / research
+        anything else       → ask-matt picks the flow: grill-with-docs → to-spec → to-tickets,
+                              triage, wayfinder… (in the conversation)
+        implement / prototype / diagnosing-bugs / code-review / research
                             → delegate tool
                                  Jev: ticket ready? how hard? → model + thinking level
-                                 disposable git clone → Herdr tab (no focus)
+                                 disposable git clone, project mise toolchains (cached)
+                                 → Herdr tab (no focus)
                                  worker Pi: tools inside a Gondolin VM, /skill:implement …
                                  Jev guards egress; worker calls finish
                                  branch fetched back, Jev checks the verdict, tab closed
 ```
 
 - The **Lead** is ordinary Pi plus a short workflow section in its system
-  prompt and one tool, `delegate`. It never intercepts your messages.
+  prompt (questions: answer; otherwise follow `ask-matt`) and one tool,
+  `delegate`. It never intercepts your messages.
 - A **worker** is an interactive Pi session in its own Herdr tab. Its
   `read/write/edit/bash/ls/find/grep` tools run inside a Gondolin micro-VM that
   mounts only a throw-away clone of the repository. The guest never sees your
   environment, credentials or checkout; provider calls stay on the host, so
-  any Pi provider or subscription works.
+  any Pi provider or subscription works. A worker is a Pi like the Lead: same
+  skills, prompts and `AGENTS.md`, plus the repository's own skills when you
+  trust the project, but no host-side extensions except Herdr's Pi
+  integration (working/idle badges).
+- **Toolchains** come from the project's mise config: the first worker runs
+  `mise install` in a sandbox into a per-project cache, later workers mount it
+  read-only and start instantly. (Your Mac's own mise cache holds macOS
+  binaries, which the Linux guest cannot run.)
 - **Jev** answers small closed questions — difficulty, readiness, egress,
   verdict, review severity, failure kind, ticket overlap — and code maps each
   answer to an action. Without a key, documented defaults apply.
 
-Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md)
-and [spec v2](.scratch/pi-lead/spec-v2.md).
+Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
+[ADR 0006](docs/adr/0006-workers-mirror-the-lead.md) and
+[spec v2](.scratch/pi-lead/spec-v2.md).
 
 ## Requirements
 
 - Pi 0.86.x, Node ≥ 23.6 (Gondolin), git, QEMU (`brew install qemu`).
 - Herdr: start the Lead's Pi inside a Herdr pane.
-- A Gondolin image with git, built once:
+- A Gondolin image with git and mise, built once (Docker or Podman):
 
   ```bash
-  npm run sandbox:image          # tags pi-lead:latest
+  npm run sandbox:image              # Debian (glibc) + git + mise → pi-lead:latest
+  npm run sandbox:image -- --alpine  # without Docker; musl, fewer prebuilt mise tools
+  npm run sandbox:smoke              # boots a VM and checks the isolation claims
   ```
 
 - Optional: a TypeSafe or OpenRouter key for Jev in `PI_LEAD_JEV_API_KEY`

@@ -13,7 +13,7 @@ import type { LeadConfig, Tier } from "./config.ts";
  * documented default or ask the human.
  */
 
-export type WorkKind = "implement" | "debug" | "review" | "research";
+export type WorkKind = "implement" | "prototype" | "debug" | "review" | "research";
 export type WorkerVerdict = "done" | "partial" | "blocked" | "needs_human";
 export type FailureKind = "transient" | "environment" | "task_bug" | "needs_info";
 export type ReviewAction = "none" | "auto_fix" | "escalate";
@@ -56,7 +56,7 @@ export const DIFFICULTY_RUBRIC = [
 export function tierForDifficulty(difficulty: number, kind: WorkKind): Tier {
   // Review and debugging read more than they write; never send them to the
   // fast tier.
-  const floor: Tier = kind === "implement" || kind === "research" ? "fast" : "standard";
+  const floor: Tier = kind === "debug" || kind === "review" ? "standard" : "fast";
   const tier: Tier = difficulty < 1.5 ? "fast" : difficulty < 2.8 ? "standard" : "deep";
   const order: Tier[] = ["fast", "standard", "deep"];
   return order[Math.max(order.indexOf(floor), order.indexOf(tier))]!;

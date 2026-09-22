@@ -7,6 +7,8 @@
 import path from "node:path";
 import type { VM } from "@earendil-works/gondolin";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+import { GUEST_WORKSPACE } from "../sandbox.ts";
 import {
 	type BashOperations,
 	createBashTool,
@@ -29,7 +31,6 @@ import {
 	type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
 
-export const GUEST_WORKSPACE = "/workspace";
 const DEFAULT_GREP_LIMIT = 100;
 
 type TextToolResult<TDetails> = {
@@ -297,20 +298,7 @@ async function executeGondolinGrep(
 	};
 }
 
-/**
- * Pi's bash tool hands `exec` the full host environment (API keys included).
- * The upstream example forwards it into the guest; the guest gets a fixed,
- * minimal environment instead.
- */
-const GUEST_ENV: Record<string, string> = {
-	HOME: "/root",
-	PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-	LANG: "C.UTF-8",
-	TERM: "xterm-256color",
-	CI: "1",
-};
-
-function createGondolinBashOps(vm: VM, localCwd: string, shellPath: string): BashOperations {
+function createGondolinBashOps(vm: VM, localCwd: string, shellPath: string, guestEnv: Record<string, string>): BashOperations {
 	return {
 		exec: async (command, cwd, { onData, signal, timeout }) => {
 			if (signal?.aborted) throw new Error("aborted");
@@ -331,7 +319,7 @@ function createGondolinBashOps(vm: VM, localCwd: string, shellPath: string): Bas
 			try {
 				const proc = vm.exec([shellPath, "-lc", command], {
 					cwd: guestCwd,
-					env: GUEST_ENV,
+					env: guestEnv,
 					signal: controller.signal,
 					stdout: "pipe",
 					stderr: "pipe",
@@ -359,7 +347,7 @@ function createGondolinBashOps(vm: VM, localCwd: string, shellPath: string): Bas
 export function registerSandboxTools(
   pi: ExtensionAPI,
   localCwd: string,
-  ensureVm: (ctx?: ExtensionContext) => Promise<{ vm: VM; shellPath: string }>,
+  ensureVm: (ctx?: ExtensionContext) => Promise<{ vm: VM; shellPath: string; env: Record<string, string> }>,
 ): void {
   const templates = {
     read: createReadTool(localCwd),
@@ -395,8 +383,8 @@ export function registerSandboxTools(
   pi.registerTool({
     ...templates.bash,
     async execute(id, params, signal, onUpdate, ctx) {
-      const { vm, shellPath } = await ensureVm(ctx);
-      return createBashTool(GUEST_WORKSPACE, { operations: createGondolinBashOps(vm, localCwd, shellPath) }).execute(id, params, signal, onUpdate);
+      const { vm, shellPath, env } = await ensureVm(ctx);
+      return createBashTool(GUEST_WORKSPACE, { operations: createGondolinBashOps(vm, localCwd, shellPath, env) }).execute(id, params, signal, onUpdate);
     },
   });
   pi.registerTool({
@@ -422,7 +410,7 @@ export function registerSandboxTools(
   });
 
   pi.on("user_bash", async (_event, ctx) => {
-    const { vm, shellPath } = await ensureVm(ctx);
-    return { operations: createGondolinBashOps(vm, localCwd, shellPath) };
+    const { vm, shellPath, env } = await ensureVm(ctx);
+    return { operations: createGondolinBashOps(vm, localCwd, shellPath, env) };
   });
 }
