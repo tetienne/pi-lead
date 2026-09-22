@@ -4,16 +4,16 @@
 
 **Blocked by:** [12: Turn an idea into approved specs and vertical tickets](12-idea-to-tickets.md)
 
-**Status:** ready-for-agent
+**Status:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
 ## Acceptance criteria
 
-- [ ] Verify incoming claims, retain the canonical triage roles and write durable agent-ready briefs; do not retriage generated ready tickets.
-- [ ] Create decision maps with blocking edges, distinguish research from human decisions, and resolve decisions before build tickets.
-- [ ] Preserve human decisions and claims across sessions; a planning map does not authorize implementation.
-- [ ] Handoff and human-only wizard procedures are used when their contracts apply; no external account action is assumed.
+- [x] Verify incoming claims, retain the canonical triage roles and write durable agent-ready briefs; do not retriage generated ready tickets.
+- [x] Create decision maps with blocking edges, distinguish research from human decisions, and resolve decisions before build tickets.
+- [x] Preserve human decisions and claims across sessions; a planning map does not authorize implementation.
+- [x] Handoff and human-only wizard procedures are used when their contracts apply; no external account action is assumed.
 
 ## Context and constraints
 
@@ -43,3 +43,17 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Pi Contracts](../../../docs/research/pi-contracts.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+Implemented the installed Matt triage and wayfinding entry points through `lead-triage` and `lead-wayfind`, plus natural-language routing. Both command and natural-language explicit workflow paths use the same intent-policy entry point. Explicit IDEATE, TRIAGE, and WAYFIND remain available when Jev is absent or misconfigured; natural-language classification still fails closed when Jev is unavailable.
+
+Validation on the final revision `483e79f`:
+
+- `npm run typecheck` passed.
+- `npm test` passed: 127 tests.
+- `git diff --check 20ab69811297aa7085ae2ca6b8112ecfaaa4bb05...HEAD` passed.
+
+Independent review used `git diff 20ab69811297aa7085ae2ca6b8112ecfaaa4bb05...HEAD`. Standards found no documented violation; it noted only an optional duplicated-code observation in the three small workflow-start helpers. Spec review found and verified corrections for explicit command policy routing and explicit fallback when Jev is misconfigured. The correction revisions are `e0a9078` and `483e79f`.
+
+Runtime evidence is the controlled Pi extension seam: tests prove bounded, escaped prompt construction; dispatch to the installed skills; no worker build start; and explicit fallback policy. No live Pi/Matt session created a real incoming triage record or persisted multi-session wayfinding map, and no handoff, wizard, or external account action was executed. Those installed-skill and human-gate behaviors remain deliberately unclaimed until exercised in a consuming project.
