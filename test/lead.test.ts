@@ -404,6 +404,51 @@ test("a natural implementation request resolves repository context without expos
   assert.match(notices.at(-1)?.message ?? "", /PI Lead implement: BLOCKED — controlled stop/);
 });
 
+test("a natural GitHub ticket implementation passes its pinned ticket specification to review", async () => {
+  let inputHandler: ((event: { source: string; text: string }, context: unknown) => Promise<{ action: string }>) | undefined;
+  let specificationSource: string | undefined;
+  const pi = {
+    on(name: string, handler: typeof inputHandler) {
+      if (name === "input") inputHandler = handler;
+      return () => undefined;
+    },
+    registerCommand() {}, appendEntry() {},
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async resolveImplementationInput() {
+      return {
+        namedBase: "main",
+        validationTasks: ["test"],
+        dependencyHosts: [],
+        instruction: "attaque le ticket 302",
+        pinnedSpecification: {
+          source: "github:tetienne/paddock#302",
+          digest: "a".repeat(64),
+          contents: "# 302: Fiche cheval\n",
+        },
+      };
+    },
+    async runCompleteLocalCoding(request) {
+      specificationSource = request.specification.source;
+      return {
+        status: "BLOCKED", taskId: request.taskId, reason: "BUILD_BLOCKED", detail: "controlled stop",
+        reviews: [], reviewHistory: [], reviewCycles: 0, diagnosticsRetained: true,
+        specification: request.specification, standards: request.standards,
+      };
+    },
+    async routeIntent() { return { status: "ROUTED", workflow: "IMPLEMENT", source: "jev" }; },
+  })(pi);
+
+  assert.deepEqual(
+    await inputHandler?.(
+      { source: "user", text: "attaque le ticket 302" },
+      { cwd: process.cwd(), ui: { notify() {} } },
+    ),
+    { action: "handled" },
+  );
+  assert.equal(specificationSource, "github:tetienne/paddock#302");
+});
+
 test("Lead restart admits host-owned recovery before any new engineering task", async () => {
   let sessionStart: ((event: { reason: string }, context: any) => Promise<void>) | undefined;
   let inputHandler: ((event: { source: string; text: string }, context: any) => Promise<{ action: string }>) | undefined;

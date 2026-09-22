@@ -46,6 +46,21 @@ function pinned(source: string, contents: string): PinnedReviewDocument {
   };
 }
 
+/**
+ * Pins specification text obtained from an approved external tracker. The
+ * caller remains responsible for authenticating and authorizing that source;
+ * this boundary gives the later review stages the same immutable contents and
+ * digest they receive for a repository-local specification.
+ */
+export function pinReviewText(source: string, contents: string): PinnedReviewDocument {
+  if (!source || source.includes("\0")) throw new Error("Review source is invalid");
+  if (!contents.trim()) throw new Error(`Review source is empty: ${source}`);
+  if (Buffer.byteLength(contents, "utf8") > MAX_SPECIFICATION_BYTES) {
+    throw new Error(`Review source exceeds ${MAX_SPECIFICATION_BYTES} bytes: ${source}`);
+  }
+  return pinned(source, contents);
+}
+
 export async function pinReviewSpecification(cwd: string, source: string): Promise<PinnedReviewDocument> {
   const root = await realpath(cwd);
   return pinned(source, await readConfinedFile(root, source, MAX_SPECIFICATION_BYTES));

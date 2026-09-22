@@ -13,10 +13,13 @@ import {
 } from "./model-reasoning-routing.ts";
 import { createJevIntentRouter, JEV_WORKFLOWS, type JevRoutingOutcome, type JevWorkflow } from "./jev-intent-routing.ts";
 import { createOpenRouterJevTransport } from "./openrouter-jev-transport.ts";
-import { resolveNaturalImplementationInput } from "./implementation-intake.ts";
+import {
+  resolveNaturalImplementationInput,
+  type ResolvedImplementationInput,
+} from "./implementation-intake.ts";
 import { planningSkillPrompt } from "./planning-intake.ts";
 import { triageSkillPrompt, wayfinderSkillPrompt } from "./tracker-intake.ts";
-import { parseProposedChangeInput } from "./proposed-change-input.ts";
+import { parseProposedChangeInput, type ParsedProposedChangeInput } from "./proposed-change-input.ts";
 import { pinReviewSpecification, pinReviewStandards } from "./review-context.ts";
 import {
   runProposedChangeTask,
@@ -91,7 +94,7 @@ type LeadDependencies = {
   resolveImplementationInput?(
     request: string,
     cwd: string,
-  ): Promise<ReturnType<typeof parseProposedChangeInput>>;
+  ): Promise<ResolvedImplementationInput>;
 };
 
 function parseStandaloneReviewInput(raw: string): {
@@ -708,7 +711,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
     if (dependencies.runCompleteLocalCoding) {
       const runCompleteLocalCoding = dependencies.runCompleteLocalCoding;
       runImplementation = async (args, context) => {
-        let parsed: ReturnType<typeof parseProposedChangeInput>;
+        let parsed: ParsedProposedChangeInput & Pick<ResolvedImplementationInput, "pinnedSpecification">;
         try {
           parsed = parseProposedChangeInput(args);
         } catch (error) {
@@ -728,9 +731,12 @@ export function createLeadExtension(dependencies: LeadDependencies) {
         let specification: CompleteLocalCodingRequest["specification"];
         let standards: CompleteLocalCodingRequest["standards"];
         try {
-          if (!parsed.specSource) throw new Error("implement request requires --spec <relative-markdown-path>");
           [specification, standards] = await Promise.all([
-            pinReviewSpecification(context.cwd, parsed.specSource),
+            parsed.pinnedSpecification ?? (
+              parsed.specSource
+                ? pinReviewSpecification(context.cwd, parsed.specSource)
+                : Promise.reject(new Error("implement request requires --spec <relative-markdown-path>"))
+            ),
             pinReviewStandards(context.cwd),
           ]);
         } catch (error) {

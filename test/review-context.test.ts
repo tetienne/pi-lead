@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { pinReviewSpecification, pinReviewStandards } from "../src/review-context.ts";
+import { pinReviewSpecification, pinReviewStandards, pinReviewText } from "../src/review-context.ts";
+
+test("pins approved tracker text without requiring it to be materialized in the consuming repository", () => {
+  const specification = pinReviewText("github:tetienne/paddock#302", "# 302: Fiche cheval\n");
+
+  assert.deepEqual(specification.source, "github:tetienne/paddock#302");
+  assert.match(specification.digest, /^[0-9a-f]{64}$/);
+  assert.equal(specification.contents, "# 302: Fiche cheval\n");
+});
 
 test("pins repository constraints, security rules, and either ADR convention", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-lead-review-context-"));
