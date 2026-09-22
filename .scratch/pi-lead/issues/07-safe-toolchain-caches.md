@@ -47,11 +47,11 @@ Read source version caveats before using an API; research is source evidence, no
 
 ## Comments
 
+Implemented 2026-09-21. Proposed-change workers now key mise seeds by the committed `.mise.toml`, exact `mise=2025.8.20-r0`, verified Linux guest architecture and musl ABI. A seed is reusable only after a trusted host attests an integrity manifest; Gondolin mounts it read-only and copies it into worker-private mise storage. Worker content has no route to promote back into a seed.
+
+Validation: focused policy/runtime tests, `npm test` (83 passing) and typecheck passed before subsequent Ticket 08 worktree changes; cold/warm Gondolin fixture runs persisted all preparation, readiness and validation timing deltas and reported `NO_IMPROVEMENT` when not every phase improved. The fixture also proved a guest cannot write the seed, that a private poison written by one worker is absent for the next worker sharing that seed, and that host checkout/VM cleanup remain correct. Independent Standards and Spec reviews drove the seed attestation, platform, pinning and measurement corrections. macOS arm64 is the only runtime evidence; Ubuntu 24.04 x86_64/arm64 remains Ticket 08 work.
+
 2026-09-22 scope decision: cache optimization is deferred from the refocused
 current release because the measured warm path did not improve. The private
 writable-storage and no-shared-writable-cache invariants remain product core;
 the seed-reuse implementation and measurements remain development evidence.
-
-Implemented 2026-09-21. Proposed-change workers now key mise seeds by the committed `.mise.toml`, exact `mise=2025.8.20-r0`, verified Linux guest architecture and musl ABI. A seed is reusable only after a trusted host attests an integrity manifest; Gondolin mounts it read-only and copies it into worker-private mise storage. Worker content has no route to promote back into a seed.
-
-Validation: focused policy/runtime tests, `npm test` (83 passing) and typecheck passed before subsequent Ticket 08 worktree changes; cold/warm Gondolin fixture runs persisted all preparation, readiness and validation timing deltas and reported `NO_IMPROVEMENT` when not every phase improved. The fixture also proved a guest cannot write the seed, that a private poison written by one worker is absent for the next worker sharing that seed, and that host checkout/VM cleanup remain correct. Independent Standards and Spec reviews drove the seed attestation, platform, pinning and measurement corrections. macOS arm64 is the only runtime evidence; Ubuntu 24.04 x86_64/arm64 remains Ticket 08 work.

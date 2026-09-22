@@ -21,9 +21,8 @@ workflows, with visible isolated workers and a verifiable final result.
   review, result collection and confirmed cleanup.
 - [ ] Exercise debug and read-only review through the same Lead interface and
   verify that ordinary chat creates no unnecessary worker.
-- [ ] Confirm native command discovery exposes only the approved escape hatch
-  and operational controls, with no provider-, skill-, fixture- or stage-specific
-  product commands.
+- [ ] Confirm native command discovery exposes only `/lead <request>`, with no
+  provider-, skill-, fixture-, stage-specific or operational PI Lead commands.
 - [ ] Report measured evidence and explicit limits without making claims for
   deferred Linux, OpenCode Go, publication, cache or advanced scheduler work.
 - [ ] Replace the superseded Ticket 16 acceptance narrative in the README with a
@@ -33,9 +32,9 @@ workflows, with visible isolated workers and a verifiable final result.
 
 This ticket replaces Ticket 16. A mutable local archive is sufficient to prove
 the interaction and isolation path; publishing an npm/git destination is not a
-prerequisite unless Ticket 17 deliberately retains native pin publication in
-the current contract. Ubuntu and OpenCode Go remain separate deferred evidence,
-not hidden requirements for this macOS/ChatGPT acceptance.
+prerequisite. Automatic publication is deferred by Ticket 17. Ubuntu and
+OpenCode Go remain separate deferred evidence, not hidden requirements for this
+macOS/ChatGPT acceptance.
 
 DONE still requires attributable output, final-revision validation/review for
 code changes, collected artifacts and confirmed worker/VM/tab cleanup. A model
@@ -46,8 +45,9 @@ claim, quiet terminal or passing unit test alone is insufficient.
 Run deterministic tests and typecheck, then the smallest real integration set
 needed to prove the conversation-first seam, Jev judgment, Matt workflow,
 Herdr visibility, Gondolin isolation and final cleanup together. Record exact
-commands, environment, results and unrun scenarios. Stop at any credential or
-publication human gate and request only the concrete action needed.
+commands, environment, results and unrun scenarios. Stop at a credential human
+gate and request only the concrete action needed; do not open a publication
+gate for this release.
 
 ## Primary context
 

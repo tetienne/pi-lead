@@ -12,8 +12,8 @@ development tooling.
 ## Acceptance criteria
 
 - [ ] Remove the provider-, skill- and stage-specific public commands replaced
-  by the unified orchestrator; retain only the approved escape hatch and any
-  explicitly approved operational commands such as status or cancel.
+  by the unified orchestrator; retain only `/lead <request>`. Cancellation uses
+  native Pi interruption/session shutdown and status stays conversational.
 - [ ] Keep fixture and live-proof runners available as development scripts
   without registering them as product workflows.
 - [ ] Every shipped feature module is reachable from the Lead through the

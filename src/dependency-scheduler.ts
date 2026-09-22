@@ -138,11 +138,20 @@ function digest(contents: string): string {
 }
 
 function ticketStatus(contents: string, sourcePath: string): LocalTicket["status"] {
+  const resolution = /^\*\*Resolution:\*\*\s*(.+)$/im.exec(contents)?.[1]?.trim().toUpperCase();
+  if (resolution === "DONE") return "DONE";
   const match = /^\*\*Status:\*\*\s*(.+)$/im.exec(contents) ?? /^Status:\s*(.+)$/im.exec(contents);
   const value = match?.[1]?.trim().toUpperCase();
   if (value === "DONE") return "DONE";
   if (value === "READY-FOR-AGENT" || value === "READY") return "READY";
-  if (value === "BLOCKED" || value === "IN PROGRESS") return "BLOCKED";
+  if (
+    value === "BLOCKED" ||
+    value === "IN PROGRESS" ||
+    value === "NEEDS-TRIAGE" ||
+    value === "NEEDS-INFO" ||
+    value === "READY-FOR-HUMAN" ||
+    value === "WONTFIX"
+  ) return "BLOCKED";
   throw new Error(`Ticket ${basename(sourcePath)} has no executable Status`);
 }
 

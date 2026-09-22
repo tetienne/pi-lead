@@ -26,7 +26,7 @@ function ownership(claim: SchedulerClaim) {
 
 async function approvedGraph(root: string, authorizedTicketIds = ["02", "03", "04"]) {
   await writeFile(join(root, "spec.md"), "# Example\n\nStatus: ready-for-agent\nApproval: approved by the user\n");
-  await writeFile(join(root, "01-foundation.md"), "# 01: Foundation\n\n**Blocked by:** none\n\n**Status:** DONE\n\n## Acceptance criteria\n\n- [x] Foundation exists.\n");
+  await writeFile(join(root, "01-foundation.md"), "# 01: Foundation\n\n**Blocked by:** none\n\n**Status:** ready-for-human\n\n**Resolution:** DONE\n\n## Acceptance criteria\n\n- [x] Foundation exists.\n");
   await writeFile(join(root, "02-independent.md"), "# 02: Independent\n\n**Blocked by:** none\n\n**Status:** ready-for-agent\n\n## Acceptance criteria\n\n- [ ] Independent work is verified.\n");
   await writeFile(join(root, "03-dependent.md"), "# 03: Dependent\n\n**Blocked by:** [01: Foundation](01-foundation.md)\n\n**Status:** ready-for-agent\n\n## Acceptance criteria\n\n- [ ] Dependent work is verified.\n");
   await writeFile(join(root, "04-waiting.md"), "# 04: Waiting\n\n**Blocked by:** [03: Dependent](03-dependent.md)\n\n**Status:** ready-for-agent\n\n## Acceptance criteria\n\n- [ ] Waiting work is verified.\n");

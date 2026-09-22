@@ -7,7 +7,9 @@ remain internal.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** DONE
+**Status:** ready-for-human
+
+**Resolution:** DONE
 
 ## Acceptance criteria
 
@@ -59,6 +61,11 @@ on 2026-09-22.
 
 ## Comments
 
+Created after the 2026-09-22 scope audit. The audit found eight public Lead
+commands spanning providers, workflow stages and development fixtures, while
+several modules marked DONE were not reachable from the main Lead extension.
+The user approved this ticket and the 17 → 18 → 19 → 20 cleanup sequence.
+
 Implemented 2026-09-22. The standalone specification now makes ordinary Lead
 conversation the primary interface and `/lead <request>` the sole explicit
 escape hatch. It inventories all eight currently registered commands, both
@@ -77,13 +84,6 @@ evidence now use the same boundary.
 
 Validation: command discovery and the 45-module inventory were mechanically
 cross-checked against `src/lead.ts` and `src/*.ts`; `git diff --check`,
-`npm run typecheck` and the full 138-test suite pass. The first full suite run
-found that the scheduler's local tracker parser accepts `BLOCKED` but not new
-`DEFERRED`/`SUPERSEDED` status tokens; the tracker now uses canonical `BLOCKED`
-statuses with explicit deferred/superseded reasons, and the focused scheduler
-test plus the full suite pass.
-
-Created after the 2026-09-22 scope audit. The audit found eight public Lead
-commands spanning providers, workflow stages and development fixtures, while
-several modules marked DONE were not reachable from the main Lead extension.
-The user approved this ticket and the 17 → 18 → 19 → 20 cleanup sequence.
+`npm run typecheck` and the full 138-test suite pass. Review corrections aligned
+ticket status with the canonical triage roles, made downstream blockers
+explicit and closed the command/publication ambiguities in Tickets 19 and 20.

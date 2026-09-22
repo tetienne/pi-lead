@@ -46,12 +46,12 @@ Read source version caveats before using an API; research is source evidence, no
 
 ## Comments
 
+Implemented 2026-09-21. The host-owned publication boundary accepts only the already-reviewed `pi-lead/task-<task-id>` branch and one explicitly configured `PI_LEAD_GIT_REMOTE` plus `PI_LEAD_GIT_REMOTE_URL`. It validates local and remote refs against the final commit, rejects missing or ambiguous configuration, protected/arbitrary branch names and existing different remote task branches, and has no force/refspec/remote-creation mode. Intent is journaled before dispatch and the observed commit/diagnostic outcome is journaled after reconciliation; failed or uncertain outcomes retain the local commit and return `BLOCKED / PUBLICATION_BLOCKED`. PRs, merges, deployments and privileged actions have no automatic route; their approval token binds the operation and exact branch revision.
+
+Validation: focused disposable-remote publication tests (success, missing/ambiguous configuration, rejected push, protected/arbitrary refs and unrelated remote branch), state-bound human-gate token tests, task-lifecycle publication/uncertainty tests, `npm test`, `npm run typecheck`, `git diff --check`, and independent Standards/Spec review. No live remote, protected-branch provider policy, provider, host-architecture or security scenario is claimed by this slice.
+
 2026-09-22 scope decision: the policy implementation and evidence remain DONE,
 but automatic publication is deferred from the refocused current release. The
 product now completes at validated, independently reviewed local task-branch
 commits and reports publication as deferred. A later contract may deliberately
 reuse this module; its existence does not make push part of the Lead interface.
-
-Implemented 2026-09-21. The host-owned publication boundary accepts only the already-reviewed `pi-lead/task-<task-id>` branch and one explicitly configured `PI_LEAD_GIT_REMOTE` plus `PI_LEAD_GIT_REMOTE_URL`. It validates local and remote refs against the final commit, rejects missing or ambiguous configuration, protected/arbitrary branch names and existing different remote task branches, and has no force/refspec/remote-creation mode. Intent is journaled before dispatch and the observed commit/diagnostic outcome is journaled after reconciliation; failed or uncertain outcomes retain the local commit and return `BLOCKED / PUBLICATION_BLOCKED`. PRs, merges, deployments and privileged actions have no automatic route; their approval token binds the operation and exact branch revision.
-
-Validation: focused disposable-remote publication tests (success, missing/ambiguous configuration, rejected push, protected/arbitrary refs and unrelated remote branch), state-bound human-gate token tests, task-lifecycle publication/uncertainty tests, `npm test`, `npm run typecheck`, `git diff --check`, and independent Standards/Spec review. No live remote, protected-branch provider policy, provider, host-architecture or security scenario is claimed by this slice.

@@ -4,7 +4,7 @@
 
 **Blocked by:** [07: Reuse safe toolchain caches across repeated tasks](07-safe-toolchain-caches.md); [11: Select allowed models and reasoning at worker spawn](11-model-reasoning-routing.md); [13: Diagnose bugs and review existing branches](13-debug-and-review.md); [14: Triage incoming work and resolve large design maps](14-triage-and-wayfinding.md); [15: Execute the dependency frontier with two workers](15-dependency-scheduler.md)
 
-**Status:** BLOCKED
+**Status:** wontfix
 
 **Execution gate:** superseded by [20: Validate the refocused product in a
 consuming project](20-refocused-product-acceptance.md). The publication gate
@@ -56,12 +56,6 @@ Read source version caveats before using an API; research is source evidence, no
 
 ## Comments
 
-2026-09-22 scope audit: this acceptance ticket validated the broad 16-ticket
-program rather than the original conversation-first product. It is superseded,
-not completed. Ticket 20 replaces it with acceptance of the single Lead
-interface and treats provider publication, Linux, OpenCode Go and advanced
-scheduling as separate or deferred concerns.
-
 2026-09-22: The user explicitly approved bypassing Tickets 08 and 09 for this release. Ticket 16 now accepts only macOS arm64/ChatGPT Pro evidence. Ubuntu 24.04 x86_64/arm64 and a successful OpenCode Go worker remain deferred, with no compatibility or successful-provider claim; Ticket 08 and Ticket 09 remain BLOCKED rather than DONE.
 
 2026-09-22: Implemented the current-release acceptance guard and recorded the
@@ -97,3 +91,9 @@ findings: no newly run authenticated provider/Herdr final scenario, no final
 retention/tab inventory, and no true native Pi install/upgrade pin. Those are
 the reasons this ticket remains BLOCKED, rather than a claim that local fixtures
 complete the release.
+
+2026-09-22 scope audit: this acceptance ticket validated the broad 16-ticket
+program rather than the original conversation-first product. It is superseded,
+not completed. Ticket 20 replaces it with acceptance of the single Lead
+interface and treats provider publication, Linux, OpenCode Go and advanced
+scheduling as separate or deferred concerns.

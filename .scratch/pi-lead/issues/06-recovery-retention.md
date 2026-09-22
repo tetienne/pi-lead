@@ -2,9 +2,9 @@
 
 **What to build:** after a Lead/wrapper failure, tab closure or interrupted push, recover an accurate task view without duplicate execution, and resume only after confirmation.
 
-**Blocked by:** [05: Push validated task branches through explicit policy](05-controlled-push.md)
+**Blocked by:** [05: Push validated task branches through explicit policy](05-controlled-push.md); [18: Execute Matt workflows through one orchestrator](18-unified-orchestration.md)
 
-**Status:** IN PROGRESS
+**Status:** ready-for-agent
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -49,13 +49,13 @@ Read source version caveats before using an API; research is source evidence, no
 
 ## Comments
 
-2026-09-22 scope audit: the recovery store and reconciliation behavior exist and
-are covered by controlled tests, but the main Lead extension does not call this
-module. The ticket is not DONE until an interrupted real Lead task enters this
-reconciliation path and exposes the required confirmation to the user. Ticket
-18 will place recovery behind the unified orchestration interface; Ticket 20
-will provide final end-to-end evidence.
-
 Implemented 2026-09-21. Host-owned durable task records now atomically retain correlated task/attempt/worker/VM/Pi/Herdr identity, Git revisions, action intent/outcome pairs, approvals, verification and review evidence, artifacts, cleanup state and diagnostic retention metadata. A per-project writer lease serializes recovery state transitions. Reconciliation stops and re-observes surviving workers, validates VM/Pi/Herdr/Git identity and state, records uncertain prompts/pushes without replaying them, and requires explicit confirmation before a clean recovery returns to READY. It has no guest-session restore operation. DONE is rejected without final-revision verification, two independent review artifacts, collected artifacts, resolved actions and confirmed cleanup. Successful diagnostic logs are removed after seven days; failed diagnostics require explicit clearing and neither path touches delivered branches or commits.
 
 Validation: test-first focused recovery coverage (uncertain actions, VM re-observation, stale identities, cleanup failure, writer serialization, completion evidence, retention and explicit diagnostic clearing), focused TypeScript check, `npm test`, `npm run typecheck` and independent Standards/Spec review. No live VM/provider/Herdr/Git integration is claimed by this slice.
+
+2026-09-22 scope audit: the recovery store and reconciliation behavior exist and
+are covered by controlled tests, but the main Lead extension does not call this
+module. The ticket is not resolved until an interrupted real Lead task enters
+this reconciliation path and exposes the required confirmation to the user.
+Ticket 18 will place recovery behind the unified orchestration interface;
+Ticket 20 will provide final end-to-end evidence.
