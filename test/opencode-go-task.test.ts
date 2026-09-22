@@ -67,7 +67,11 @@ test("the native Go runtime persists Pi's provider and selected model before sta
         const launch = JSON.parse(await readFile(join(directory, "launch.json"), "utf8")) as { modelId: string; policy: unknown; workerId: string };
         assert.equal(launch.modelId, "gpt-5.6-luna");
         assert.deepEqual(launch.policy, { provider: "opencode-go", allowedHosts: ["opencode.ai"], allowWebSockets: false, hostMounts: [], inheritHostEnvironment: false });
-        await writeFile(join(directory, "resources.json"), JSON.stringify({ workerId: launch.workerId, vmId: "vm-go" }));
+        await writeFile(join(directory, "resources.json"), JSON.stringify({
+          workerId: launch.workerId,
+          vmId: "vm-go",
+          effectiveRoute: { provider: "opencode-go", modelId: launch.modelId, reasoning: "off" },
+        }));
       },
     },
   });

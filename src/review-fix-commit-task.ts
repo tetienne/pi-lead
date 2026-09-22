@@ -272,21 +272,27 @@ export async function runReviewFixCommitTask(
       return blocked(task.taskId, "BUILD_BLOCKED", "Proposal is unavailable for review", reviewCycles, [], reviewHistory, task);
     }
     const source = comparisonSource(reviewedProposal);
-    const reviewResults = await Promise.allSettled(
-        REVIEW_AXES.map((axis) =>
-          useWorker(() => runtime.review(
-            {
-              task,
-              proposal: reviewedProposal,
-              axis,
-              comparisonSource: source,
-              specification: task.specification,
-              standards: task.standards,
-            },
-            options.signal,
-          )),
-        ),
-      );
+    // Review contexts remain independent, but run sequentially so the durable
+    // task record always has one unambiguous owned worker identity to recover.
+    const reviewResults: PromiseSettledResult<ReviewReport>[] = [];
+    for (const axis of REVIEW_AXES) {
+      try {
+        reviewResults.push({ status: "fulfilled", value: await useWorker(() => runtime.review(
+          {
+            task,
+            proposal: reviewedProposal,
+            axis,
+            comparisonSource: source,
+            specification: task.specification,
+            standards: task.standards,
+          },
+          options.signal,
+        )) });
+      } catch (reason) {
+        reviewResults.push({ status: "rejected", reason });
+        break;
+      }
+    }
     const failedReview = reviewResults.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );

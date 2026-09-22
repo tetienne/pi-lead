@@ -19,8 +19,10 @@ import {
 } from "./chatgpt-task.ts";
 import { MAX_CHATGPT_TASK_CHARS } from "./chatgpt-input.ts";
 import type { HerdrClient } from "./native-runtime.ts";
-import { PI_REASONING_LEVELS, type EffectivePiRoute, type PiReasoningLevel } from "./model-reasoning-routing.ts";
+import type { EffectivePiRoute, PiReasoningLevel } from "./model-reasoning-routing.ts";
+import { parseEffectivePiRoute } from "./effective-route-observation.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
+import type { NativeWorkerCleanupObserver, NativeWorkerObserver, NativeWorkerResultObserver } from "./native-worker-observation.ts";
 
 const execFileAsync = promisify(execFile);
 const NATIVE_EVENTS = new Set<NativePiEvent>([
@@ -44,12 +46,16 @@ type NativeChatGptRuntimeOptions = {
   modelId?: string;
   reasoning?: PiReasoningLevel;
   onWorkerSpawn?(effective: EffectivePiRoute): void;
+  onWorkerOwned?: NativeWorkerObserver;
+  onWorkerResult?: NativeWorkerResultObserver;
+  onWorkerCleaned?: NativeWorkerCleanupObserver;
   workspaceId?: string;
   stateRoot?: string;
   herdr?: HerdrClient;
   processHost?: ChatGptProcessHost;
   pollIntervalMs?: number;
   providerProfile?: "chatgpt" | "opencode-go";
+  workerPhase?: "DISCOVER" | "DEBUG" | "BUILD" | "VERIFY";
 };
 
 type RunState = {
@@ -213,19 +219,6 @@ function requireString(value: unknown, field: string, maxLength = 1024 * 1024): 
   return value[field];
 }
 
-function parseEffectiveRoute(value: unknown, provider: EffectivePiRoute["provider"]): EffectivePiRoute {
-  if (!isRecord(value) || !isRecord(value.effectiveRoute)) {
-    throw new Error("Invalid worker route observation");
-  }
-  const route = value.effectiveRoute;
-  const modelId = requireString(route, "modelId", 160);
-  const reasoning = requireString(route, "reasoning", 16);
-  if (route.provider !== provider || !(PI_REASONING_LEVELS as readonly string[]).includes(reasoning)) {
-    throw new Error("Invalid worker route observation");
-  }
-  return { provider, modelId, reasoning: reasoning as PiReasoningLevel };
-}
-
 function parseNativeEvents(value: unknown): NativePiEvent[] {
   if (!isRecord(value) || !Array.isArray(value.nativeEvents)) {
     throw new Error("Invalid ChatGPT artifact: nativeEvents");
@@ -354,6 +347,7 @@ export async function createNativeChatGptRuntime(
           modelId,
           reasoning,
           controllerHeartbeatTimeoutMs: 5_000,
+          controllerAdmissionRequired: true,
           policy: {
             provider: profileRequest.provider,
             ...(profile === "chatgpt" ? { transport: request.transport, cacheWarming: request.cacheWarming } : {}),
@@ -378,8 +372,6 @@ export async function createNativeChatGptRuntime(
         if (requireString(resources, "workerId", 160) !== workerId) {
           throw new Error("Launcher returned the wrong worker identity");
         }
-        const provider = profile === "chatgpt" ? "openai-codex" : "opencode-go";
-        if (options.onWorkerSpawn) options.onWorkerSpawn(parseEffectiveRoute(resources, provider));
         const worker: ChatGptWorker = {
           taskId: request.taskId,
           assignmentId: request.assignmentId,
@@ -389,6 +381,13 @@ export async function createNativeChatGptRuntime(
           paneId: tab.paneId,
           piSessionId,
         };
+        const provider = profile === "chatgpt" ? "openai-codex" : "opencode-go";
+        const effectiveRoute = parseEffectivePiRoute(resources, provider, "worker");
+        if (options.onWorkerSpawn) options.onWorkerSpawn(effectiveRoute);
+        if (options.onWorkerOwned) {
+          await options.onWorkerOwned({ effectiveRoute, identity: worker, stateDirectory: directory, phase: options.workerPhase ?? "DISCOVER" });
+        }
+        await writeJsonAtomically(join(directory, "dispatch.json"), { admitted: true });
         runs.set(worker.vmId, { directory, heartbeat, worker });
         return worker;
       } catch (error) {
@@ -434,7 +433,11 @@ export async function createNativeChatGptRuntime(
         const error = await readJsonIfPresent(join(run.directory, "error.json"));
         if (error !== undefined) throw new Error(requireString(error, "detail", 16_384));
         const result = await readJsonIfPresent(join(run.directory, "result.json"));
-        if (result !== undefined) return parseResult(result);
+        if (result !== undefined) {
+          const parsed = parseResult(result);
+          await options.onWorkerResult?.(worker);
+          return parsed;
+        }
         await wait(pollIntervalMs, signal);
       }
     },
@@ -472,6 +475,8 @@ export async function createNativeChatGptRuntime(
 
     async closeSuccessfulTab(tabId: string): Promise<void> {
       await herdr.closeTab(tabId);
+      const run = [...runs.values()].find((candidate) => candidate.worker.tabId === tabId);
+      if (run) await options.onWorkerCleaned?.(run.worker);
     },
   };
 }

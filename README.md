@@ -8,11 +8,11 @@ The original specification and 16-ticket implementation program have been
 audited against the bootstrap brief. Their isolation, policy and lifecycle
 evidence is retained, but the product surface drifted into provider-, skill- and
 stage-specific commands before the conversation-first Lead path was complete.
-The approved cleanup is now Tickets 17–20: refocus the contract, connect one
+The approved cleanup is Tickets 17–20: refocus the contract, connect one
 orchestrator, contract the public surface, then validate the refocused product.
 
-Ticket 17 defines the approved product interface; Tickets 18–20 still have to
-make and prove it. Until then, the specialized commands retained in the source
+Tickets 17 and 18 define and implement the unified product interface; Tickets
+19–20 still have to contract and prove it. Until then, the specialized commands retained in the source
 are compatibility and development evidence, not the supported user experience.
 
 ## Approved product interface
@@ -41,7 +41,7 @@ module disposition is recorded in the
 - [Bootstrap brief](PI_LEAD_BOOTSTRAP.md)
 - [Approved specification](.scratch/pi-lead/spec.md)
 - [Ticket graph and index](.scratch/pi-lead/ticket-proposal.md)
-- [Current cleanup frontier](.scratch/pi-lead/issues/18-unified-orchestration.md)
+- [Current cleanup frontier](.scratch/pi-lead/issues/19-contract-public-surface.md)
 - [First ticket: isolated fixture](.scratch/pi-lead/issues/01-isolated-fixture.md)
 - [Second ticket: ChatGPT worker](.scratch/pi-lead/issues/02-chatgpt-worker.md)
 - [Third ticket: validated proposed change](.scratch/pi-lead/issues/03-validated-proposed-change.md)
@@ -140,6 +140,11 @@ npm run chatgpt-reflection-fixture
 The first proves a complete native Pi SSE turn against an in-memory fake upstream, including host-only credential injection and guest-storage scanning. The second proves cancellation before the provider call and zero upstream requests. The third makes the allowed upstream reflect the injected bearer across response chunks and proves that the host blocks it before it reaches Pi, guest storage remains clean and host artifacts remain redacted.
 
 `npm run chatgpt-live` performs the minimal real subscription-backed proof. Do not run it until the operator has checked the current Codex usage dashboard and confirmed that no purchased or workspace credits can be consumed. OAuth readiness proves authentication only; it does not prove that usage cannot spill from included plan limits into credits. Quota exhaustion, refresh failure and model unavailability stop the worker with no API-key or paid-provider fallback.
+
+The unified orchestrator applies the same gate: set
+`PI_LEAD_CHATGPT_INCLUDED_QUOTA_CONFIRMED=yes` only for a session in which the
+operator has made that current confirmation. Without it, worker admission stops
+before dispatch.
 
 Current runtime evidence covers macOS arm64 only. Ubuntu 24.04 and Linux arm64/x86_64 remain unrun. A missing/incompatible native Herdr pane identity is a feasibility blocker; the implementation does not fall back to host execution or weaken isolation.
 

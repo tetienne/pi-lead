@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -12,6 +13,14 @@ import {
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
 
 const execFileAsync = promisify(execFile);
+
+export function projectTaskStateRoot(
+  cwd: string,
+  stateRoot = process.env.PI_LEAD_STATE_DIR ?? join(homedir(), ".local", "state", "pi-lead"),
+): string {
+  const projectId = createHash("sha256").update(resolve(cwd)).digest("hex");
+  return join(stateRoot, "projects", projectId);
+}
 
 function findArrayField(value: unknown, field: string): unknown[] | undefined {
   if (!isRecord(value)) return undefined;
@@ -110,7 +119,7 @@ export async function recoverNativeInterruptedTasks(options: {
   cwd: string;
   stateRoot?: string;
 }) {
-  const root = options.stateRoot ?? process.env.PI_LEAD_STATE_DIR ?? join(homedir(), ".local", "state", "pi-lead");
+  const root = projectTaskStateRoot(options.cwd, options.stateRoot);
   const store = new TaskRecordStore({ root });
   const results = [];
   for (const taskId of await store.listInterruptedTaskIds()) {

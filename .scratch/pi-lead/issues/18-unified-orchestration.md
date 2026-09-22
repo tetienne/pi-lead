@@ -9,23 +9,25 @@ execution stage.
 
 **Status:** ready-for-agent
 
+**Resolution:** DONE
+
 ## Acceptance criteria
 
-- [ ] Route CHAT, IMPLEMENT, IDEATE, DEBUG, REVIEW, RESEARCH, TRIAGE and WAYFIND
+- [x] Route CHAT, IMPLEMENT, IDEATE, DEBUG, REVIEW, RESEARCH, TRIAGE and WAYFIND
   from the same native Pi input seam; consequential ambiguity asks for
   clarification and OPERATE remains subject to deterministic human gates.
-- [ ] Map admitted intents to the installed Matt skill contracts rather than a
+- [x] Map admitted intents to the installed Matt skill contracts rather than a
   second workflow engine; code-changing paths include validation and independent
   review against the final revision.
-- [ ] Apply deterministic policy after each Jev judgment, select and verify the
+- [x] Apply deterministic policy after each Jev judgment, select and verify the
   effective model/reasoning route at worker spawn, and keep provider identity
   out of the user request.
-- [ ] Reuse the existing isolated worker, debug/review, planning, recovery and
+- [x] Reuse the existing isolated worker, debug/review, planning, recovery and
   result-correlation implementations where they satisfy the refocused contract;
   no duplicate lifecycle is introduced.
-- [ ] A natural-language implementation request reaches an attributable result
+- [x] A natural-language implementation request reaches an attributable result
   or precise BLOCKED outcome and reports checks, review, Git state and cleanup.
-- [ ] Keep legacy commands temporarily as compatibility adapters only while this
+- [x] Keep legacy commands temporarily as compatibility adapters only while this
   expanded path lands; they must invoke the same orchestration interface and are
   removed by Ticket 19.
 
@@ -87,3 +89,29 @@ Validation for this slice: `npm test` (140 passing), `npm run typecheck`, and
 `git diff --check` passed. Independent Standards review found no hard
 repository-standard violation; it identified the remaining compatibility
 adapter gap above.
+
+2026-09-22: DONE. The conversation-first input seam and `/lead` now share one
+orchestrator for every intent. Clear engineering requests retain a deterministic
+fallback when Jev is unavailable, while mixed consequential requests ask for
+clarification. IMPLEMENT and DEBUG use the validated, independently reviewed
+local-commit lifecycle; REVIEW remains read-only; RESEARCH runs the pinned Matt
+research skill in the isolated private-workspace lifecycle with explicit source
+hosts, requires one cited Markdown-note proposal, and stops at human review;
+IDEATE, TRIAGE and WAYFIND enter their installed Matt contracts; OPERATE remains
+a human gate.
+
+Native worker dispatch now follows durable controller admission. Per-project
+records preserve every worker identity, intended and observed prompt, result
+artifact and cleanup observation; restart recovery reconciles actual resources
+without replay and an explicit confirmation supersedes the interrupted attempt
+before a fresh attributable submission. Effective model/reasoning is checked at
+spawn against freshly re-read subscription/quota policy. Automatic publication
+is not exposed by the production completion runtime, and the legacy proposal
+adapter remains `BLOCKED/HUMAN_REVIEW_REQUIRED` rather than claiming DONE.
+
+Validation: `npm test` (158 passing), `npm run typecheck`, and
+`git diff --check`. Independent Standards and Spec review drove corrections to
+outage admission, publication, research completion, durable cleanup, recovery
+supersession and compatibility-gate recording. No live provider, Herdr,
+Gondolin or security-compatibility claim was added; Ticket 20 owns that current
+release acceptance.

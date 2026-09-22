@@ -5,6 +5,7 @@
   "type": "module",
   "files": [
     ".mise.toml",
+    ".agents/skills/research/SKILL.md",
     "README.md",
     "src"
   ],

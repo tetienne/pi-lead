@@ -125,3 +125,43 @@ test("steering and extension-originated text never create a second worker task",
   );
   assert.equal(runCount, 0);
 });
+
+test("streaming follow-ups stay in the current turn while an ordinary concurrent request gets new admission", async () => {
+  let inputHandler: ((event: any, context: any) => Promise<{ action: string }>) | undefined;
+  let release: (() => void) | undefined;
+  const sent: string[] = [];
+  let naturalRoutes = 0;
+  const pi = {
+    on(event: string, handler: typeof inputHandler) {
+      if (event === "input") inputHandler = handler;
+      return () => undefined;
+    },
+    registerCommand() {}, appendEntry() {},
+    sendUserMessage(message: string) { sent.push(message); },
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async runChatGpt(request) {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return {
+        status: "DONE", ...request, workerId: "worker", vmId: "vm", tabId: "tab", paneId: "pane",
+        piSessionId: "session", artifactId: "artifact", output: "done", vmTerminated: true,
+      };
+    },
+    async routeIntent(_input, explicit) {
+      if (explicit === "CHAT") return { status: "ROUTED", workflow: "CHAT", source: "explicit" };
+      naturalRoutes++;
+      return { status: "ROUTED", workflow: "IDEATE", source: "jev" };
+    },
+  })(pi);
+  const context = { cwd: process.cwd(), ui: { notify() {} } };
+
+  const active = inputHandler?.({ text: "Lead: ask worker inspect this", source: "interactive" }, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(await inputHandler?.({ text: "more detail", source: "interactive", streamingBehavior: "followUp" }, context), { action: "continue" });
+  assert.deepEqual(await inputHandler?.({ text: "plan a separate change", source: "interactive" }, context), { action: "handled" });
+  assert.equal(naturalRoutes, 1);
+  assert.match(sent[0] ?? "", /^\/skill:ask-matt /);
+  release?.();
+  await active;
+});

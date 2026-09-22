@@ -39,6 +39,7 @@ export function createProposedChangePolicy(options: {
   workerId: string;
   dependencyHosts: readonly string[];
   validationTasks: readonly string[];
+  includeProviderHost?: boolean;
 }): ProposedChangePolicy {
   if (!SAFE_ID_PATTERN.test(options.workerId)) throw new Error("Invalid worker ID");
   const dependencyHosts = [...new Set(options.dependencyHosts.map(requireHost))];
@@ -52,7 +53,10 @@ export function createProposedChangePolicy(options: {
       command: Object.freeze(["mise", "run", task] as const),
     });
   });
-  const allowedHosts = Object.freeze(["chatgpt.com", ...dependencyHosts]);
+  const allowedHosts = Object.freeze([
+    ...(options.includeProviderHost === false ? [] : ["chatgpt.com"]),
+    ...dependencyHosts,
+  ]);
   const allowedDependencies = new Set(dependencyHosts);
   return {
     network: Object.freeze({

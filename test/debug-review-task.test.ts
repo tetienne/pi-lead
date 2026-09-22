@@ -313,7 +313,7 @@ test("a standalone review blocks if its supposedly read-only workers changed wor
   assert.equal(result.status === "BLOCKED" && result.reason, "REVIEW_EVIDENCE_INVALID");
 });
 
-test("a failed parallel review retains its completed independent report after confirming no mutation", async () => {
+test("a failed independent review retains its completed sibling report after confirming no mutation", async () => {
   const standards = document("AGENTS.md", "standards");
   const specification = document("spec.md", "specification");
   const runtime: StandaloneBranchReviewRuntime = {

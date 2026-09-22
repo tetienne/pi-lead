@@ -25,9 +25,11 @@ export type DurableTaskAction = {
 export type DurableTaskRecord = {
   schemaVersion: 1;
   taskId: string;
+  workflow?: "IMPLEMENT" | "DEBUG" | "REVIEW" | "RESEARCH" | "CHAT" | "CHANGE" | "FIXTURE";
   status: "INTAKE" | "DISCOVER" | "DEBUG" | "PLAN" | "READY" | "BUILD" | "VERIFY" | "FIX" | "DONE" | "BLOCKED";
   blockedReason?: RecoveryReason;
   identity: TaskIdentity;
+  workerHistory?: readonly TaskIdentity[];
   baseCommit: string;
   finalCommit?: string;
   branchName: string;
@@ -57,7 +59,9 @@ export type RecoveryReason =
   | "GIT_IDENTITY_MISMATCH"
   | "CLEANUP_UNCONFIRMED"
   | "DIAGNOSTIC_TAB_MISSING"
-  | "RESUME_CONFIRMATION_REQUIRED";
+  | "RESUME_CONFIRMATION_REQUIRED"
+  | "HUMAN_REVIEW_REQUIRED"
+  | "SUPERSEDED_BY_NEW_ATTEMPT";
 
 export type RecoveryResult = {
   status: "BLOCKED";
@@ -148,6 +152,7 @@ function validateRecord(value: unknown): DurableTaskRecord {
   }
   if (
     !isRecord(value.identity) ||
+    (value.workflow !== undefined && !["IMPLEMENT", "DEBUG", "REVIEW", "RESEARCH", "CHAT", "CHANGE", "FIXTURE"].includes(String(value.workflow))) ||
     !["INTAKE", "DISCOVER", "DEBUG", "PLAN", "READY", "BUILD", "VERIFY", "FIX", "DONE", "BLOCKED"].includes(String(value.status)) ||
     !Array.isArray(value.actions) ||
     typeof value.attempts !== "number" || !Number.isSafeInteger(value.attempts) || value.attempts < 1 ||
@@ -165,6 +170,11 @@ function validateRecord(value: unknown): DurableTaskRecord {
   if (!isRecord(identity) || !identityFields.every((field) => typeof identity[field] === "string") || identity.taskId !== value.taskId) {
     throw new Error("Invalid durable task identity");
   }
+  if (value.workerHistory !== undefined && (
+    !Array.isArray(value.workerHistory) || !value.workerHistory.every((entry) =>
+      isRecord(entry) && identityFields.every((field) => typeof entry[field] === "string") && entry.taskId === value.taskId
+    )
+  )) throw new Error("Invalid durable worker history");
   if (typeof value.cleanup.vmTerminated !== "boolean" || typeof value.cleanup.successfulTabClosed !== "boolean") {
     throw new Error("Invalid durable task cleanup state");
   }
@@ -203,12 +213,16 @@ function validateRecord(value: unknown): DurableTaskRecord {
   if ([...actionCounts.values()].some((count) => count.intended > 1 || count.observed > 1 || (count.observed > 0 && count.intended === 0))) {
     throw new Error("Invalid durable task action correlation");
   }
-  if (
-    value.status === "DONE" &&
-    (!value.finalCommit || !value.cleanup.vmTerminated || !value.cleanup.successfulTabClosed ||
-      !verification.finalRevisionVerified || verification.independentReviewArtifactIds.length < 2 ||
-      value.artifacts.length === 0 || value.diagnostics.outcome === "FAILURE" || unobservedIntendedAction(value as DurableTaskRecord))
-  ) throw new Error("DONE requires final revision verification and confirmed cleanup");
+  if (value.status === "DONE") {
+    const requiredReviews = value.workflow === "REVIEW" ? 1 :
+      value.workflow === "CHAT" || value.workflow === "RESEARCH" || value.workflow === "CHANGE" || value.workflow === "FIXTURE" ? 0 : 2;
+    const requiresCommit = value.workflow !== "CHAT" && value.workflow !== "RESEARCH" && value.workflow !== "FIXTURE";
+    if (
+      (requiresCommit && !value.finalCommit) || !value.cleanup.vmTerminated || !value.cleanup.successfulTabClosed ||
+      !verification.finalRevisionVerified || verification.independentReviewArtifactIds.length < requiredReviews ||
+      value.artifacts.length === 0 || value.diagnostics.outcome === "FAILURE" || unobservedIntendedAction(value as DurableTaskRecord)
+    ) throw new Error("DONE requires final revision verification and confirmed cleanup");
+  }
   return value as DurableTaskRecord;
 }
 
@@ -305,7 +319,11 @@ export class TaskRecordStore {
       const taskId = name.slice(0, -".json".length);
       if (!TASK_ID.test(taskId)) continue;
       const record = await this.load(taskId);
-      if (record && record.status !== "DONE") interrupted.push(record.taskId);
+      if (
+        record && record.status !== "DONE" &&
+        record.blockedReason !== "SUPERSEDED_BY_NEW_ATTEMPT" &&
+        record.blockedReason !== "HUMAN_REVIEW_REQUIRED"
+      ) interrupted.push(record.taskId);
     }
     return interrupted;
   }
@@ -418,18 +436,30 @@ async function reconcileInterruptedTaskLocked(
   } catch {
     return persistBlocked(writer, record, "CLEANUP_UNCONFIRMED", false);
   }
+  const observedPrompt = !unobservedIntendedAction(record);
+  const absentTabIsReconciledCleanup = tab.state === "ABSENT" && observedPrompt;
   if (
     (!sameIdentity(record.identity, pi.identity) && !(pi.state === "ABSENT" && pi.identity === undefined)) ||
-    !sameIdentity(record.identity, tab.identity)
+    (!sameIdentity(record.identity, tab.identity) && !(
+      absentTabIsReconciledCleanup && tab.identity === undefined
+    ))
   ) {
     return persistBlocked(writer, record, "IDENTITY_MISMATCH", false);
   }
   if (pi.state !== "STOPPED" && pi.state !== "ABSENT") return persistBlocked(writer, record, "CLEANUP_UNCONFIRMED", false);
-  if (tab.state !== "PRESENT") return persistBlocked(writer, record, "DIAGNOSTIC_TAB_MISSING", false);
+  if (tab.state !== "PRESENT" && !absentTabIsReconciledCleanup) {
+    return persistBlocked(writer, record, "DIAGNOSTIC_TAB_MISSING", false);
+  }
   if (record.finalCommit && git.commit !== record.finalCommit) {
     return persistBlocked(writer, record, "GIT_IDENTITY_MISMATCH", false);
   }
-  const reconciled = { ...record, cleanup: { ...record.cleanup, vmTerminated: true } };
+  const reconciled = {
+    ...record,
+    cleanup: {
+      vmTerminated: true,
+      successfulTabClosed: record.cleanup.successfulTabClosed || absentTabIsReconciledCleanup,
+    },
+  };
   if (unobservedIntendedAction(reconciled)) return persistBlocked(writer, reconciled, "UNCERTAIN_ACTION", false);
   return persistBlocked(writer, reconciled, "RESUME_CONFIRMATION_REQUIRED", true);
 }
@@ -452,7 +482,12 @@ async function confirmRecoveredTaskLocked(
   if (record.status !== "BLOCKED" || record.blockedReason !== "RESUME_CONFIRMATION_REQUIRED") {
     throw new Error("Task is not awaiting recovery confirmation");
   }
-  const confirmed = { ...record, status: "READY" as const, blockedReason: undefined, updatedAt: nowIso() };
+  const confirmed = {
+    ...record,
+    status: "BLOCKED" as const,
+    blockedReason: "SUPERSEDED_BY_NEW_ATTEMPT" as const,
+    updatedAt: nowIso(),
+  };
   await writer.save(confirmed);
   return confirmed;
 }

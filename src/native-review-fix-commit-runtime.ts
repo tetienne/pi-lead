@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 
 import { MAX_CHATGPT_TASK_CHARS } from "./chatgpt-input.ts";
 import { runReadOnlyChatGptTask } from "./chatgpt-task.ts";
@@ -12,9 +11,9 @@ import {
   type ReviewInput,
   type ReviewReport,
 } from "./review-fix-commit-task.ts";
-import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
+import { isRecord } from "./state-files.ts";
 import type { EffectivePiRoute, PiReasoningLevel } from "./model-reasoning-routing.ts";
-import { publishTaskBranch, type PublicationEvent } from "./git-publication.ts";
+import type { NativeWorkerCleanupObserver, NativeWorkerObserver, NativeWorkerResultObserver } from "./native-worker-observation.ts";
 
 function displayFile(file: ReviewInput["proposal"]["files"][number]): string {
   const header = [
@@ -106,17 +105,18 @@ export async function createNativeReviewFixCommitRuntime(options: {
   modelId?: string;
   reasoning?: PiReasoningLevel;
   onWorkerSpawn?(effective: EffectivePiRoute): void;
-  gitRemoteName?: string;
-  gitRemoteUrl?: string;
+  onWorkerOwned?: NativeWorkerObserver;
+  onWorkerResult?: NativeWorkerResultObserver;
+  onWorkerCleaned?: NativeWorkerCleanupObserver;
 }): Promise<ReviewFixCommitRuntime> {
-  const proposedChanges = await createNativeProposedChangeRuntime(options);
-  const reviewers = await createNativeChatGptRuntime(options);
+  const proposedChanges = await createNativeProposedChangeRuntime({ ...options, workerPhase: "BUILD" });
+  const reviewers = await createNativeChatGptRuntime({ ...options, workerPhase: "VERIFY" });
   return {
     async propose(request: ProposedChangeRequest, signal?: AbortSignal) {
       return runProposedChangeTask(request, proposedChanges, { signal });
     },
     async review(input, signal?: AbortSignal): Promise<ReviewReport> {
-      const assignmentId = randomUUID();
+      const assignmentId = `${input.task.taskId}:review:${input.axis.toLowerCase()}:${randomUUID()}`;
       const result = await runReadOnlyChatGptTask(
         {
           taskId: input.task.taskId,
@@ -150,27 +150,6 @@ export async function createNativeReviewFixCommitRuntime(options: {
     },
     async commit(input, _signal?: AbortSignal) {
       return proposedChanges.commitProposal(input.proposal, input.branchName);
-    },
-    async publish(input, signal?: AbortSignal) {
-      const stateDirectory = proposedChanges.publicationStateDirectory(input.proposal);
-      const record = async (event: PublicationEvent) => {
-        const path = join(stateDirectory, "publication.json");
-        const previous = await readJsonIfPresent(path);
-        const events =
-          isRecord(previous) && Array.isArray(previous.events)
-            ? previous.events.filter(isRecord)
-            : [];
-        await writeJsonAtomically(path, { schemaVersion: 1, events: [...events, event] });
-      };
-      return publishTaskBranch({
-        sourceBundlePath: join(stateDirectory, "proposal.bundle"),
-        configuredRemoteName: options.gitRemoteName ?? process.env.PI_LEAD_GIT_REMOTE,
-        configuredRemoteUrl: options.gitRemoteUrl ?? process.env.PI_LEAD_GIT_REMOTE_URL,
-        branchName: input.commit.branchName,
-        commit: input.commit.commit,
-        journal: { record },
-        signal,
-      });
     },
   };
 }

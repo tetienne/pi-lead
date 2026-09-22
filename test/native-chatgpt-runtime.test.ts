@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -67,6 +67,11 @@ test("native ChatGPT runtime persists no credential and binds native Pi evidence
       });
       calls.push("verify-route");
     },
+    async onWorkerOwned(observation) {
+      assert.equal(observation.identity.vmId, "vm-chatgpt");
+      await assert.rejects(access(join(stateDirectory, "dispatch.json")));
+      calls.push("record-owner");
+    },
   });
 
   const worker = await runtime.launch({
@@ -92,6 +97,7 @@ test("native ChatGPT runtime persists no credential and binds native Pi evidence
   assert.equal(launch.modelId, "gpt-5.6-luna");
   assert.equal(launch.reasoning, "high");
   assert.equal(launch.piSessionId, worker.piSessionId);
+  assert.deepEqual(JSON.parse(await readFile(join(stateDirectory, "dispatch.json"), "utf8")), { admitted: true });
   assert.deepEqual(launch.policy, {
     provider: "openai-codex",
     transport: "sse",
@@ -126,5 +132,5 @@ test("native ChatGPT runtime persists no credential and binds native Pi evidence
   );
   assert.deepEqual(await runtime.terminate(worker), { vmId: worker.vmId, terminated: true });
   await runtime.closeSuccessfulTab(worker.tabId);
-  assert.deepEqual(calls, ["create-tab", "start-launcher", "verify-route", "close-tab"]);
+  assert.deepEqual(calls, ["create-tab", "start-launcher", "verify-route", "record-owner", "close-tab"]);
 });

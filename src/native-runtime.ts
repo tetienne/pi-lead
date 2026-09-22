@@ -16,6 +16,7 @@ import type {
   OwnedWorker,
 } from "./task-lifecycle.ts";
 import { FixtureLaunchFailure } from "./task-lifecycle.ts";
+import type { NativeWorkerCleanupObserver, NativeWorkerObserver, NativeWorkerResultObserver } from "./native-worker-observation.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -42,6 +43,9 @@ type NativeRuntimeOptions = {
   herdr?: HerdrClient;
   processHost?: FixtureProcessHost;
   pollIntervalMs?: number;
+  onWorkerOwned?: NativeWorkerObserver;
+  onWorkerResult?: NativeWorkerResultObserver;
+  onWorkerCleaned?: NativeWorkerCleanupObserver;
 };
 
 type RunState = {
@@ -254,6 +258,7 @@ export async function createNativeFixtureRuntime(options: NativeRuntimeOptions):
           policy,
           fixtureHoldMs: options.fixtureHoldMs ?? 0,
           controllerHeartbeatTimeoutMs: 5_000,
+          controllerAdmissionRequired: true,
         });
         heartbeat = setInterval(() => {
           void writeFile(join(directory, "heartbeat"), new Date().toISOString(), "utf8");
@@ -277,6 +282,9 @@ export async function createNativeFixtureRuntime(options: NativeRuntimeOptions):
           tabId: tab.tabId,
           paneId: tab.paneId,
         };
+        const identity = { ...worker, piSessionId: `fixture:${workerId}` };
+        await options.onWorkerOwned?.({ identity, stateDirectory: directory, phase: "BUILD" });
+        await writeJsonAtomically(join(directory, "dispatch.json"), { admitted: true });
         runs.set(worker.vmId, { directory, heartbeat, worker });
         return worker;
       } catch (error) {
@@ -314,7 +322,7 @@ export async function createNativeFixtureRuntime(options: NativeRuntimeOptions):
         if (error !== undefined) throw new Error(requireString(error, "message"));
         const result = await readJsonIfPresent(join(run.directory, "result.json"));
         if (result !== undefined) {
-          return {
+          const parsed = {
             taskId: requireString(result, "taskId"),
             assignmentId: requireString(result, "assignmentId"),
             workerId: requireString(result, "workerId"),
@@ -323,6 +331,8 @@ export async function createNativeFixtureRuntime(options: NativeRuntimeOptions):
             paneId: requireString(result, "paneId"),
             output: requireString(result, "output"),
           };
+          await options.onWorkerResult?.({ ...worker, piSessionId: `fixture:${worker.workerId}` });
+          return parsed;
         }
         await wait(pollIntervalMs, signal);
       }
@@ -361,6 +371,8 @@ export async function createNativeFixtureRuntime(options: NativeRuntimeOptions):
 
     async closeSuccessfulTab(tabId: string): Promise<void> {
       await herdr.closeTab(tabId);
+      const run = [...runs.values()].find((candidate) => candidate.worker.tabId === tabId);
+      if (run) await options.onWorkerCleaned?.({ ...run.worker, piSessionId: `fixture:${run.worker.workerId}` });
     },
   };
 }

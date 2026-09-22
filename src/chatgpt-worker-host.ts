@@ -15,6 +15,7 @@ import { observeProcessExit } from "./process-observation.ts";
 import type { NativePiEvent, ProviderFailure } from "./chatgpt-task.ts";
 import { PI_REASONING_LEVELS, type PiReasoningLevel } from "./model-reasoning-routing.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
+import { waitForControllerDispatch } from "./controller-dispatch.ts";
 
 type ResolvedAuthLike = {
   auth: { apiKey?: string };
@@ -268,6 +269,7 @@ type LaunchRecord = {
   modelId: string;
   reasoning: PiReasoningLevel;
   controllerHeartbeatTimeoutMs: number;
+  controllerAdmissionRequired: boolean;
 };
 
 function parseLaunchRecord(value: unknown): LaunchRecord {
@@ -307,6 +309,7 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
     paneId: requireString(value, "paneId", 160),
     modelId: requireString(value, "modelId", 160),
     reasoning: reasoning as PiReasoningLevel,
+    controllerAdmissionRequired: value.controllerAdmissionRequired === true,
     controllerHeartbeatTimeoutMs: timeout,
   };
 }
@@ -464,6 +467,11 @@ export async function runChatGptWorkerHost(options: RunChatGptWorkerHostOptions)
     const credentialSource =
       options.credentialSource ?? (await createNativePiCredentialSource(abortController.signal));
     const effectiveReasoning = credentialSource.assertModelAvailable(launch.modelId, launch.reasoning);
+    const effectiveRoute = {
+      provider: "openai-codex" as const,
+      modelId: launch.modelId,
+      reasoning: effectiveReasoning,
+    };
     const initialCredential = await credentialSource.getCredential(abortController.signal);
     const mediation = createChatGptMediation({
       initialCredential,
@@ -490,13 +498,14 @@ export async function runChatGptWorkerHost(options: RunChatGptWorkerHostOptions)
     await writeJsonAtomically(join(options.stateDirectory, "resources.json"), {
       workerId: launch.workerId,
       vmId,
-      effectiveRoute: {
-        provider: "openai-codex",
-        modelId: launch.modelId,
-        reasoning: effectiveReasoning,
-      },
+      effectiveRoute,
     });
     resourcesStarted = true;
+    await waitForControllerDispatch({
+      stateDirectory: options.stateDirectory,
+      required: launch.controllerAdmissionRequired,
+      signal: abortController.signal,
+    });
     abortController.signal.throwIfAborted();
     await appendFile(runtimeLogPath, "PI Lead: staging pinned Pi worker\n", { mode: 0o600 });
     options.debugLog?.(`using guest CA bundle ${guestCaPath}`);
@@ -532,9 +541,9 @@ export async function runChatGptWorkerHost(options: RunChatGptWorkerHostOptions)
         "--provider",
         "openai-codex",
         "--model",
-        launch.modelId,
+        effectiveRoute.modelId,
         "--thinking",
-        launch.reasoning,
+        effectiveRoute.reasoning,
         "--no-tools",
         "--no-extensions",
         "--no-skills",

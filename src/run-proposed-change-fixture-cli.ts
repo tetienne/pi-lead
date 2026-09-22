@@ -110,6 +110,8 @@ await writeJsonAtomically(join(stateDirectory, "launch.json"), {
   tabId: "fixture-tab",
   paneId: "fixture-pane",
   modelId: "gpt-5.6-luna",
+  reasoning: "off",
+  workerMode: "change",
   toolchainCache,
   policy,
   controllerHeartbeatTimeoutMs: 60_000,

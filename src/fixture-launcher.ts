@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createHttpHooks, VM } from "@earendil-works/gondolin";
 import { observeProcessExit } from "./process-observation.ts";
 import { isRecord, writeJsonAtomically } from "./state-files.ts";
+import { waitForControllerDispatch } from "./controller-dispatch.ts";
 
 const FIXTURE_SCRIPT = String.raw`
 set -eu
@@ -146,6 +147,11 @@ async function main(): Promise<void> {
     vmId = vm.id;
     hostPid = vm.getHostPid();
     await writeJsonAtomically(join(stateDirectory, "resources.json"), { workerId, vmId });
+    await waitForControllerDispatch({
+      stateDirectory,
+      required: isRecord(launch) && launch.controllerAdmissionRequired === true,
+      signal: abortController.signal,
+    });
     const execEnvironment = {
       ...environment,
       PI_LEAD_PRIVATE_PATH: privateWritablePaths[1],

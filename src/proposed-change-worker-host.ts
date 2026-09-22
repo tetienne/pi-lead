@@ -16,6 +16,7 @@ import { PROPOSAL_REF } from "./git-proposal.ts";
 import { observeProcessExit } from "./process-observation.ts";
 import type { ValidationEvidence } from "./proposed-change-task.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
+import { waitForControllerDispatch } from "./controller-dispatch.ts";
 import {
   createReadonlyToolchainSeed,
   GUEST_MISE_VERSION,
@@ -39,10 +40,12 @@ type LaunchRecord = {
   paneId: string;
   modelId: string;
   reasoning: PiReasoningLevel;
+  workerMode: "change" | "research" | "validation-only";
   dependencyHosts: string[];
   validationTasks: string[];
   toolchainCache: ToolchainCachePlan;
   controllerHeartbeatTimeoutMs: number;
+  controllerAdmissionRequired: boolean;
 };
 
 function requireString(value: unknown, field: string, maxLength = 16_384): string {
@@ -110,6 +113,10 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
     throw new Error("Invalid proposed-change launch record");
   }
   const policy = value.policy;
+  if (value.workerMode !== "change" && value.workerMode !== "research" && value.workerMode !== "validation-only") {
+    throw new Error("Invalid proposed-change worker mode");
+  }
+  const workerMode = value.workerMode;
   if (
     !isRecord(policy.network) ||
     policy.network.allowWebSockets !== false ||
@@ -122,8 +129,11 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
     throw new Error("Proposed-change launch policy is incomplete");
   }
   const allowedHosts = stringArray(policy.network, "allowedHosts", 17);
-  if (allowedHosts[0] !== "chatgpt.com") {
+  if ((workerMode === "change" || workerMode === "research") && allowedHosts[0] !== "chatgpt.com") {
     throw new Error("Proposed-change provider destination is not pinned");
+  }
+  if (workerMode === "validation-only" && allowedHosts.includes("chatgpt.com")) {
+    throw new Error("Validation-only feedback must not receive provider network access");
   }
   const validation = policy.validation.map((entry) => {
     if (
@@ -159,16 +169,22 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
     paneId: requireString(value, "paneId", 160),
     modelId: requireString(value, "modelId", 160),
     reasoning: reasoning as PiReasoningLevel,
-    dependencyHosts: allowedHosts.slice(1),
+    workerMode,
+    dependencyHosts: workerMode === "change" || workerMode === "research" ? allowedHosts.slice(1) : allowedHosts,
     validationTasks: validation,
     toolchainCache: parseToolchainCache(value.toolchainCache),
     controllerHeartbeatTimeoutMs: timeout,
+    controllerAdmissionRequired: value.controllerAdmissionRequired === true,
   };
 }
 
 function resolvePiBundleDirectory(): string {
   const entry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
   return join(dirname(entry), "bundle");
+}
+
+function resolveResearchSkillPath(): string {
+  return fileURLToPath(new URL("../.agents/skills/research/SKILL.md", import.meta.url));
 }
 
 function guestEnvironment(launch: LaunchRecord, secrets: Readonly<Record<string, string>>) {
@@ -528,8 +544,11 @@ export async function runProposedChangeWorkerHost(
     let effectiveReasoning = launch.reasoning;
     let environment: Record<string, string>;
     let httpHooks;
-    if (options.fixtureEdit) {
-      const allowedHosts = new Set(["chatgpt.com", ...launch.dependencyHosts]);
+    if (options.fixtureEdit || launch.workerMode === "validation-only") {
+      const allowedHosts = new Set([
+        ...(launch.workerMode === "change" || launch.workerMode === "research" ? ["chatgpt.com"] : []),
+        ...launch.dependencyHosts,
+      ]);
       let firstPolicyRejection: string | undefined;
       const hooks = createHttpHooks({
         allowedHosts: [...allowedHosts],
@@ -562,6 +581,11 @@ export async function runProposedChangeWorkerHost(
       redact = mediation.redactHostSecrets;
       getPolicyRejection = mediation.getLastPolicyRejection;
     }
+    const effectiveRoute = {
+      provider: "openai-codex" as const,
+      modelId: launch.modelId,
+      reasoning: effectiveReasoning,
+    };
     vm = await VM.create({
       allowWebSockets: false,
       autoStart: true,
@@ -582,13 +606,14 @@ export async function runProposedChangeWorkerHost(
     await writeJsonAtomically(join(options.stateDirectory, "resources.json"), {
       workerId: launch.workerId,
       vmId,
-      effectiveRoute: {
-        provider: "openai-codex",
-        modelId: launch.modelId,
-        reasoning: effectiveReasoning,
-      },
+      effectiveRoute,
     });
     resourcesStarted = true;
+    await waitForControllerDispatch({
+      stateDirectory: options.stateDirectory,
+      required: launch.controllerAdmissionRequired,
+      signal: abortController.signal,
+    });
     abortController.signal.throwIfAborted();
     await applyGuestCaEnvironment(vm, environment);
     await assertGuestCachePlatform(vm, launch.toolchainCache);
@@ -599,7 +624,10 @@ export async function runProposedChangeWorkerHost(
     await ensureGuestToolchain(vm, environment);
     const guestToolchainPreparationMs = performance.now() - toolchainPreparationStartedAt;
     await preparePrivateWorkspace(vm, launch, options.stateDirectory, environment);
-    if (options.fixtureEdit) {
+    if (launch.workerMode === "validation-only") {
+      // The feedback runner intentionally leaves the pinned base untouched and
+      // executes only the allowlisted mise task below.
+    } else if (options.fixtureEdit) {
       if (options.fixtureEdit.assertReadonlySeed) {
         const probe = await vm.exec(
           [
@@ -671,6 +699,16 @@ export async function runProposedChangeWorkerHost(
         })}\n`,
         { encoding: "utf8" },
       );
+      const research = launch.workerMode === "research";
+      const researchSkillPath = `${privateRoot}/skills/research/SKILL.md`;
+      if (research) {
+        await vm.fs.mkdir(`${privateRoot}/skills/research`, { recursive: true, mode: 0o700 });
+        await vm.fs.writeFile(
+          researchSkillPath,
+          await readFile(resolveResearchSkillPath(), "utf8"),
+          { encoding: "utf8" },
+        );
+      }
       const worker = vm.exec(
         [
           "/usr/bin/node",
@@ -683,21 +721,22 @@ export async function runProposedChangeWorkerHost(
           "--provider",
           "openai-codex",
           "--model",
-          launch.modelId,
+          effectiveRoute.modelId,
           "--thinking",
-          launch.reasoning,
+          effectiveRoute.reasoning,
           "--no-extensions",
-          "--skill",
-          "implement",
-          "--skill",
-          "tdd",
+          ...(research
+            ? ["--skill", researchSkillPath]
+            : ["--skill", "implement", "--skill", "tdd"]),
           "--no-prompt-templates",
           "--no-themes",
           "--no-context-files",
           "--no-approve",
           "--offline",
           "--system-prompt",
-          "Follow the pinned Matt implement and TDD skills: work one approved behavior at a time with a failing feedback loop before each minimal correction. Make the requested change in /workspace using the available tools. Do not commit, change Git history, or merely describe the edit. The host will run the required mise checks after you finish.",
+          research
+            ? "You are the isolated background agent required by the pinned Matt research skill. Use only explicitly allowed primary-source hosts, cite every material claim, and write exactly one Markdown research note in /workspace. Do not commit or change Git history; the host will validate and collect the note."
+            : "Follow the pinned Matt implement and TDD skills: work one approved behavior at a time with a failing feedback loop before each minimal correction. Make the requested change in /workspace using the available tools. Do not commit, change Git history, or merely describe the edit. The host will run the required mise checks after you finish.",
           "--",
           launch.instruction,
         ],

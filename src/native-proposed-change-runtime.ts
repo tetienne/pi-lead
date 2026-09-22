@@ -8,7 +8,8 @@ import { promisify } from "node:util";
 
 import { collectGitProposal, deliverGitProposal, prepareCommittedBase } from "./git-proposal.ts";
 import type { HerdrClient } from "./native-runtime.ts";
-import { PI_REASONING_LEVELS, type EffectivePiRoute, type PiReasoningLevel } from "./model-reasoning-routing.ts";
+import type { EffectivePiRoute, PiReasoningLevel } from "./model-reasoning-routing.ts";
+import { parseEffectivePiRoute } from "./effective-route-observation.ts";
 import { createProposedChangePolicy } from "./proposed-change-policy.ts";
 import {
   ProposedChangeLaunchFailure,
@@ -27,6 +28,7 @@ import {
   prepareToolchainCache,
   type GuestArchitecture,
 } from "./toolchain-cache.ts";
+import type { NativeWorkerCleanupObserver, NativeWorkerObserver, NativeWorkerResultObserver } from "./native-worker-observation.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -49,10 +51,15 @@ export type NativeProposedChangeRuntime = ProposedChangeRuntime & {
 
 type NativeProposedChangeRuntimeOptions = {
   cwd: string;
+  workerMode?: "change" | "research" | "validation-only";
+  workerPhase?: "DEBUG" | "BUILD";
   guestArchitecture?: GuestArchitecture;
   modelId?: string;
   reasoning?: PiReasoningLevel;
   onWorkerSpawn?(effective: EffectivePiRoute): void;
+  onWorkerOwned?: NativeWorkerObserver;
+  onWorkerResult?: NativeWorkerResultObserver;
+  onWorkerCleaned?: NativeWorkerCleanupObserver;
   workspaceId?: string;
   stateRoot?: string;
   toolchainCacheRoot?: string;
@@ -66,6 +73,16 @@ type RunState = {
   heartbeat: ReturnType<typeof setInterval>;
   worker: ProposedChangeWorker;
 };
+
+export function assertResearchNote(files: ReviewRequiredSummary["files"]): void {
+  const note = files.length === 1 ? files[0] : undefined;
+  const contents = note?.contentBase64 && !note.binary
+    ? Buffer.from(note.contentBase64, "base64").toString("utf8")
+    : "";
+  if (!note || !note.path.endsWith(".md") || !contents.includes("https://")) {
+    throw new Error("Matt research must return exactly one Markdown note with primary-source citations");
+  }
+}
 
 function findStringField(value: unknown, field: string): string | undefined {
   if (Array.isArray(value)) {
@@ -213,19 +230,6 @@ function requireString(value: unknown, field: string, maxLength = 16_384): strin
     throw new Error(`Invalid proposed-change artifact: ${field}`);
   }
   return value[field];
-}
-
-function parseEffectiveRoute(value: unknown): EffectivePiRoute {
-  if (!isRecord(value) || !isRecord(value.effectiveRoute)) {
-    throw new Error("Invalid proposed-change worker route observation");
-  }
-  const route = value.effectiveRoute;
-  const modelId = requireString(route, "modelId", 160);
-  const reasoning = requireString(route, "reasoning", 16);
-  if (route.provider !== "openai-codex" || !(PI_REASONING_LEVELS as readonly string[]).includes(reasoning)) {
-    throw new Error("Invalid proposed-change worker route observation");
-  }
-  return { provider: "openai-codex", modelId, reasoning: reasoning as PiReasoningLevel };
 }
 
 async function readCommittedMiseConfig(repositoryPath: string, baseCommit: string): Promise<string> {
@@ -395,6 +399,7 @@ export async function createNativeProposedChangeRuntime(
           workerId,
           dependencyHosts: request.dependencyHosts,
           validationTasks: request.validationTasks,
+          includeProviderHost: options.workerMode !== "validation-only",
         });
         const workspaceId = options.workspaceId ?? inferWorkspaceId();
         await writeFile(join(directory, "heartbeat"), new Date().toISOString(), {
@@ -421,9 +426,11 @@ export async function createNativeProposedChangeRuntime(
           paneId: tab.paneId,
           modelId: options.modelId ?? "gpt-5.6-luna",
           reasoning: options.reasoning ?? "off",
+          workerMode: options.workerMode ?? "change",
           toolchainCache,
           policy,
           controllerHeartbeatTimeoutMs: 5_000,
+          controllerAdmissionRequired: true,
         });
         heartbeat = setInterval(() => {
           void writeFile(join(directory, "heartbeat"), new Date().toISOString(), "utf8");
@@ -440,7 +447,6 @@ export async function createNativeProposedChangeRuntime(
         if (requireString(resources, "workerId", 160) !== workerId) {
           throw new Error("Launcher returned the wrong worker identity");
         }
-        if (options.onWorkerSpawn) options.onWorkerSpawn(parseEffectiveRoute(resources));
         const worker: ProposedChangeWorker = {
           taskId: request.taskId,
           assignmentId: request.assignmentId,
@@ -451,6 +457,12 @@ export async function createNativeProposedChangeRuntime(
           piSessionId,
           baseCommit: prepared.baseCommit,
         };
+        const effectiveRoute = parseEffectivePiRoute(resources, "openai-codex", "proposed-change worker");
+        if (options.onWorkerSpawn) options.onWorkerSpawn(effectiveRoute);
+        if (options.onWorkerOwned) {
+          await options.onWorkerOwned({ effectiveRoute, identity: worker, stateDirectory: directory, phase: options.workerPhase ?? "BUILD" });
+        }
+        await writeJsonAtomically(join(directory, "dispatch.json"), { admitted: true });
         runs.set(worker.vmId, { directory, heartbeat, worker });
         return worker;
       } catch (error) {
@@ -505,7 +517,11 @@ export async function createNativeProposedChangeRuntime(
           );
         }
         const result = await readJsonIfPresent(join(run.directory, "result.json"));
-        if (result !== undefined) return parseResult(result);
+        if (result !== undefined) {
+          const parsed = parseResult(result);
+          await options.onWorkerResult?.(worker);
+          return parsed;
+        }
         await wait(pollIntervalMs, signal);
       }
     },
@@ -522,6 +538,9 @@ export async function createNativeProposedChangeRuntime(
       });
       if (collected.proposedCommit !== result.proposedCommit) {
         throw new Error("Collected proposal revision does not match the worker result");
+      }
+      if (options.workerMode === "research") {
+        assertResearchNote(collected.files);
       }
       return { artifactId: collected.artifactId, files: collected.files };
     },
@@ -566,6 +585,8 @@ export async function createNativeProposedChangeRuntime(
 
     async closeSuccessfulTab(tabId: string): Promise<void> {
       await herdr.closeTab(tabId);
+      const run = [...runs.values()].find((candidate) => candidate.worker.tabId === tabId);
+      if (run) await options.onWorkerCleaned?.(run.worker);
     },
   };
 }

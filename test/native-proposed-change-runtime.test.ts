@@ -8,12 +8,26 @@ import { test } from "node:test";
 
 import { PROPOSAL_REF } from "../src/git-proposal.ts";
 import {
+  assertResearchNote,
   createNativeProposedChangeRuntime,
   type ProposedChangeProcessHost,
 } from "../src/native-proposed-change-runtime.ts";
 import type { HerdrClient } from "../src/native-runtime.ts";
 
 const execFileAsync = promisify(execFile);
+
+test("research collection accepts one cited Markdown note and rejects unreviewable output", () => {
+  const note = {
+    path: "docs/research/result.md", status: "added" as const,
+    oldMode: "000000", newMode: "100644",
+    contentBase64: Buffer.from("Finding. [Primary source](https://example.com/spec)").toString("base64"),
+    binary: false,
+  };
+  assert.doesNotThrow(() => assertResearchNote([note]));
+  assert.throws(() => assertResearchNote([{ ...note, path: "src/result.ts" }]), /exactly one Markdown note/);
+  assert.throws(() => assertResearchNote([{ ...note, contentBase64: Buffer.from("No citation").toString("base64") }]), /primary-source citations/);
+  assert.throws(() => assertResearchNote([note, { ...note, path: "docs/research/extra.md" }]), /exactly one Markdown note/);
+});
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("/usr/bin/git", args, {

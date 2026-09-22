@@ -343,7 +343,15 @@ export async function runStandaloneBranchReview(
       ? []
       : [{ taskId: request.taskId, axis: "SPEC" as const, comparisonSource, specification: request.specification, standards: request.standards }]),
   ];
-  const settled = await Promise.allSettled(inputs.map((input) => runtime.review(input, options.signal)));
+  const settled: PromiseSettledResult<StandaloneBranchReviewReport>[] = [];
+  for (const input of inputs) {
+    try {
+      settled.push({ status: "fulfilled", value: await runtime.review(input, options.signal) });
+    } catch (reason) {
+      settled.push({ status: "rejected", reason });
+      break;
+    }
+  }
   const reports = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
   let after: { worktreeDigest: string; refsDigest: string };
   try {

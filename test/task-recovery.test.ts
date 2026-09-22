@@ -114,6 +114,17 @@ test("the host can enumerate unfinished durable tasks for Lead restart admission
       completedAt: "2026-09-21T10:01:00.000Z",
     },
   }));
+  await store.save(interruptedRecord({
+    taskId: "task-human-gate",
+    identity: { ...identity, taskId: "task-human-gate" },
+    status: "BLOCKED",
+    blockedReason: "HUMAN_REVIEW_REQUIRED",
+    actions: [
+      { id: "prompt-human", kind: "PROMPT", phase: "INTENDED" },
+      { id: "prompt-human", kind: "PROMPT", phase: "OBSERVED" },
+    ],
+    cleanup: { vmTerminated: true, successfulTabClosed: true },
+  }));
 
   assert.deepEqual(await store.listInterruptedTaskIds(), ["task-6"]);
 });
@@ -171,7 +182,33 @@ test("recovery terminates a surviving worker, retains its diagnostic tab, and on
   assert.equal(result.reason, "RESUME_CONFIRMATION_REQUIRED");
   assert.equal(result.diagnosticsRetained, true);
   assert.equal(result.resumeAllowed, true);
-  assert.equal((await confirmRecoveredTask(store, identity.taskId)).status, "READY");
+  const superseded = await confirmRecoveredTask(store, identity.taskId);
+  assert.equal(superseded.status, "BLOCKED");
+  assert.equal(superseded.blockedReason, "SUPERSEDED_BY_NEW_ATTEMPT");
+  assert.deepEqual(await store.listInterruptedTaskIds(), []);
+});
+
+test("recovery reconciles an observed result whose worker was cleaned before cleanup persistence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-recovery-"));
+  const store = new TaskRecordStore({ root });
+  await store.save(interruptedRecord({
+    actions: [
+      { id: "prompt-1", kind: "PROMPT", phase: "INTENDED" },
+      { id: "prompt-1", kind: "PROMPT", phase: "OBSERVED" },
+    ],
+    artifacts: ["diagnostics/task-6/result.json"],
+    cleanup: { vmTerminated: false, successfulTabClosed: false },
+  }));
+
+  const result = await reconcileInterruptedTask(store, identity.taskId, runtime({
+    async vm(observed) { return { state: "STOPPED", identity: observed }; },
+    async pi(observed) { return { state: "STOPPED", identity: observed }; },
+    async herdrTab(observed) { return { state: "ABSENT", identity: observed }; },
+  }));
+
+  assert.equal(result.reason, "RESUME_CONFIRMATION_REQUIRED");
+  assert.equal(result.resumeAllowed, true);
+  assert.deepEqual(result.record.cleanup, { vmTerminated: true, successfulTabClosed: true });
 });
 
 test("recovery blocks a stale resource identity and a failed cleanup remains actionable after restart", async () => {

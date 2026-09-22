@@ -1,8 +1,8 @@
 # PI Lead ticket graph
 
 Status: the original 16-ticket program has been audited. The user approved the
-17 → 18 → 19 → 20 cleanup sequence on 2026-09-22. Ticket 17 is DONE and defines
-the authoritative refocused contract; Ticket 18 is the current frontier.
+17 → 18 → 19 → 20 cleanup sequence on 2026-09-22. Tickets 17 and 18 are DONE;
+Ticket 19 is the current frontier.
 Unfinished historical tickets must not be resumed independently.
 
 Source: [approved specification](spec.md), interpreted with the original
@@ -31,7 +31,7 @@ current delivery status.
 | [15: Execute the dependency frontier with two workers](issues/15-dependency-scheduler.md) | wontfix (deferred) | 04, 06, 12 | Scheduler logic is tested but excluded from the refocused current release. |
 | [16: Verify reusable installation and the current release experience](issues/16-complete-acceptance.md) | wontfix (superseded) | 07, 11, 13, 14, 15 | Broad-program acceptance is replaced by Ticket 20. |
 | [17: Refocus the product contract on one Lead interface](issues/17-refocus-product-contract.md) | ready-for-human; resolved DONE | None | Defines the conversation-first interface and classifies every existing capability. |
-| [18: Execute Matt workflows through one orchestrator](issues/18-unified-orchestration.md) | ready-for-agent | 17 | Connect useful intents, Jev judgments, Matt skills and worker lifecycles behind one interface. |
+| [18: Execute Matt workflows through one orchestrator](issues/18-unified-orchestration.md) | ready-for-agent; resolved DONE | 17 | Connected useful intents, Jev judgments, Matt skills and worker lifecycles behind one interface. |
 | [19: Contract the public surface and remove orphan paths](issues/19-contract-public-surface.md) | ready-for-agent | 18 | Remove provider/skill/stage commands and exclude unexplained feature islands. |
 | [20: Validate the refocused product in a consuming project](issues/20-refocused-product-acceptance.md) | ready-for-agent | 19 | Prove the complete conversation-first macOS/ChatGPT experience. |
 

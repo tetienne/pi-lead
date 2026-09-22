@@ -227,6 +227,91 @@ test("explicit local Matt workflows remain available when Jev is missing or misc
   });
 });
 
+test("/lead uses the same orchestrator and explicit fallback when Jev is unavailable", async () => {
+  let command: ((args: string, context: any) => Promise<void>) | undefined;
+  const sent: string[] = [];
+  const pi = {
+    on() { return () => undefined; },
+    registerCommand(name: string, definition: { handler: typeof command }) {
+      if (name === "lead") command = definition.handler;
+    },
+    appendEntry() {},
+    sendUserMessage(message: string) { sent.push(message); },
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    routeIntent: configuredIntentRouter({}),
+  })(pi);
+
+  await command?.("triage the startup report", { cwd: "/consumer", ui: { notify() {} } });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0] ?? "", /^\/skill:triage /);
+  assert.match(sent[0] ?? "", /triage the startup report/);
+});
+
+test("/lead asks for clarification when its deterministic fallback matches multiple workflows", async () => {
+  let command: ((args: string, context: any) => Promise<void>) | undefined;
+  const notices: string[] = [];
+  const pi = {
+    on() { return () => undefined; },
+    registerCommand(name: string, definition: { handler: typeof command }) {
+      if (name === "lead") command = definition.handler;
+    },
+    appendEntry() {},
+    sendUserMessage() { throw new Error("ambiguous input must not be dispatched"); },
+  } as unknown as ExtensionAPI;
+  createLeadExtension({ async runFixture() { throw new Error("not used"); }, routeIntent: configuredIntentRouter({}) })(pi);
+
+  await command?.("debug and implement this crash", {
+    cwd: "/consumer",
+    ui: { notify(message: string) { notices.push(message); } },
+  });
+  assert.deepEqual(notices, ["PI Lead intent: clarification required; no worker was started"]);
+});
+
+test("/lead submits the unchanged natural-language request to Jev before considering outage fallback", async () => {
+  let command: ((args: string, context: any) => Promise<void>) | undefined;
+  const routed: Array<{ input: string; explicit: unknown }> = [];
+  const pi = {
+    on() { return () => undefined; },
+    registerCommand(name: string, definition: { handler: typeof command }) {
+      if (name === "lead") command = definition.handler;
+    },
+    appendEntry() {}, sendUserMessage() {},
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async routeIntent(input, explicit) {
+      routed.push({ input, explicit });
+      return { status: "ROUTED", workflow: "CHAT", source: "jev" };
+    },
+  })(pi);
+
+  await command?.("Could you untangle this for me?", { cwd: "/consumer", ui: { notify() {} } });
+  assert.deepEqual(routed, [{ input: "Could you untangle this for me?", explicit: undefined }]);
+});
+
+test("ordinary engineering intent fails closed through deterministic admission when Jev is unavailable", async () => {
+  let inputHandler: ((event: { source: string; text: string }, context: any) => Promise<{ action: string }>) | undefined;
+  const notices: string[] = [];
+  const pi = {
+    on(name: string, handler: typeof inputHandler) {
+      if (name === "input") inputHandler = handler;
+      return () => undefined;
+    },
+    registerCommand() {}, appendEntry() {}, sendUserMessage() {},
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    routeIntent: configuredIntentRouter({}),
+    async runCompleteLocalCoding() { throw new Error("incomplete intake must not start a worker"); },
+  })(pi);
+  const context = { cwd: process.cwd(), ui: { notify(message: string) { notices.push(message); } } };
+
+  assert.deepEqual(await inputHandler?.({ source: "user", text: "implement the approved change" }, context), { action: "handled" });
+  assert.match(notices[0] ?? "", /which approved specification, named base, and mise checks/);
+});
+
 test("the planning command dispatches the installed Matt skill flow without starting a build", async () => {
   let planCommand: { handler: (args: string, context: unknown) => Promise<void> } | undefined;
   const sent: Array<{ content: string; options: unknown }> = [];
@@ -349,12 +434,7 @@ test("ordinary input and /lead admit every supported Matt workflow through one o
   await commands.get("lead")?.("operate", context);
 
   assert.deepEqual(sent.map((message) => message.match(/^\/skill:[^ ]+/)?.[0]), [
-    "/skill:ask-matt",
-    "/skill:diagnosing-bugs",
-    "/skill:code-review",
-    "/skill:research",
-    "/skill:triage",
-    "/skill:wayfinder",
+    "/skill:ask-matt", "/skill:triage", "/skill:wayfinder",
   ]);
   assert.deepEqual(notices.at(-1), {
     message: "PI Lead operation: human authorization required; no worker was started",
@@ -436,48 +516,96 @@ test("Lead restart admits host-owned recovery before any new engineering task", 
   assert.match(notices.join("\n"), /task-interrupted.*confirmation required/i);
 });
 
-test("native debug, review, and research workflows record attributable settled results", async () => {
+test("an interrupted task is admitted again only after explicit recovery confirmation", async () => {
+  let sessionStart: ((event: unknown, context: any) => Promise<void>) | undefined;
   let inputHandler: ((event: { source: string; text: string }, context: any) => Promise<{ action: string }>) | undefined;
-  let messageEnd: ((event: any, context: any) => Promise<void> | void) | undefined;
-  let agentSettled: ((event: any, context: any) => Promise<void> | void) | undefined;
-  const sent: string[] = [];
-  const entries: Array<{ type: string; data: any }> = [];
+  const confirmed: string[] = [];
   const notices: string[] = [];
   const pi = {
     on(name: string, handler: any) {
+      if (name === "session_start") sessionStart = handler;
       if (name === "input") inputHandler = handler;
-      if (name === "message_end") messageEnd = handler;
-      if (name === "agent_settled") agentSettled = handler;
+      return () => undefined;
+    },
+    registerCommand() {}, appendEntry() {},
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async recoverInterrupted() { return [{ taskId: "task-resume", reason: "RESUME_CONFIRMATION_REQUIRED", resumeAllowed: true }]; },
+    async confirmRecovery(_cwd, taskId) { confirmed.push(taskId); },
+    async routeIntent() { return { status: "ROUTED", workflow: "IDEATE", source: "jev" }; },
+  })(pi);
+  const context = { cwd: "/consumer", ui: { notify(message: string) { notices.push(message); } } };
+  await sessionStart?.({}, context);
+
+  assert.deepEqual(await inputHandler?.({ source: "user", text: "resume interrupted task task-resume" }, context), { action: "handled" });
+  assert.deepEqual(confirmed, ["task-resume"]);
+  assert.match(notices.at(-1) ?? "", /resubmit the request/i);
+});
+
+test("native debug, review, and Matt research use attributable worker lifecycles", async () => {
+  let inputHandler: ((event: { source: string; text: string }, context: any) => Promise<{ action: string }>) | undefined;
+  const entries: Array<{ type: string; data: any }> = [];
+  const notices: string[] = [];
+  const executed: string[] = [];
+  const pi = {
+    on(name: string, handler: any) {
+      if (name === "input") inputHandler = handler;
       return () => undefined;
     },
     registerCommand() {},
     appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
-    sendUserMessage(message: string) { sent.push(message); },
+    sendUserMessage() {},
   } as unknown as ExtensionAPI;
   const workflows = ["DEBUG", "REVIEW", "RESEARCH"] as const;
   let route = 0;
   createLeadExtension({
     async runFixture() { throw new Error("not used"); },
+    async runDebug(request) {
+      executed.push(`debug:${request.feedbackCommand}`);
+      return { status: "BLOCKED", reason: "REPRODUCTION_NOT_FAILED", detail: "controlled feedback passed", diagnosticsRetained: true };
+    },
+    async runReview(request) {
+      executed.push(`review:${request.namedBase}..${request.reviewBranch}`);
+      return {
+        status: "DONE", taskId: request.taskId, comparisonSource: "git:base..review",
+        reports: [{
+          taskId: request.taskId, axis: "STANDARDS", reviewerId: "reviewer", contextId: "context",
+          comparisonSource: "git:base..review", standardsDigest: request.standards.digest,
+          findings: [], readOnly: true, published: false,
+        }],
+        specification: { status: "MISSING_SPECIFICATION" }, readOnly: true, published: false,
+      };
+    },
+    async runResearch(request) {
+      executed.push(`research:${request.assignmentId}`);
+      assert.match(request.instruction, /pinned Matt research skill/);
+      assert.deepEqual(request.dependencyHosts, ["example.com"]);
+      return {
+        status: "REVIEW_REQUIRED", taskId: request.taskId, assignmentId: request.assignmentId,
+        workerId: "researcher", vmId: "research-vm", tabId: "research-tab", paneId: "research-pane",
+        piSessionId: "research-session", artifactId: "research-artifact",
+        baseCommit: "a".repeat(40), proposedCommit: "b".repeat(40),
+        validations: [{ task: "test", command: "mise run test", passed: true, exitCode: 0 }],
+        files: [{ path: "docs/research/note.md", status: "added", oldMode: "000000", newMode: "100644", contentBase64: Buffer.from("[source](https://example.com)").toString("base64"), binary: false }],
+        humanGate: true, hostCommitted: false, published: false, vmTerminated: true,
+      };
+    },
     async routeIntent() {
       return { status: "ROUTED", workflow: workflows[route++] ?? "CHAT", source: "jev" };
     },
   })(pi);
-  const context = { cwd: "/consumer", ui: { notify(message: string) { notices.push(message); } } };
+  const context = { cwd: process.cwd(), ui: { notify(message: string) { notices.push(message); } } };
 
-  for (const workflow of workflows) {
-    assert.deepEqual(await inputHandler?.({ source: "user", text: `${workflow.toLowerCase()} this` }, context), { action: "handled" });
-    const started = entries.at(-1)?.data;
-    assert.equal(started.workflow, workflow);
-    assert.match(sent.at(-1) ?? "", new RegExp(started.taskId));
-    assert.deepEqual(await inputHandler?.({ source: "user", text: "Here is a follow-up detail" }, context), { action: "continue" });
-    assert.equal(route, workflows.indexOf(workflow) + 1);
-    await messageEnd?.({ message: { role: "assistant", content: [{ type: "text", text: `${workflow} complete` }] } }, context);
-    await agentSettled?.({}, context);
-    assert.deepEqual(entries.at(-1), {
-      type: "pi-lead:workflow-summary",
-      data: { status: "DONE", taskId: started.taskId, workflow, output: `${workflow} complete` },
-    });
-  }
+  assert.deepEqual(await inputHandler?.({ source: "user", text: "--base HEAD --check test --spec .scratch/pi-lead/issues/18-unified-orchestration.md -- reproduce it" }, context), { action: "handled" });
+  assert.deepEqual(await inputHandler?.({ source: "user", text: "--base HEAD --branch HEAD" }, context), { action: "handled" });
+  assert.deepEqual(await inputHandler?.({ source: "user", text: "--base HEAD --check test --allow example.com -- research this" }, context), { action: "handled" });
 
-  assert.equal(notices.filter((notice) => /DONE/.test(notice)).length, 3);
+  assert.deepEqual(executed.slice(0, 2), ["debug:mise run test", "review:HEAD..HEAD"]);
+  assert.match(executed[2] ?? "", /^research:/);
+  assert.deepEqual(entries.map((entry) => entry.type), [
+    "pi-lead:debug-task-summary", "pi-lead:standalone-review-summary", "pi-lead:research-summary",
+  ]);
+  assert.equal(notices.filter((notice) => /DONE/.test(notice)).length, 1);
+  assert.match(notices.at(-1) ?? "", /REVIEW_REQUIRED/);
 });
