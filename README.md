@@ -79,7 +79,7 @@ Activate the public package for one consuming project with the immutable
 release tag:
 
 ```bash
-pi install -l --approve git:github.com/tetienne/pi-lead@v0.1.0
+pi install -l --approve git:github.com/tetienne/pi-lead@v0.1.1
 ```
 
 `--approve` grants trust for that install command only; Pi records the pinned
@@ -94,7 +94,7 @@ directory, then activate that installed package directory:
 
 ```bash
 npm pack
-npm install --prefix /absolute/path/to/stage --ignore-scripts --omit=dev /absolute/path/to/pi-lead-0.1.0.tgz
+npm install --prefix /absolute/path/to/stage --ignore-scripts --omit=dev /absolute/path/to/pi-lead-0.1.1.tgz
 pi install -l --approve /absolute/path/to/stage/node_modules/pi-lead
 ```
 
