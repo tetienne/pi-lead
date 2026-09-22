@@ -4,7 +4,7 @@
 
 **Blocked by:** [02: Complete a ChatGPT Pro read-only worker task](02-chatgpt-worker.md)
 
-**Status:** IN PROGRESS
+**Status:** wontfix
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -51,3 +51,7 @@ Read source version caveats before using an API; research is source evidence, no
 Implemented deterministic Jev intent routing, OpenRouter's native TypeSafe SDK transport, bounded retry/deadline handling, prompt limits, response/state/cost validation, conservative reservations, and Lead intake/explicit workflow admission. `npm test` passed 101 tests and `npm run typecheck` passed on 2026-09-21. Independent Standards review found no issues; Spec review drove fail-closed accounting and intake corrections.
 
 The ticket remains in progress for the authorized live-evaluation gate: create and verify a dedicated OpenRouter key capped at $1 per aligned reset period, then run representative paid routing checks and provider accounting/restart reconciliation. No credential was requested, stored, or used, and no live Jev call was made.
+
+2026-09-22 scope decision: this historical slice is superseded rather than
+resumed independently. Ticket 18 owns bounded live Jev evaluation and connects
+the tested deterministic routing policy to the unified Lead interface.

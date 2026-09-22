@@ -4,7 +4,9 @@
 
 **Blocked by:** [02: Complete a ChatGPT Pro read-only worker task](02-chatgpt-worker.md)
 
-**Status:** DONE
+**Status:** ready-for-human
+
+**Resolution:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity, and authorized implementation on 2026-09-21. Ticket 02 is complete.
 

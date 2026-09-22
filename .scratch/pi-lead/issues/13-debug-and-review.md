@@ -2,9 +2,9 @@
 
 **What to build:** “debug this” follows the native diagnosis loop and “review this branch” returns independent Standards/Spec findings without forcing an implementation workflow.
 
-**Blocked by:** [04: Review, fix and commit a complete local coding task](04-review-fix-commit.md); [18: Execute Matt workflows through one orchestrator](18-unified-orchestration.md)
+**Blocked by:** [04: Review, fix and commit a complete local coding task](04-review-fix-commit.md)
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -54,6 +54,6 @@ Validation: `npm test` (121 passing), `npm run typecheck`, and `git diff --check
 2026-09-22 scope audit: the debug and standalone-review lifecycles satisfy
 their controlled tests, but neither is called by the main Lead extension.
 Consequently the promised natural-language requests are not available through
-the product interface. Ticket 18 owns that integration; the checked criteria
-above record the completed lifecycle implementation, while the new unchecked
-criterion records the missing end-to-end admission.
+the product interface. The unfinished admission requirement is transferred to
+Ticket 18 rather than resuming this historical slice; the checked criteria
+above record the completed lifecycle implementation.

@@ -4,7 +4,9 @@
 
 **Blocked by:** [12: Turn an idea into approved specs and vertical tickets](12-idea-to-tickets.md)
 
-**Status:** DONE
+**Status:** ready-for-human
+
+**Resolution:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 

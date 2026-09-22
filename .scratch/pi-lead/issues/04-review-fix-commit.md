@@ -4,7 +4,9 @@
 
 **Blocked by:** [03: Return a validated proposed change from a private workspace](03-validated-proposed-change.md)
 
-**Status:** DONE
+**Status:** ready-for-human
+
+**Resolution:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 

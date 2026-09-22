@@ -4,7 +4,9 @@
 
 **Blocked by:** None (first dependency-free ticket; execution still requires implementation authorization).
 
-**Status:** DONE
+**Status:** ready-for-human
+
+**Resolution:** DONE
 
 **Execution gate:** the user approved this plan, its ticket granularity and implementation. Ticket 01 is complete.
 

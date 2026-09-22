@@ -142,11 +142,8 @@ function ticketStatus(contents: string, sourcePath: string): LocalTicket["status
   if (resolution === "DONE") return "DONE";
   const match = /^\*\*Status:\*\*\s*(.+)$/im.exec(contents) ?? /^Status:\s*(.+)$/im.exec(contents);
   const value = match?.[1]?.trim().toUpperCase();
-  if (value === "DONE") return "DONE";
-  if (value === "READY-FOR-AGENT" || value === "READY") return "READY";
+  if (value === "READY-FOR-AGENT") return "READY";
   if (
-    value === "BLOCKED" ||
-    value === "IN PROGRESS" ||
     value === "NEEDS-TRIAGE" ||
     value === "NEEDS-INFO" ||
     value === "READY-FOR-HUMAN" ||

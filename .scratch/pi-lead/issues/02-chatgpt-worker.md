@@ -4,7 +4,9 @@
 
 **Blocked by:** [01: Install a Lead and complete an isolated fixture task](01-isolated-fixture.md)
 
-**Status:** DONE
+**Status:** ready-for-human
+
+**Resolution:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity, and authorized implementation on 2026-09-21. Ticket 01 is complete.
 

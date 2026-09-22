@@ -2,9 +2,9 @@
 
 **What to build:** after a Lead/wrapper failure, tab closure or interrupted push, recover an accurate task view without duplicate execution, and resume only after confirmation.
 
-**Blocked by:** [05: Push validated task branches through explicit policy](05-controlled-push.md); [18: Execute Matt workflows through one orchestrator](18-unified-orchestration.md)
+**Blocked by:** [05: Push validated task branches through explicit policy](05-controlled-push.md)
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -55,7 +55,6 @@ Validation: test-first focused recovery coverage (uncertain actions, VM re-obser
 
 2026-09-22 scope audit: the recovery store and reconciliation behavior exist and
 are covered by controlled tests, but the main Lead extension does not call this
-module. The ticket is not resolved until an interrupted real Lead task enters
-this reconciliation path and exposes the required confirmation to the user.
-Ticket 18 will place recovery behind the unified orchestration interface;
-Ticket 20 will provide final end-to-end evidence.
+module. The unfinished product integration is transferred to Ticket 18 rather
+than resuming this historical slice; Ticket 20 will provide final end-to-end
+evidence.

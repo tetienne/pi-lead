@@ -64,6 +64,7 @@ implementation path using controlled adapters before any bounded live check.
 
 ## Comments
 
-Created from the 2026-09-22 scope audit and approved by the user. Completion of
-this ticket must reconcile the audited IN PROGRESS status of Tickets 06, 10, 11
-and 13 rather than merely adding another command beside them.
+Created from the 2026-09-22 scope audit and approved by the user. Tickets 06,
+10, 11 and 13 are superseded historical slices; this ticket owns their
+unfinished integration requirements rather than merely adding another command
+beside them.

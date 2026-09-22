@@ -14,20 +14,20 @@ current delivery status.
 
 | Ticket | Status | Blocked by | Outcome |
 | --- | --- | --- | --- |
-| [01: Install a Lead and complete an isolated fixture task](issues/01-isolated-fixture.md) | DONE | None | Proved the first isolated visible worker lifecycle. |
-| [02: Complete a ChatGPT Pro read-only worker task](issues/02-chatgpt-worker.md) | DONE | 01 | Proved a bounded isolated ChatGPT worker with host-mediated credentials. |
-| [03: Return a validated proposed change from a private workspace](issues/03-validated-proposed-change.md) | DONE | 02 | Returned a checked proposal without changing the host checkout. |
-| [04: Review, fix and commit a complete local coding task](issues/04-review-fix-commit.md) | DONE | 03 | Built the reviewed local coding lifecycle currently reached through a specialized command. |
-| [05: Push validated task branches through explicit policy](issues/05-controlled-push.md) | DONE | 04 | Built controlled task-branch publication as an internal capability. |
-| [06: Recover interrupted work and retain useful diagnostics](issues/06-recovery-retention.md) | ready-for-agent | 05, 18 | Recovery is implemented and tested but is not connected to the main Lead. |
-| [07: Reuse safe toolchain caches across repeated tasks](issues/07-safe-toolchain-caches.md) | DONE | 03 | Proved isolated cache seeds and recorded that the measured warm path did not improve. |
-| [08: Run the isolated task path on both Linux architectures](issues/08-linux-hosts.md) | BLOCKED | 02 | Deferred Linux evidence; not part of the current release claim. |
-| [09: Use OpenCode Go when included quota is available](issues/09-opencode-go.md) | BLOCKED | 02 | Provider adapter exists, but a successful included-quota run remains deferred. |
-| [10: Route natural-language intent through bounded Jev calls](issues/10-jev-intent-routing.md) | IN PROGRESS | 02 | Deterministic routing exists; bounded live Jev evaluation remains open. |
-| [11: Select allowed models and reasoning at worker spawn](issues/11-model-reasoning-routing.md) | ready-for-agent | 10, 18 | Selection policy exists but has no production caller at worker spawn. |
-| [12: Turn an idea into approved specs and vertical tickets](issues/12-idea-to-tickets.md) | DONE | 02 | Planning reaches installed Matt skills, though its command surface will be contracted. |
-| [13: Diagnose bugs and review existing branches](issues/13-debug-and-review.md) | ready-for-agent | 04, 18 | Lifecycles exist but are unreachable from the main Lead interface. |
-| [14: Triage incoming work and resolve large design maps](issues/14-triage-and-wayfinding.md) | DONE | 12 | Natural-language routing reaches the installed Matt triage and wayfinding skills. |
+| [01: Install a Lead and complete an isolated fixture task](issues/01-isolated-fixture.md) | ready-for-human; resolved DONE | None | Proved the first isolated visible worker lifecycle. |
+| [02: Complete a ChatGPT Pro read-only worker task](issues/02-chatgpt-worker.md) | ready-for-human; resolved DONE | 01 | Proved a bounded isolated ChatGPT worker with host-mediated credentials. |
+| [03: Return a validated proposed change from a private workspace](issues/03-validated-proposed-change.md) | ready-for-human; resolved DONE | 02 | Returned a checked proposal without changing the host checkout. |
+| [04: Review, fix and commit a complete local coding task](issues/04-review-fix-commit.md) | ready-for-human; resolved DONE | 03 | Built the reviewed local coding lifecycle currently reached through a specialized command. |
+| [05: Push validated task branches through explicit policy](issues/05-controlled-push.md) | ready-for-human; resolved DONE | 04 | Built controlled task-branch publication as an internal capability. |
+| [06: Recover interrupted work and retain useful diagnostics](issues/06-recovery-retention.md) | wontfix (superseded by 18) | 05 | Recovery is implemented and tested but is not connected to the main Lead. |
+| [07: Reuse safe toolchain caches across repeated tasks](issues/07-safe-toolchain-caches.md) | ready-for-human; resolved DONE | 03 | Proved isolated cache seeds and recorded that the measured warm path did not improve. |
+| [08: Run the isolated task path on both Linux architectures](issues/08-linux-hosts.md) | ready-for-human (deferred) | 02 | Deferred Linux evidence; not part of the current release claim. |
+| [09: Use OpenCode Go when included quota is available](issues/09-opencode-go.md) | ready-for-human (deferred) | 02 | Provider adapter exists, but a successful included-quota run remains deferred. |
+| [10: Route natural-language intent through bounded Jev calls](issues/10-jev-intent-routing.md) | wontfix (superseded by 18) | 02 | Deterministic routing exists; bounded live Jev evaluation transfers to Ticket 18. |
+| [11: Select allowed models and reasoning at worker spawn](issues/11-model-reasoning-routing.md) | wontfix (superseded by 18) | 10 | Selection policy exists but has no production caller at worker spawn. |
+| [12: Turn an idea into approved specs and vertical tickets](issues/12-idea-to-tickets.md) | ready-for-human; resolved DONE | 02 | Planning reaches installed Matt skills, though its command surface will be contracted. |
+| [13: Diagnose bugs and review existing branches](issues/13-debug-and-review.md) | wontfix (superseded by 18) | 04 | Lifecycles exist but are unreachable from the main Lead interface. |
+| [14: Triage incoming work and resolve large design maps](issues/14-triage-and-wayfinding.md) | ready-for-human; resolved DONE | 12 | Natural-language routing reaches the installed Matt triage and wayfinding skills. |
 | [15: Execute the dependency frontier with two workers](issues/15-dependency-scheduler.md) | wontfix (deferred) | 04, 06, 12 | Scheduler logic is tested but excluded from the refocused current release. |
 | [16: Verify reusable installation and the current release experience](issues/16-complete-acceptance.md) | wontfix (superseded) | 07, 11, 13, 14, 15 | Broad-program acceptance is replaced by Ticket 20. |
 | [17: Refocus the product contract on one Lead interface](issues/17-refocus-product-contract.md) | ready-for-human; resolved DONE | None | Defines the conversation-first interface and classifies every existing capability. |
@@ -45,7 +45,8 @@ flowchart LR
 ```
 
 Ticket 18 reuses and reconciles the partial implementations recorded by Tickets
-06 and 10–14. Ticket 19 excludes Ticket 15 and the other deferred modules from
+06, 10, 11 and 13 alongside the completed workflow evidence in Tickets 12 and
+14. Ticket 19 excludes Ticket 15 and the other deferred modules from
 the active package path according to the contract established by Ticket 17.
 These are integration inputs and cleanup obligations, not parallel permission
 to expand the public surface again.

@@ -2,9 +2,9 @@
 
 **What to build:** the Lead assigns bounded tasks to adequate permitted model/reasoning combinations and reports the actual selections and fallback decisions.
 
-**Blocked by:** [10: Route natural-language intent through bounded Jev calls](10-jev-intent-routing.md); [18: Execute Matt workflows through one orchestrator](18-unified-orchestration.md)
+**Blocked by:** [10: Route natural-language intent through bounded Jev calls](10-jev-intent-routing.md)
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -54,6 +54,5 @@ Validation: focused routing-policy tests pass (11/11), the final full suite pass
 
 2026-09-22 scope audit: the deterministic selection and verification module is
 implemented and tested, but no production source caller invokes it when the
-Lead spawns a worker. The ticket remains unresolved until the unified
-orchestrator uses it and reports the effective route. Ticket 18 owns that
-integration. Ticket 10 also remains unresolved pending its live Jev gate.
+Lead spawns a worker. The unfinished product integration and live Jev gate are
+transferred to Ticket 18 rather than resuming this historical slice.
