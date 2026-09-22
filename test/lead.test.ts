@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createLeadExtension } from "../src/lead.ts";
+import { configuredIntentRouter, createLeadExtension } from "../src/lead.ts";
 import type { FixtureRequest, FixtureSummary } from "../src/task-lifecycle.ts";
 
 test("the Lead fixture command delegates once and records its correlated summary", async () => {
@@ -202,6 +202,21 @@ test("natural-language routing sends triage and wayfinding requests to their Mat
 
   assert.match(sent[0] ?? "", /^\/skill:triage /);
   assert.match(sent[1] ?? "", /^\/skill:wayfinder /);
+});
+
+test("explicit local Matt workflows remain available when Jev is missing or misconfigured", async () => {
+  const missingJev = configuredIntentRouter({});
+  const invalidJev = configuredIntentRouter({ PI_LEAD_JEV_OPENROUTER_KEY: "configured-but-unapproved" });
+
+  assert.deepEqual(await missingJev?.("triage the issue", "TRIAGE"), {
+    status: "ROUTED", workflow: "TRIAGE", source: "explicit",
+  });
+  assert.deepEqual(await invalidJev?.("map the effort", "WAYFIND"), {
+    status: "ROUTED", workflow: "WAYFIND", source: "explicit",
+  });
+  assert.deepEqual(await invalidJev?.("classify this naturally"), {
+    status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE",
+  });
 });
 
 test("the planning command dispatches the installed Matt skill flow without starting a build", async () => {

@@ -67,23 +67,30 @@ type LeadDependencies = {
   routeIntent?(input: string, explicitWorkflow?: JevWorkflow): Promise<JevRoutingOutcome>;
 };
 
-function configuredIntentRouter(): LeadDependencies["routeIntent"] | undefined {
-  const apiKey = process.env.PI_LEAD_JEV_OPENROUTER_KEY;
+const LOCAL_EXPLICIT_WORKFLOWS = ["CHAT", "IDEATE", "TRIAGE", "WAYFIND"] as const;
+
+function localExplicitOutcome(explicitWorkflow: JevWorkflow | undefined): JevRoutingOutcome | undefined {
+  if (!explicitWorkflow) return undefined;
+  return LOCAL_EXPLICIT_WORKFLOWS.includes(explicitWorkflow as (typeof LOCAL_EXPLICIT_WORKFLOWS)[number])
+    ? { status: "ROUTED", workflow: explicitWorkflow, source: "explicit" }
+    : { status: "UNAVAILABLE", workflow: explicitWorkflow, reason: "WORKFLOW_UNAVAILABLE" };
+}
+
+export function configuredIntentRouter(environment: NodeJS.ProcessEnv = process.env): LeadDependencies["routeIntent"] | undefined {
+  const apiKey = environment.PI_LEAD_JEV_OPENROUTER_KEY;
   if (!apiKey) {
     return async (_input, explicitWorkflow) => {
-      if (!explicitWorkflow) return { status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE" };
-      return (["CHAT", "IDEATE", "TRIAGE", "WAYFIND"] as const).includes(explicitWorkflow as "CHAT" | "IDEATE" | "TRIAGE" | "WAYFIND")
-        ? { status: "ROUTED", workflow: explicitWorkflow, source: "explicit" }
-        : { status: "UNAVAILABLE", workflow: explicitWorkflow, reason: "WORKFLOW_UNAVAILABLE" };
+      return localExplicitOutcome(explicitWorkflow) ?? { status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE" };
     };
   }
-  const resetHourUtc = Number(process.env.PI_LEAD_JEV_RESET_HOUR_UTC);
+  const resetHourUtc = Number(environment.PI_LEAD_JEV_RESET_HOUR_UTC);
   if (
-    process.env.PI_LEAD_JEV_DEDICATED_KEY_CONFIRMED !== "yes" ||
-    process.env.PI_LEAD_JEV_PROVIDER_DAILY_CAP_USD !== "1" ||
+    environment.PI_LEAD_JEV_DEDICATED_KEY_CONFIRMED !== "yes" ||
+    environment.PI_LEAD_JEV_PROVIDER_DAILY_CAP_USD !== "1" ||
     !Number.isInteger(resetHourUtc) || resetHourUtc < 0 || resetHourUtc > 23
   ) {
-    return async () => ({ status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE" });
+    return async (_input, explicitWorkflow) =>
+      localExplicitOutcome(explicitWorkflow) ?? { status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE" };
   }
   const router = createJevIntentRouter({
     transport: createOpenRouterJevTransport({ apiKey }),
