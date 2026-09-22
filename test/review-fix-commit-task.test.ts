@@ -58,6 +58,7 @@ function report(
 test("a clean independent Standards and Spec review delivers the exact validated proposal on a task branch", async () => {
   const initial = proposal("b");
   const calls: string[] = [];
+  const workerLeases: number[] = [];
   const runtime: ReviewFixCommitRuntime = {
     async propose() {
       calls.push("propose");
@@ -91,6 +92,14 @@ test("a clean independent Standards and Spec review delivers the exact validated
       standards: { source: "AGENTS.md", digest: "d".repeat(64), contents: "standards" },
     },
     runtime,
+    {
+      workers: {
+        async use(workers, work) {
+          workerLeases.push(workers);
+          return work();
+        },
+      },
+    },
   );
 
   assert.equal(summary.status, "DONE");
@@ -105,6 +114,7 @@ test("a clean independent Standards and Spec review delivers the exact validated
     `review:SPEC:${initial.proposedCommit}`,
     "commit:pi-lead/task-task-4",
   ]);
+  assert.deepEqual(workerLeases, [1, 1, 1]);
 });
 
 test("a reviewed local commit is published only through the exact task-branch publication boundary", async () => {

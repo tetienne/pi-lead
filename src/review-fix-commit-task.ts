@@ -5,6 +5,7 @@ import type {
 } from "./proposed-change-task.ts";
 import type { PublicationOutcome } from "./git-publication.ts";
 import type { PinnedReviewDocument } from "./review-context.ts";
+import type { WorkerCapacity } from "./dependency-scheduler.ts";
 
 export type ReviewAxis = "STANDARDS" | "SPEC";
 
@@ -229,8 +230,9 @@ function blocked(
 export async function runReviewFixCommitTask(
   task: CompleteLocalCodingRequest,
   runtime: ReviewFixCommitRuntime,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; workers?: WorkerCapacity } = {},
 ): Promise<CompleteLocalCodingSummary> {
+  const useWorker = <T>(work: () => Promise<T>) => options.workers?.use(1, work) ?? work();
   let reviewCycles = 0;
   const reviewHistory: Array<{ correctionCycle: number; reviews: readonly ReviewReport[] }> = [];
   let currentRequest: ProposedChangeRequest = {
@@ -239,7 +241,7 @@ export async function runReviewFixCommitTask(
   };
   let proposalResult: ProposedChangeSummary;
   try {
-    proposalResult = await runtime.propose(currentRequest, options.signal);
+    proposalResult = await useWorker(() => runtime.propose(currentRequest, options.signal));
   } catch (error) {
     return blocked(
       task.taskId,
@@ -272,7 +274,7 @@ export async function runReviewFixCommitTask(
     const source = comparisonSource(reviewedProposal);
     const reviewResults = await Promise.allSettled(
         REVIEW_AXES.map((axis) =>
-          runtime.review(
+          useWorker(() => runtime.review(
             {
               task,
               proposal: reviewedProposal,
@@ -282,7 +284,7 @@ export async function runReviewFixCommitTask(
               standards: task.standards,
             },
             options.signal,
-          ),
+          )),
         ),
       );
     const failedReview = reviewResults.find(
@@ -440,7 +442,7 @@ export async function runReviewFixCommitTask(
       instruction: correctionInstruction(task, reviews),
     };
     try {
-      proposalResult = await runtime.propose(currentRequest, options.signal);
+      proposalResult = await useWorker(() => runtime.propose(currentRequest, options.signal));
     } catch (error) {
       return blocked(
         task.taskId,

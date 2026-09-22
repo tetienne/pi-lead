@@ -4,7 +4,7 @@
 
 **Blocked by:** [04: Review, fix and commit a complete local coding task](04-review-fix-commit.md); [06: Recover interrupted work and retain useful diagnostics](06-recovery-retention.md); [12: Turn an idea into approved specs and vertical tickets](12-idea-to-tickets.md)
 
-**Status:** ready-for-agent
+**Status:** DONE
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -46,3 +46,11 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Workspace And Mise](../../../docs/research/workspace-and-mise.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+Implemented 2026-09-22. The trusted Lead scheduler now loads only an explicitly approved local tracker graph with declared acceptance criteria, genuine blocking edges and per-ticket implementation authorization. It persists atomic claims, fresh source/specification digests, attempts and worker/VM/Pi/Herdr identity; forged result ownership is rejected. The shared two-worker lease is supplied to build and independent Standards/Spec review work, while integration is serialized. Overlapping paths (including ancestor/descendant paths and renames) trigger documented conflict resolution and final-revision revalidation before a ticket becomes DONE.
+
+Interrupted claims never return to PENDING automatically. Restart reconciliation observes a retained worker, terminates and re-observes it when needed, then records either a confirmation-required or cleanup-unconfirmed diagnostic outcome. The existing review/fix runner uses the same worker lease for builders and both reviewers, retaining its two correction-cycle limit.
+
+Validation: focused scheduler/review tests, `npm test` (136 passing), `npm run typecheck`, `git diff --cached --check`, and independent Standards/Spec review. Runtime evidence uses controlled host substitutes only; no live provider, VM, Herdr or cross-host claim is added by this slice.
