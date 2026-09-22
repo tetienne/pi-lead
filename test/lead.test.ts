@@ -291,3 +291,93 @@ test("the Lead exposes native Matt triage and wayfinding commands without starti
     { message: "PI Lead wayfinding: sent to Matt; no build was started", level: "info" },
   ]);
 });
+
+test("ordinary input and /lead admit every supported Matt workflow through one orchestrator", async () => {
+  const commands = new Map<string, (args: string, context: unknown) => Promise<void>>();
+  let inputHandler:
+    | ((event: { source: string; text: string }, context: unknown) => Promise<{ action: string }>)
+    | undefined;
+  const sent: string[] = [];
+  const notices: Array<{ message: string; level: string }> = [];
+  const workflows = ["CHAT", "IMPLEMENT", "IDEATE", "DEBUG", "REVIEW", "RESEARCH", "TRIAGE", "WAYFIND", "OPERATE"] as const;
+  const pi = {
+    on(name: string, handler: typeof inputHandler) {
+      if (name === "input") inputHandler = handler;
+      return () => undefined;
+    },
+    registerCommand(name: string, definition: { handler: (args: string, context: unknown) => Promise<void> }) {
+      commands.set(name, definition.handler);
+    },
+    sendUserMessage(message: string) { sent.push(message); },
+    appendEntry() {},
+  } as unknown as ExtensionAPI;
+  let index = 0;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async routeIntent() {
+      const workflow = workflows[index++];
+      if (!workflow) throw new Error("unexpected route");
+      return { status: "ROUTED", workflow, source: "jev" };
+    },
+  })(pi);
+  const context = {
+    cwd: "/consumer",
+    ui: { notify(message: string, level: string) { notices.push({ message, level }); } },
+  };
+
+  assert.ok(commands.has("lead"));
+  assert.deepEqual(await inputHandler?.({ source: "user", text: "chat" }, context), { action: "continue" });
+  for (const request of ["implement", "ideate", "debug", "review", "research", "triage", "wayfind"]) {
+    assert.deepEqual(await inputHandler?.({ source: "user", text: request }, context), { action: "handled" });
+  }
+  await commands.get("lead")?.("operate", context);
+
+  assert.deepEqual(sent.map((message) => message.match(/^\/skill:[^ ]+/)?.[0]), [
+    "/skill:ask-matt",
+    "/skill:diagnosing-bugs",
+    "/skill:code-review",
+    "/skill:research",
+    "/skill:triage",
+    "/skill:wayfinder",
+  ]);
+  assert.deepEqual(notices.at(-1), {
+    message: "PI Lead operation: human authorization required; no worker was started",
+    level: "info",
+  });
+  assert.deepEqual(notices[0], {
+    message: "PI Lead implement: unavailable; no worker was started",
+    level: "error",
+  });
+});
+
+test("a natural implementation request without its approved validation context is precisely blocked", async () => {
+  let inputHandler:
+    | ((event: { source: string; text: string }, context: unknown) => Promise<{ action: string }>)
+    | undefined;
+  const notices: Array<{ message: string; level: string }> = [];
+  const pi = {
+    on(name: string, handler: typeof inputHandler) {
+      if (name === "input") inputHandler = handler;
+      return () => undefined;
+    },
+    registerCommand() {},
+    appendEntry() {},
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async runCompleteLocalCoding() { throw new Error("not reached"); },
+    async routeIntent() { return { status: "ROUTED", workflow: "IMPLEMENT", source: "jev" }; },
+  })(pi);
+
+  assert.deepEqual(
+    await inputHandler?.(
+      { source: "user", text: "Implement a new welcome screen" },
+      { cwd: process.cwd(), ui: { notify(message: string, level: string) { notices.push({ message, level }); } } },
+    ),
+    { action: "handled" },
+  );
+  assert.deepEqual(notices, [{
+    message: "PI Lead implement: BLOCKED — separate the instruction with --",
+    level: "error",
+  }]);
+});

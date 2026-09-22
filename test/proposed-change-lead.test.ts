@@ -146,6 +146,10 @@ test("the Lead implement command reserves review capacity and records a delivere
         standards: request.standards,
       };
     },
+    async routeIntent(_input, workflow) {
+      assert.equal(workflow, "IMPLEMENT");
+      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
+    },
   })(pi);
 
   await commands.get("lead-implement")?.(
@@ -225,6 +229,10 @@ test("an implementation waiting for its two review slots is queued until the cur
         specification: request.specification,
         standards: request.standards,
       };
+    },
+    async routeIntent(_input, workflow) {
+      assert.equal(workflow, "IMPLEMENT");
+      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
     },
   })(pi);
   const context = {

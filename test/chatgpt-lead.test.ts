@@ -54,6 +54,10 @@ test("plain chat spawns nothing while explicit admission and the command escape 
         vmTerminated: true,
       } satisfies ChatGptTaskSummary;
     },
+    async routeIntent(_input, workflow) {
+      assert.ok(workflow === undefined || workflow === "CHAT");
+      return { status: "ROUTED", workflow: "CHAT", source: "explicit" };
+    },
   })(pi);
   const cwd = await mkdtemp(join(tmpdir(), "pi-lead-extension-"));
   await writeFile(join(cwd, "CONTEXT.md"), "Lead coordinates workers.\n", "utf8");
