@@ -58,7 +58,6 @@ function report(
 test("a clean independent Standards and Spec review delivers the exact validated proposal on a task branch", async () => {
   const initial = proposal("b");
   const calls: string[] = [];
-  const workerLeases: number[] = [];
   const runtime: ReviewFixCommitRuntime = {
     async propose() {
       calls.push("propose");
@@ -92,14 +91,6 @@ test("a clean independent Standards and Spec review delivers the exact validated
       standards: { source: "AGENTS.md", digest: "d".repeat(64), contents: "standards" },
     },
     runtime,
-    {
-      workers: {
-        async use(workers, work) {
-          workerLeases.push(workers);
-          return work();
-        },
-      },
-    },
   );
 
   assert.equal(summary.status, "DONE");
@@ -114,82 +105,6 @@ test("a clean independent Standards and Spec review delivers the exact validated
     `review:SPEC:${initial.proposedCommit}`,
     "commit:pi-lead/task-task-4",
   ]);
-  assert.deepEqual(workerLeases, [1, 1, 1]);
-});
-
-test("a reviewed local commit is published only through the exact task-branch publication boundary", async () => {
-  const initial = proposal("b");
-  let published = false;
-  const runtime: ReviewFixCommitRuntime = {
-    async propose() { return initial; },
-    async review(input) { return report(input.proposal, input.axis, []); },
-    async commit(input) {
-      return { branchName: input.branchName, commit: input.proposal.proposedCommit, committed: true, activeCheckoutPreserved: true };
-    },
-    async publish(input) {
-      published = true;
-      assert.equal(input.commit.branchName, "pi-lead/task-task-4");
-      assert.equal(input.commit.commit, initial.proposedCommit);
-      return {
-        status: "PUBLISHED",
-        intent: {
-          operation: "PUSH_TASK_BRANCH", remoteName: "publish",
-          remoteFingerprint: "a".repeat(64),
-          sourceRef: "refs/heads/pi-lead/task-task-4", destinationRef: "refs/heads/pi-lead/task-task-4",
-          commit: initial.proposedCommit,
-        },
-        observedCommit: initial.proposedCommit,
-      };
-    },
-  };
-  const summary = await runReviewFixCommitTask(
-    {
-      taskId: "task-4", instruction: "Change the value.", repositoryPath: "/consumer", namedBase: "main",
-      validationTasks: ["test"], dependencyHosts: [],
-      specification: { source: "ticket.md", digest: "f".repeat(64), contents: "ticket" },
-      standards: { source: "AGENTS.md", digest: "d".repeat(64), contents: "standards" },
-    }, runtime,
-  );
-  assert.equal(summary.status, "DONE");
-  assert.equal(summary.status === "DONE" && summary.published, true);
-  assert.equal(published, true);
-});
-
-test("an uncertain publication blocks completion while retaining the reviewed local commit", async () => {
-  const initial = proposal("b");
-  const runtime: ReviewFixCommitRuntime = {
-    async propose() { return initial; },
-    async review(input) { return report(input.proposal, input.axis, []); },
-    async commit(input) {
-      return { branchName: input.branchName, commit: input.proposal.proposedCommit, committed: true, activeCheckoutPreserved: true };
-    },
-    async publish(input) {
-      return {
-        status: "UNCERTAIN",
-        intent: {
-          operation: "PUSH_TASK_BRANCH", remoteName: "publish",
-          remoteFingerprint: "a".repeat(64),
-          sourceRef: `refs/heads/${input.commit.branchName}`, destinationRef: `refs/heads/${input.commit.branchName}`,
-          commit: input.commit.commit,
-        },
-        detail: "Push result could not be reconciled",
-      };
-    },
-  };
-  const summary = await runReviewFixCommitTask(
-    {
-      taskId: "task-4", instruction: "Change the value.", repositoryPath: "/consumer", namedBase: "main",
-      validationTasks: ["test"], dependencyHosts: [],
-      specification: { source: "ticket.md", digest: "f".repeat(64), contents: "ticket" },
-      standards: { source: "AGENTS.md", digest: "d".repeat(64), contents: "standards" },
-    }, runtime,
-  );
-  assert.equal(summary.status, "BLOCKED");
-  if (summary.status === "BLOCKED") {
-    assert.equal(summary.reason, "PUBLICATION_BLOCKED");
-    assert.equal(summary.commit?.commit, initial.proposedCommit);
-    assert.equal(summary.publication?.status, "UNCERTAIN");
-  }
 });
 
 test("a review correction replaces stale evidence and revalidates before final independent review", async () => {

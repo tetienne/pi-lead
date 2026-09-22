@@ -18,8 +18,8 @@ import {
   type ProviderFailure,
 } from "./chatgpt-task.ts";
 import { MAX_CHATGPT_TASK_CHARS } from "./chatgpt-input.ts";
-import type { HerdrClient } from "./native-runtime.ts";
-import type { EffectivePiRoute, PiReasoningLevel } from "./model-reasoning-routing.ts";
+import type { HerdrClient } from "./herdr-client.ts";
+import type { EffectivePiRoute, PiReasoningLevel, WorkerProvider } from "./model-reasoning-routing.ts";
 import { parseEffectivePiRoute } from "./effective-route-observation.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
 import type { NativeWorkerCleanupObserver, NativeWorkerObserver, NativeWorkerResultObserver } from "./native-worker-observation.ts";
@@ -54,7 +54,12 @@ type NativeChatGptRuntimeOptions = {
   herdr?: HerdrClient;
   processHost?: ChatGptProcessHost;
   pollIntervalMs?: number;
-  providerProfile?: "chatgpt" | "opencode-go";
+  workerProfile?: {
+    provider: WorkerProvider;
+    allowedHost: string;
+    launcherPath: string;
+    requireChatGptProtocol: boolean;
+  };
   workerPhase?: "DISCOVER" | "DEBUG" | "BUILD" | "VERIFY";
 };
 
@@ -271,10 +276,13 @@ function parseResult(value: unknown): ChatGptWorkerResult {
 export async function createNativeChatGptRuntime(
   options: NativeChatGptRuntimeOptions,
 ): Promise<ChatGptTaskRuntime> {
-  const profile = options.providerProfile ?? "chatgpt";
-  const cli = new NativeChatGptCliClient(
-    profile === "chatgpt" ? "./chatgpt-launcher.ts" : "./opencode-go-launcher.ts",
-  );
+  const profile = options.workerProfile ?? {
+    provider: "openai-codex",
+    allowedHost: "chatgpt.com",
+    launcherPath: "./chatgpt-launcher.ts",
+    requireChatGptProtocol: true,
+  };
+  const cli = new NativeChatGptCliClient(profile.launcherPath);
   const herdr = options.herdr ?? cli;
   const processHost = options.processHost ?? cli;
   const stateRoot =
@@ -293,15 +301,15 @@ export async function createNativeChatGptRuntime(
         allowedHosts: readonly string[];
       };
       if (
-        (profile === "chatgpt"
-          ? profileRequest.provider !== "openai-codex" ||
+        (profile.requireChatGptProtocol
+          ? profileRequest.provider !== profile.provider ||
             profileRequest.transport !== "sse" ||
             profileRequest.cacheWarming !== "off" ||
             profileRequest.allowedHosts.length !== 1 ||
-            profileRequest.allowedHosts[0] !== "chatgpt.com"
-          : profileRequest.provider !== "opencode-go" ||
+            profileRequest.allowedHosts[0] !== profile.allowedHost
+          : profileRequest.provider !== profile.provider ||
             profileRequest.allowedHosts.length !== 1 ||
-            profileRequest.allowedHosts[0] !== "opencode.ai") ||
+            profileRequest.allowedHosts[0] !== profile.allowedHost) ||
         request.allowWebSockets !== false ||
         request.focus !== false ||
         request.hostMounts.length !== 0 ||
@@ -350,7 +358,7 @@ export async function createNativeChatGptRuntime(
           controllerAdmissionRequired: true,
           policy: {
             provider: profileRequest.provider,
-            ...(profile === "chatgpt" ? { transport: request.transport, cacheWarming: request.cacheWarming } : {}),
+            ...(profile.requireChatGptProtocol ? { transport: request.transport, cacheWarming: request.cacheWarming } : {}),
             allowedHosts: profileRequest.allowedHosts,
             allowWebSockets: request.allowWebSockets,
             hostMounts: request.hostMounts,
@@ -381,8 +389,7 @@ export async function createNativeChatGptRuntime(
           paneId: tab.paneId,
           piSessionId,
         };
-        const provider = profile === "chatgpt" ? "openai-codex" : "opencode-go";
-        const effectiveRoute = parseEffectivePiRoute(resources, provider, "worker");
+        const effectiveRoute = parseEffectivePiRoute(resources, profile.provider, "worker");
         if (options.onWorkerSpawn) options.onWorkerSpawn(effectiveRoute);
         if (options.onWorkerOwned) {
           await options.onWorkerOwned({ effectiveRoute, identity: worker, stateDirectory: directory, phase: options.workerPhase ?? "DISCOVER" });

@@ -3,140 +3,88 @@ import { test } from "node:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { configuredIntentRouter, createLeadExtension } from "../src/lead.ts";
-import type { FixtureRequest, FixtureSummary } from "../src/task-lifecycle.ts";
 
-test("the Lead fixture command delegates once and records its correlated summary", async () => {
-  let command:
-    | {
-        description?: string;
-        handler: (args: string, context: unknown) => Promise<void>;
-      }
-    | undefined;
-  const entries: Array<{ type: string; data: unknown }> = [];
-  const notifications: Array<{ message: string; level: string }> = [];
-  let receivedRequest: FixtureRequest | undefined;
-
+test("the installed Lead exposes only the unified /lead command", () => {
+  const commands: string[] = [];
   const pi = {
     on() {
       return () => undefined;
     },
-    registerCommand(name: string, definition: typeof command) {
-      if (name === "lead-fixture") command = definition;
-    },
-    appendEntry(type: string, data: unknown) {
-      entries.push({ type, data });
+    registerCommand(name: string) {
+      commands.push(name);
     },
   } as unknown as ExtensionAPI;
 
-  const extension = createLeadExtension({
-    async runFixture(request) {
-      receivedRequest = request;
-      return {
-        status: "DONE",
-        ...request,
-        workerId: "worker-command",
-        vmId: "vm-command",
-        tabId: "tab-command",
-        artifactId: "artifact-command",
-        output: "fixture complete",
-        vmTerminated: true,
-      } satisfies FixtureSummary;
+  createLeadExtension({
+    async routeIntent() {
+      return { status: "ROUTED", workflow: "CHAT", source: "jev" };
     },
-    async routeIntent(_input, workflow) {
-      assert.equal(workflow, "CHAT");
-      return { status: "ROUTED", workflow: "CHAT", source: "explicit" };
-    },
-  });
-  extension(pi);
+  })(pi);
 
-  assert.match(command?.description ?? "", /isolated fixture/i);
-  await command?.handler("", {
-    cwd: "/consumer",
-    ui: {
-      notify(message: string, level: string) {
-        notifications.push({ message, level });
-      },
-    },
-  });
+  assert.deepEqual(commands, ["lead"]);
+});
 
-  assert.ok(receivedRequest?.taskId);
-  assert.ok(receivedRequest?.assignmentId);
-  assert.notEqual(receivedRequest?.taskId, receivedRequest?.assignmentId);
-  assert.deepEqual(entries, [
-    {
-      type: "pi-lead:fixture-summary",
-      data: {
-        status: "DONE",
-        ...receivedRequest,
-        workerId: "worker-command",
-        vmId: "vm-command",
-        tabId: "tab-command",
-        artifactId: "artifact-command",
-        output: "fixture complete",
-        vmTerminated: true,
-      },
+test("historical Lead text forms receive no provider or workflow special handling", async () => {
+  let inputHandler:
+    | ((event: { source: string; text: string }, context: unknown) => Promise<{ action: string }>)
+    | undefined;
+  const routed: string[] = [];
+  const pi = {
+    on(name: string, handler: typeof inputHandler) {
+      if (name === "input") inputHandler = handler;
+      return () => undefined;
     },
-  ]);
-  assert.deepEqual(notifications, [
-    { message: "PI Lead fixture: DONE — fixture complete", level: "info" },
+    registerCommand() {},
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async routeIntent(input) {
+      routed.push(input);
+      return { status: "ROUTED", workflow: "CHAT", source: "jev" };
+    },
+  })(pi);
+
+  const context = { cwd: "/consumer", ui: { notify() {} } };
+  assert.deepEqual(
+    await inputHandler?.({ source: "interactive", text: "Lead: ask worker inspect this" }, context),
+    { action: "continue" },
+  );
+  assert.deepEqual(
+    await inputHandler?.({ source: "interactive", text: "Lead: implement inspect this" }, context),
+    { action: "continue" },
+  );
+  assert.deepEqual(routed, [
+    "Lead: ask worker inspect this",
+    "Lead: implement inspect this",
   ]);
 });
 
-test("the Lead admits at most two fixture workers concurrently", async () => {
-  let handler: ((args: string, context: unknown) => Promise<void>) | undefined;
-  const entries: unknown[] = [];
-  const releases: Array<() => void> = [];
-  let runCount = 0;
+test("steering, follow-ups, images and extension messages bypass task admission", async () => {
+  let inputHandler: ((event: any, context: unknown) => Promise<{ action: string }>) | undefined;
+  let routes = 0;
   const pi = {
-    on() {
+    on(name: string, handler: typeof inputHandler) {
+      if (name === "input") inputHandler = handler;
       return () => undefined;
     },
-    registerCommand(name: string, definition: { handler: typeof handler }) {
-      if (name === "lead-fixture") handler = definition.handler;
-    },
-    appendEntry(_type: string, data: unknown) {
-      entries.push(data);
-    },
+    registerCommand() {},
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture(request) {
-      runCount++;
-      await new Promise<void>((resolve) => releases.push(resolve));
-      return {
-        status: "DONE",
-        ...request,
-        workerId: `worker-${runCount}`,
-        vmId: `vm-${runCount}`,
-        tabId: `tab-${runCount}`,
-        artifactId: `artifact-${runCount}`,
-        output: "fixture complete",
-        vmTerminated: true,
-      };
-    },
-    async routeIntent(_input, workflow) {
-      assert.equal(workflow, "CHAT");
-      return { status: "ROUTED", workflow: "CHAT", source: "explicit" };
+    async routeIntent() {
+      routes++;
+      return { status: "ROUTED", workflow: "CHAT", source: "jev" };
     },
   })(pi);
   const context = { cwd: "/consumer", ui: { notify() {} } };
 
-  const first = handler?.("", context);
-  const second = handler?.("", context);
-  await handler?.("", context);
-
-  assert.equal(runCount, 2);
-  assert.equal(
-    entries.some(
-      (entry) =>
-        typeof entry === "object" &&
-        entry !== null &&
-        "reason" in entry &&
-        entry.reason === "CONCURRENCY_LIMIT",
-    ),
-    true,
-  );
-  for (const release of releases) release();
-  await Promise.all([first, second]);
+  for (const event of [
+    { source: "interactive", text: "more detail", streamingBehavior: "followUp" },
+    { source: "interactive", text: "urgent correction", streamingBehavior: "steer" },
+    { source: "interactive", text: "describe this", images: [{}] },
+    { source: "extension", text: "recursive request" },
+  ]) {
+    assert.deepEqual(await inputHandler?.(event, context), { action: "continue" });
+  }
+  assert.equal(routes, 0);
 });
 
 test("natural-language routing keeps chat in Lead and makes ambiguous intake visibly handled", async () => {
@@ -153,9 +101,6 @@ test("natural-language routing keeps chat in Lead and makes ambiguous intake vis
     appendEntry() {},
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() {
-      throw new Error("not used");
-    },
     async routeIntent(input) {
       assert.equal(input, "this is both a bug report and a request to implement it");
       return { status: "CLARIFICATION_REQUIRED", reason: "AMBIGUOUS_INTENT" };
@@ -190,7 +135,6 @@ test("natural-language routing sends triage and wayfinding requests to their Mat
     sendUserMessage(content: string) { sent.push(content); },
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     async routeIntent(input) {
       return input.includes("migration")
         ? { status: "ROUTED", workflow: "WAYFIND", source: "jev" }
@@ -212,17 +156,14 @@ test("natural-language routing sends triage and wayfinding requests to their Mat
   assert.match(sent[1] ?? "", /^\/skill:wayfinder /);
 });
 
-test("explicit local Matt workflows remain available when Jev is missing or misconfigured", async () => {
+test("Jev availability does not create workflow-specific request vocabulary", async () => {
   const missingJev = configuredIntentRouter({});
   const invalidJev = configuredIntentRouter({ PI_LEAD_JEV_OPENROUTER_KEY: "configured-but-unapproved" });
 
-  assert.deepEqual(await missingJev?.("triage the issue", "TRIAGE"), {
-    status: "ROUTED", workflow: "TRIAGE", source: "explicit",
+  assert.deepEqual(await missingJev?.("triage the issue"), {
+    status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE",
   });
-  assert.deepEqual(await invalidJev?.("map the effort", "WAYFIND"), {
-    status: "ROUTED", workflow: "WAYFIND", source: "explicit",
-  });
-  assert.deepEqual(await invalidJev?.("classify this naturally"), {
+  assert.deepEqual(await invalidJev?.("map the effort"), {
     status: "SERVICE_UNAVAILABLE", reason: "JEV_UNAVAILABLE",
   });
 });
@@ -239,7 +180,6 @@ test("/lead uses the same orchestrator and explicit fallback when Jev is unavail
     sendUserMessage(message: string) { sent.push(message); },
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     routeIntent: configuredIntentRouter({}),
   })(pi);
 
@@ -260,7 +200,7 @@ test("/lead asks for clarification when its deterministic fallback matches multi
     appendEntry() {},
     sendUserMessage() { throw new Error("ambiguous input must not be dispatched"); },
   } as unknown as ExtensionAPI;
-  createLeadExtension({ async runFixture() { throw new Error("not used"); }, routeIntent: configuredIntentRouter({}) })(pi);
+  createLeadExtension({ routeIntent: configuredIntentRouter({}) })(pi);
 
   await command?.("debug and implement this crash", {
     cwd: "/consumer",
@@ -271,7 +211,7 @@ test("/lead asks for clarification when its deterministic fallback matches multi
 
 test("/lead submits the unchanged natural-language request to Jev before considering outage fallback", async () => {
   let command: ((args: string, context: any) => Promise<void>) | undefined;
-  const routed: Array<{ input: string; explicit: unknown }> = [];
+  const routed: string[] = [];
   const pi = {
     on() { return () => undefined; },
     registerCommand(name: string, definition: { handler: typeof command }) {
@@ -280,15 +220,14 @@ test("/lead submits the unchanged natural-language request to Jev before conside
     appendEntry() {}, sendUserMessage() {},
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
-    async routeIntent(input, explicit) {
-      routed.push({ input, explicit });
+    async routeIntent(input) {
+      routed.push(input);
       return { status: "ROUTED", workflow: "CHAT", source: "jev" };
     },
   })(pi);
 
   await command?.("Could you untangle this for me?", { cwd: "/consumer", ui: { notify() {} } });
-  assert.deepEqual(routed, [{ input: "Could you untangle this for me?", explicit: undefined }]);
+  assert.deepEqual(routed, ["Could you untangle this for me?"]);
 });
 
 test("ordinary engineering intent fails closed through deterministic admission when Jev is unavailable", async () => {
@@ -302,7 +241,6 @@ test("ordinary engineering intent fails closed through deterministic admission w
     registerCommand() {}, appendEntry() {}, sendUserMessage() {},
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     routeIntent: configuredIntentRouter({}),
     async runCompleteLocalCoding() { throw new Error("incomplete intake must not start a worker"); },
   })(pi);
@@ -310,79 +248,6 @@ test("ordinary engineering intent fails closed through deterministic admission w
 
   assert.deepEqual(await inputHandler?.({ source: "user", text: "implement the approved change" }, context), { action: "handled" });
   assert.match(notices[0] ?? "", /which approved specification, named base, and mise checks/);
-});
-
-test("the planning command dispatches the installed Matt skill flow without starting a build", async () => {
-  let planCommand: { handler: (args: string, context: unknown) => Promise<void> } | undefined;
-  const sent: Array<{ content: string; options: unknown }> = [];
-  const notices: Array<{ message: string; level: string }> = [];
-  const pi = {
-    on() { return () => undefined; },
-    registerCommand(name: string, definition: typeof planCommand) {
-      if (name === "lead-plan") planCommand = definition;
-    },
-    appendEntry() {},
-    sendUserMessage(content: string, options: unknown) { sent.push({ content, options }); },
-  } as unknown as ExtensionAPI;
-  createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
-    async routeIntent(_input, workflow) {
-      assert.equal(workflow, "IDEATE");
-      return { status: "ROUTED", workflow: "IDEATE", source: "explicit" };
-    },
-  })(pi);
-
-  await planCommand?.handler("Plan safer release notes", {
-    cwd: "/consumer",
-    ui: { notify(message: string, level: string) { notices.push({ message, level }); } },
-  });
-  assert.match(sent[0]?.content ?? "", /^\/skill:ask-matt /);
-  assert.deepEqual(sent[0]?.options, { expandPromptTemplates: true });
-  assert.deepEqual(notices, [{ message: "PI Lead plan: sent to Ask Matt; no build was started", level: "info" }]);
-});
-
-test("the Lead exposes native Matt triage and wayfinding commands without starting workers", async () => {
-  const commands = new Map<string, { handler: (args: string, context: unknown) => Promise<void> }>();
-  const sent: Array<{ content: string; options: unknown }> = [];
-  const notices: Array<{ message: string; level: string }> = [];
-  const pi = {
-    on() { return () => undefined; },
-    registerCommand(name: string, definition: { handler: (args: string, context: unknown) => Promise<void> }) {
-      commands.set(name, definition);
-    },
-    appendEntry() {},
-    sendUserMessage(content: string, options: unknown) { sent.push({ content, options }); },
-  } as unknown as ExtensionAPI;
-  const routed: string[] = [];
-  createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
-    async routeIntent(_input, workflow) {
-      routed.push(workflow ?? "");
-      if (workflow === "TRIAGE" || workflow === "WAYFIND") {
-        return { status: "ROUTED", workflow, source: "explicit" };
-      }
-      throw new Error("not reached");
-    },
-  })(pi);
-  const context = {
-    cwd: "/consumer",
-    ui: { notify(message: string, level: string) { notices.push({ message, level }); } },
-  };
-
-  await commands.get("lead-triage")?.handler("#42: investigate export", context);
-  await commands.get("lead-wayfind")?.handler("plan a foggy migration", context);
-
-  assert.match(sent[0]?.content ?? "", /^\/skill:triage /);
-  assert.match(sent[1]?.content ?? "", /^\/skill:wayfinder /);
-  assert.deepEqual(routed, ["TRIAGE", "WAYFIND"]);
-  assert.deepEqual(sent.map((message) => message.options), [
-    { expandPromptTemplates: true },
-    { expandPromptTemplates: true },
-  ]);
-  assert.deepEqual(notices, [
-    { message: "PI Lead triage: sent to Matt; no build was started", level: "info" },
-    { message: "PI Lead wayfinding: sent to Matt; no build was started", level: "info" },
-  ]);
 });
 
 test("ordinary input and /lead admit every supported Matt workflow through one orchestrator", async () => {
@@ -410,7 +275,6 @@ test("ordinary input and /lead admit every supported Matt workflow through one o
   } as unknown as ExtensionAPI;
   let index = 0;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     async routeIntent() {
       const workflow = workflows[index++];
       if (!workflow) throw new Error("unexpected route");
@@ -460,7 +324,6 @@ test("a natural implementation request asks conversationally for its approved va
     appendEntry() {},
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     async runCompleteLocalCoding() { throw new Error("not reached"); },
     async routeIntent() { return { status: "ROUTED", workflow: "IMPLEMENT", source: "jev" }; },
   })(pi);
@@ -494,7 +357,6 @@ test("Lead restart admits host-owned recovery before any new engineering task", 
     appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     async runCompleteLocalCoding() { implementationRuns++; throw new Error("must not run"); },
     async recoverInterrupted() {
       return [{ taskId: "task-interrupted", reason: "RESUME_CONFIRMATION_REQUIRED", resumeAllowed: true }];
@@ -530,7 +392,6 @@ test("an interrupted task is admitted again only after explicit recovery confirm
     registerCommand() {}, appendEntry() {},
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     async recoverInterrupted() { return [{ taskId: "task-resume", reason: "RESUME_CONFIRMATION_REQUIRED", resumeAllowed: true }]; },
     async confirmRecovery(_cwd, taskId) { confirmed.push(taskId); },
     async routeIntent() { return { status: "ROUTED", workflow: "IDEATE", source: "jev" }; },
@@ -560,7 +421,6 @@ test("native debug, review, and Matt research use attributable worker lifecycles
   const workflows = ["DEBUG", "REVIEW", "RESEARCH"] as const;
   let route = 0;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     async runDebug(request) {
       executed.push(`debug:${request.feedbackCommand}`);
       return { status: "BLOCKED", reason: "REPRODUCTION_NOT_FAILED", detail: "controlled feedback passed", diagnosticsRetained: true };

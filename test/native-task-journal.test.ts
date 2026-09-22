@@ -122,7 +122,7 @@ test("a completed standalone review becomes a durable DONE record with final-rev
   assert.equal(record?.actions.at(-1)?.phase, "OBSERVED");
 });
 
-test("a validated compatibility proposal remains blocked at its human review gate", async () => {
+test("a validated research proposal remains blocked at its human review gate", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-lead-journal-"));
   const repository = join(root, "consumer");
   await git(root, "init", "--quiet", "--initial-branch=main", repository);
@@ -131,8 +131,8 @@ test("a validated compatibility proposal remains blocked at its human review gat
   await git(repository, "-c", "user.name=PI Lead Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "base");
   const baseCommit = await git(repository, "rev-parse", "HEAD");
   const journal = await createNativeTaskJournal({
-    cwd: repository, taskId: "task-change", workflow: "CHANGE", namedBase: "main",
-    branchName: "pi-lead/proposal-task-change", stateRoot: join(root, "state"),
+    cwd: repository, taskId: "task-change", workflow: "RESEARCH", namedBase: "main",
+    branchName: "pi-lead/research-task-change", stateRoot: join(root, "state"),
   });
   const identity = {
     taskId: "task-change", assignmentId: "change-1", workerId: "worker", vmId: "vm",

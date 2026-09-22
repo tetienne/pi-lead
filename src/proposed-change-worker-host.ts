@@ -21,8 +21,8 @@ import {
   createReadonlyToolchainSeed,
   GUEST_MISE_VERSION,
   MISE_SEED_CONTENT_DIRECTORIES,
-  type ToolchainCachePlan,
-} from "./toolchain-cache.ts";
+  type WorkerToolchainStorage,
+} from "./worker-toolchain-storage.ts";
 import { PI_REASONING_LEVELS, type PiReasoningLevel } from "./model-reasoning-routing.ts";
 
 const GUEST_GIT_PACKAGE = "git=2.52.0-r0";
@@ -43,7 +43,7 @@ type LaunchRecord = {
   workerMode: "change" | "research" | "validation-only";
   dependencyHosts: string[];
   validationTasks: string[];
-  toolchainCache: ToolchainCachePlan;
+  toolchainCache: WorkerToolchainStorage;
   controllerHeartbeatTimeoutMs: number;
   controllerAdmissionRequired: boolean;
 };
@@ -65,7 +65,7 @@ function stringArray(value: unknown, field: string, maxEntries: number): string[
   });
 }
 
-function parseToolchainCache(value: unknown): ToolchainCachePlan {
+function parseToolchainCache(value: unknown): WorkerToolchainStorage {
   if (!isRecord(value) || !isRecord(value.host) || !isRecord(value.guest) || !isRecord(value.environment)) {
     throw new Error("Invalid toolchain cache launch record");
   }
@@ -89,7 +89,7 @@ function parseToolchainCache(value: unknown): ToolchainCachePlan {
         return [name, field];
       },
     ),
-  ) as ToolchainCachePlan["environment"];
+  ) as WorkerToolchainStorage["environment"];
   if (
     environment.PI_LEAD_MISE_SEED !== value.guest.seedDirectory ||
     !environment.MISE_CACHE_DIR.startsWith("/tmp/pi-lead-") ||
@@ -105,7 +105,7 @@ function parseToolchainCache(value: unknown): ToolchainCachePlan {
     host: { seedDirectory: value.host.seedDirectory },
     guest: { platform: value.guest.platform, seedDirectory: value.guest.seedDirectory },
     environment,
-  } as ToolchainCachePlan;
+  } as WorkerToolchainStorage;
 }
 
 function parseLaunchRecord(value: unknown): LaunchRecord {
@@ -235,7 +235,7 @@ async function seedPrivateMiseStorage(
 
 export async function assertGuestCachePlatform(
   vm: Pick<VM, "exec">,
-  plan: ToolchainCachePlan,
+  plan: WorkerToolchainStorage,
 ): Promise<void> {
   const architecture = await vm.exec(["/bin/uname", "-m"]);
   const expectedArchitecture = plan.guest.platform === "linux-arm64-musl" ? "aarch64" : "x86_64";

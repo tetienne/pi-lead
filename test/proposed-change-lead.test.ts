@@ -3,97 +3,10 @@ import { test } from "node:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createLeadExtension } from "../src/lead.ts";
-import type {
-  ProposedChangeRequest,
-  ReviewRequiredSummary,
-} from "../src/proposed-change-task.ts";
 import type { CompleteLocalCodingRequest } from "../src/review-fix-commit-task.ts";
 import type { WorkerRouteAuthorization } from "../src/lead.ts";
 
-test("the Lead change command records a review-required proposal without calling it done", async () => {
-  const commands = new Map<string, (args: string, context: unknown) => Promise<void>>();
-  const requests: ProposedChangeRequest[] = [];
-  const entries: Array<{ type: string; data: unknown }> = [];
-  const notifications: Array<{ message: string; level: string }> = [];
-  const pi = {
-    on() {
-      return () => undefined;
-    },
-    registerCommand(
-      name: string,
-      definition: { handler: (args: string, context: unknown) => Promise<void> },
-    ) {
-      commands.set(name, definition.handler);
-    },
-    appendEntry(type: string, data: unknown) {
-      entries.push({ type, data });
-    },
-  } as unknown as ExtensionAPI;
-  createLeadExtension({
-    async runFixture() {
-      throw new Error("fixture should not run");
-    },
-    async runProposedChange(request) {
-      requests.push(request);
-      return {
-        status: "REVIEW_REQUIRED",
-        ...request,
-        workerId: "worker-change",
-        vmId: "vm-change",
-        tabId: "tab-change",
-        paneId: "pane-change",
-        piSessionId: "session-change",
-        baseCommit: "1".repeat(40),
-        proposedCommit: "2".repeat(40),
-        validations: [
-          { task: "test", command: "mise run test", passed: true, exitCode: 0 },
-        ],
-        artifactId: "artifact-change",
-        files: [],
-        humanGate: true,
-        hostCommitted: false,
-        published: false,
-        vmTerminated: true,
-      } satisfies ReviewRequiredSummary;
-    },
-    async routeIntent(_input, workflow) {
-      assert.equal(workflow, "IMPLEMENT");
-      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
-    },
-  })(pi);
-
-  await commands.get("lead-change")?.(
-    "--base main --check test --allow registry.npmjs.org -- Update the value.",
-    {
-      cwd: "/consumer",
-      ui: {
-        notify(message: string, level: string) {
-          notifications.push({ message, level });
-        },
-      },
-    },
-  );
-
-  assert.equal(requests.length, 1);
-  assert.deepEqual(requests[0], {
-    taskId: requests[0]?.taskId,
-    assignmentId: requests[0]?.assignmentId,
-    instruction: "Update the value.",
-    repositoryPath: "/consumer",
-    namedBase: "main",
-    validationTasks: ["test"],
-    dependencyHosts: ["registry.npmjs.org"],
-  });
-  assert.equal(entries[0]?.type, "pi-lead:proposed-change-summary");
-  assert.deepEqual(notifications, [
-    {
-      message: "PI Lead change: REVIEW_REQUIRED — 0 file(s), validated; human review required",
-      level: "info",
-    },
-  ]);
-});
-
-test("the Lead implement command reserves review capacity and records a delivered local commit", async () => {
+test("/lead reserves review capacity and records a delivered local commit", async () => {
   const commands = new Map<string, (args: string, context: any) => Promise<void>>();
   const requests: CompleteLocalCodingRequest[] = [];
   const entries: Array<{ type: string; data: unknown }> = [];
@@ -110,9 +23,6 @@ test("the Lead implement command reserves review capacity and records a delivere
     },
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() {
-      throw new Error("fixture should not run");
-    },
     async runCompleteLocalCoding(request) {
       requests.push(request);
       return {
@@ -151,13 +61,12 @@ test("the Lead implement command reserves review capacity and records a delivere
         standards: request.standards,
       };
     },
-    async routeIntent(_input, workflow) {
-      assert.equal(workflow, "IMPLEMENT");
-      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
+    async routeIntent() {
+      return { status: "ROUTED", workflow: "IMPLEMENT", source: "jev" };
     },
   })(pi);
 
-  await commands.get("lead-implement")?.(
+  await commands.get("lead")?.(
     "--base main --check test --allow registry.npmjs.org --spec .scratch/pi-lead/issues/04-review-fix-commit.md -- Update the value.",
     {
       cwd: process.cwd(),
@@ -226,7 +135,6 @@ test("a unified implementation verifies the effective model and reasoning at wor
     appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     async authorizeWorkerRoute(): Promise<WorkerRouteAuthorization> {
       return {
         state,
@@ -259,13 +167,12 @@ test("a unified implementation verifies the effective model and reasoning at wor
         published: false, specification: request.specification, standards: request.standards,
       };
     },
-    async routeIntent(_input, workflow) {
-      assert.equal(workflow, "IMPLEMENT");
-      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
+    async routeIntent() {
+      return { status: "ROUTED", workflow: "IMPLEMENT", source: "jev" };
     },
   })(pi);
 
-  await commands.get("lead-implement")?.(
+  await commands.get("lead")?.(
     "--base main --check test --spec .scratch/pi-lead/issues/18-unified-orchestration.md -- Complete orchestration.",
     { cwd: process.cwd(), ui: { notify() {} } },
   );
@@ -294,16 +201,14 @@ test("an unavailable worker route records a precise BLOCKED implementation outco
     appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
     async authorizeWorkerRoute() { throw new Error("worker route NO_ADEQUATE_ROUTE"); },
     async runCompleteLocalCoding() { ran = true; throw new Error("must not run"); },
-    async routeIntent(_input, workflow) {
-      assert.equal(workflow, "IMPLEMENT");
-      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
+    async routeIntent() {
+      return { status: "ROUTED", workflow: "IMPLEMENT", source: "jev" };
     },
   })(pi);
 
-  await commands.get("lead-implement")?.(
+  await commands.get("lead")?.(
     "--base main --check test --spec .scratch/pi-lead/issues/18-unified-orchestration.md -- Complete orchestration.",
     { cwd: process.cwd(), ui: { notify() {} } },
   );
@@ -342,9 +247,6 @@ test("an implementation waiting for its two review slots is queued until the cur
     appendEntry() {},
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runFixture() {
-      throw new Error("fixture should not run");
-    },
     async runCompleteLocalCoding(request) {
       started.push(request.taskId);
       firstStarted?.();
@@ -364,9 +266,8 @@ test("an implementation waiting for its two review slots is queued until the cur
         standards: request.standards,
       };
     },
-    async routeIntent(_input, workflow) {
-      assert.equal(workflow, "IMPLEMENT");
-      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
+    async routeIntent() {
+      return { status: "ROUTED", workflow: "IMPLEMENT", source: "jev" };
     },
   })(pi);
   const context = {
@@ -379,9 +280,9 @@ test("an implementation waiting for its two review slots is queued until the cur
     },
   };
   const args = "--base main --check test --spec .scratch/pi-lead/issues/04-review-fix-commit.md -- Update the value.";
-  const first = commands.get("lead-implement")?.(args, context);
+  const first = commands.get("lead")?.(args, context);
   await firstStartedPromise;
-  const second = commands.get("lead-implement")?.(args, context);
+  const second = commands.get("lead")?.(args, context);
   await queuedPromise;
   assert.equal(started.length, 1);
   assert.equal(notifications.some((message) => message.includes("QUEUED")), true);

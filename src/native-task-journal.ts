@@ -8,9 +8,7 @@ import { projectTaskStateRoot } from "./native-task-recovery.ts";
 import type { NativeWorkerObservation } from "./native-worker-observation.ts";
 import type { CompleteLocalCodingSummary } from "./review-fix-commit-task.ts";
 import { TaskRecordStore, type DurableTaskRecord } from "./task-recovery.ts";
-import type { ChatGptRunSummary } from "./chatgpt-task.ts";
 import type { ProposedChangeSummary } from "./proposed-change-task.ts";
-import type { FixtureRunSummary } from "./task-lifecycle.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,9 +20,7 @@ export type NativeTaskJournal = {
   recordImplementation(summary: CompleteLocalCodingSummary): Promise<void>;
   recordDebug(summary: DebugTaskSummary): Promise<void>;
   recordReview(summary: StandaloneBranchReviewSummary): Promise<void>;
-  recordChat(summary: ChatGptRunSummary): Promise<void>;
   recordChange(summary: ProposedChangeSummary): Promise<void>;
-  recordFixture(summary: FixtureRunSummary): Promise<void>;
 };
 
 function nowIso(): string {
@@ -63,7 +59,7 @@ async function resolveCommit(cwd: string, revision: string): Promise<string> {
 export async function createNativeTaskJournal(options: {
   cwd: string;
   taskId: string;
-  workflow: "IMPLEMENT" | "DEBUG" | "REVIEW" | "RESEARCH" | "CHAT" | "CHANGE" | "FIXTURE";
+  workflow: "IMPLEMENT" | "DEBUG" | "REVIEW" | "RESEARCH";
   namedBase?: string;
   branchName: string;
   stateRoot?: string;
@@ -223,10 +219,6 @@ export async function createNativeTaskJournal(options: {
       );
       await finish({ finalCommit, checks: ["read-only worktree/ref snapshot"], reviewArtifactIds: reportIds, artifacts: reportIds, correctionCycles: 0 });
     },
-    async recordChat(summary) {
-      if (summary.status !== "DONE") return block();
-      await finish({ checks: [], reviewArtifactIds: [], artifacts: [summary.artifactId], correctionCycles: 0 });
-    },
     async recordChange(summary) {
       if (summary.status !== "REVIEW_REQUIRED") return block();
       const record = await store.load(options.taskId);
@@ -245,10 +237,6 @@ export async function createNativeTaskJournal(options: {
         diagnostics: { ...record.diagnostics, outcome: "FAILURE" },
         updatedAt: nowIso(),
       });
-    },
-    async recordFixture(summary) {
-      if (summary.status !== "DONE") return block();
-      await finish({ checks: [], reviewArtifactIds: [], artifacts: [summary.artifactId], correctionCycles: 0 });
     },
   };
 }

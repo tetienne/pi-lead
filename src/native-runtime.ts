@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { createIsolatedFixturePolicy } from "./policy.ts";
+import type { HerdrClient } from "./herdr-client.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
 import type {
   CollectedFixtureResult,
@@ -20,16 +21,7 @@ import type { NativeWorkerCleanupObserver, NativeWorkerObserver, NativeWorkerRes
 
 const execFileAsync = promisify(execFile);
 
-export interface HerdrClient {
-  createBackgroundTab(request: {
-    workspaceId: string;
-    cwd: string;
-    label: string;
-    focus: false;
-  }): Promise<{ tabId: string; paneId: string }>;
-  tabExists(tabId: string): Promise<boolean>;
-  closeTab(tabId: string): Promise<void>;
-}
+export type { HerdrClient } from "./herdr-client.ts";
 
 export interface FixtureProcessHost {
   start(request: { paneId: string; stateDirectory: string }): Promise<void>;

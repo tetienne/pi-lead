@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createLeadExtension } from "../src/lead.ts";
 import { createNativeOpenCodeGoRuntime } from "../src/native-opencode-go-runtime.ts";
 import { runReadOnlyOpenCodeGoTask, type OpenCodeGoTaskRuntime } from "../src/opencode-go-task.ts";
 
@@ -28,28 +26,6 @@ test("an allowed OpenCode Go worker keeps its native provider and stops immediat
   assert.equal(summary.status, "BLOCKED");
   if (summary.status === "BLOCKED") assert.equal(summary.reason, "QUOTA_EXHAUSTED");
   assert.equal(terminated, true);
-});
-
-test("the Lead exposes OpenCode Go only through its explicit bounded command", async () => {
-  const commands = new Map<string, (args: string, context: unknown) => Promise<void>>();
-  const entries: Array<{ type: string; data: unknown }> = [];
-  const pi = {
-    on() { return () => undefined; },
-    registerCommand(name: string, definition: { handler: (args: string, context: unknown) => Promise<void> }) { commands.set(name, definition.handler); },
-    appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
-  } as unknown as ExtensionAPI;
-  createLeadExtension({
-    async runFixture() { throw new Error("not used"); },
-    async runOpenCodeGo(request) {
-      return { status: "DONE", ...request, workerId: "worker", vmId: "vm", tabId: "tab", paneId: "pane", piSessionId: "session", artifactId: "artifact", output: "answer", vmTerminated: true };
-    },
-    async routeIntent(_input, workflow) {
-      assert.equal(workflow, "CHAT");
-      return { status: "ROUTED", workflow: "CHAT", source: "explicit" };
-    },
-  })(pi);
-  await commands.get("lead-read-go")?.("Question", { cwd: "/consumer", ui: { notify() {} } });
-  assert.equal(entries[0]?.type, "pi-lead:opencode-go-summary");
 });
 
 test("the native Go runtime persists Pi's provider and selected model before starting its launcher", async () => {

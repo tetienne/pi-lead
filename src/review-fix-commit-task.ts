@@ -3,9 +3,7 @@ import type {
   ProposedChangeSummary,
   ReviewRequiredSummary,
 } from "./proposed-change-task.ts";
-import type { PublicationOutcome } from "./git-publication.ts";
 import type { PinnedReviewDocument } from "./review-context.ts";
-import type { WorkerCapacity } from "./dependency-scheduler.ts";
 
 export type ReviewAxis = "STANDARDS" | "SPEC";
 
@@ -65,10 +63,6 @@ export interface ReviewFixCommitRuntime {
     input: { proposal: ReviewRequiredSummary; branchName: string },
     signal?: AbortSignal,
   ): Promise<CommitEvidence>;
-  publish?(
-    input: { proposal: ReviewRequiredSummary; commit: CommitEvidence },
-    signal?: AbortSignal,
-  ): Promise<PublicationOutcome>;
 }
 
 export type CompleteLocalCodingDone = {
@@ -79,8 +73,7 @@ export type CompleteLocalCodingDone = {
   reviewHistory: readonly { correctionCycle: number; reviews: readonly ReviewReport[] }[];
   reviewCycles: number;
   commit: CommitEvidence;
-  published: boolean;
-  publication?: PublicationOutcome;
+  published: false;
   specification: PinnedReviewDocument;
   standards: PinnedReviewDocument;
 };
@@ -91,14 +84,12 @@ export type CompleteLocalCodingBlocked = {
   reason:
     | "BUILD_BLOCKED"
     | "COMMIT_FAILED"
-    | "PUBLICATION_BLOCKED"
     | "REVIEW_EVIDENCE_INVALID"
     | "REVIEW_FAILED"
     | "REVIEW_LIMIT_REACHED";
   detail: string;
   proposal?: ReviewRequiredSummary;
   commit?: CommitEvidence;
-  publication?: PublicationOutcome;
   reviews: readonly ReviewReport[];
   reviewHistory: readonly { correctionCycle: number; reviews: readonly ReviewReport[] }[];
   reviewCycles: number;
@@ -209,7 +200,6 @@ function blocked(
   documents: Pick<CompleteLocalCodingRequest, "specification" | "standards">,
   proposal?: ReviewRequiredSummary,
   commit?: CommitEvidence,
-  publication?: PublicationOutcome,
 ): CompleteLocalCodingBlocked {
   return {
     status: "BLOCKED",
@@ -218,7 +208,6 @@ function blocked(
     detail,
     ...(proposal ? { proposal } : {}),
     ...(commit ? { commit } : {}),
-    ...(publication ? { publication } : {}),
     reviews,
     reviewHistory,
     reviewCycles,
@@ -230,9 +219,8 @@ function blocked(
 export async function runReviewFixCommitTask(
   task: CompleteLocalCodingRequest,
   runtime: ReviewFixCommitRuntime,
-  options: { signal?: AbortSignal; workers?: WorkerCapacity } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<CompleteLocalCodingSummary> {
-  const useWorker = <T>(work: () => Promise<T>) => options.workers?.use(1, work) ?? work();
   let reviewCycles = 0;
   const reviewHistory: Array<{ correctionCycle: number; reviews: readonly ReviewReport[] }> = [];
   let currentRequest: ProposedChangeRequest = {
@@ -241,7 +229,7 @@ export async function runReviewFixCommitTask(
   };
   let proposalResult: ProposedChangeSummary;
   try {
-    proposalResult = await useWorker(() => runtime.propose(currentRequest, options.signal));
+    proposalResult = await runtime.propose(currentRequest, options.signal);
   } catch (error) {
     return blocked(
       task.taskId,
@@ -277,7 +265,7 @@ export async function runReviewFixCommitTask(
     const reviewResults: PromiseSettledResult<ReviewReport>[] = [];
     for (const axis of REVIEW_AXES) {
       try {
-        reviewResults.push({ status: "fulfilled", value: await useWorker(() => runtime.review(
+        reviewResults.push({ status: "fulfilled", value: await runtime.review(
           {
             task,
             proposal: reviewedProposal,
@@ -287,7 +275,7 @@ export async function runReviewFixCommitTask(
             standards: task.standards,
           },
           options.signal,
-        )) });
+        ) });
       } catch (reason) {
         reviewResults.push({ status: "rejected", reason });
         break;
@@ -359,51 +347,6 @@ export async function runReviewFixCommitTask(
             reviewedProposal,
           );
         }
-        if (runtime.publish) {
-          let publication: PublicationOutcome;
-          try {
-            publication = await runtime.publish({ proposal: reviewedProposal, commit }, options.signal);
-          } catch (error) {
-            return blocked(
-              task.taskId,
-              "PUBLICATION_BLOCKED",
-              error instanceof Error ? error.message : String(error),
-              reviewCycles,
-              reviews,
-              reviewHistory,
-              task,
-              reviewedProposal,
-              commit,
-            );
-          }
-          if (publication.status !== "PUBLISHED" && publication.status !== "ALREADY_PUBLISHED") {
-            return blocked(
-              task.taskId,
-              "PUBLICATION_BLOCKED",
-              publication.detail ?? `Publication ended ${publication.status}`,
-              reviewCycles,
-              reviews,
-              reviewHistory,
-              task,
-              reviewedProposal,
-              commit,
-              publication,
-            );
-          }
-          return {
-            status: "DONE",
-            taskId: task.taskId,
-            proposal: reviewedProposal,
-            reviews,
-            reviewHistory,
-            reviewCycles,
-            commit,
-            published: true,
-            publication,
-            specification: task.specification,
-            standards: task.standards,
-          };
-        }
         return {
           status: "DONE",
           taskId: task.taskId,
@@ -448,7 +391,7 @@ export async function runReviewFixCommitTask(
       instruction: correctionInstruction(task, reviews),
     };
     try {
-      proposalResult = await useWorker(() => runtime.propose(currentRequest, options.signal));
+      proposalResult = await runtime.propose(currentRequest, options.signal);
     } catch (error) {
       return blocked(
         task.taskId,

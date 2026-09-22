@@ -99,7 +99,7 @@ test("native change runtime transfers the named base and collects only its corre
         seedDirectory: "/opt/pi-lead/mise-seed",
       });
       assert.equal(launch.toolchainCache.state, "COLD");
-      assert.equal(launch.toolchainCache.host.seedDirectory.startsWith(join(root, "cache")), true);
+      assert.equal(launch.toolchainCache.host.seedDirectory.startsWith(join(root, "worker-toolchains")), true);
       assert.match(launch.toolchainCache.environment.MISE_DATA_DIR, /pi-lead-.+\/mise\/data$/);
       const guest = join(root, "guest");
       await git(root, "clone", "--quiet", "--branch", "main", join(stateDirectory, "base.bundle"), guest);
@@ -154,7 +154,7 @@ test("native change runtime transfers the named base and collects only its corre
     cwd: consumer,
     workspaceId: "workspace-1",
     stateRoot,
-    toolchainCacheRoot: join(root, "cache"),
+    workerToolchainRoot: join(root, "worker-toolchains"),
     guestArchitecture: "x64",
     herdr,
     processHost,

@@ -1,13 +1,13 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { collectGitProposal, deliverGitProposal, prepareCommittedBase } from "./git-proposal.ts";
-import type { HerdrClient } from "./native-runtime.ts";
+import type { HerdrClient } from "./herdr-client.ts";
 import type { EffectivePiRoute, PiReasoningLevel } from "./model-reasoning-routing.ts";
 import { parseEffectivePiRoute } from "./effective-route-observation.ts";
 import { createProposedChangePolicy } from "./proposed-change-policy.ts";
@@ -24,10 +24,9 @@ import {
 } from "./proposed-change-task.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
 import {
-  GUEST_MISE_VERSION,
-  prepareToolchainCache,
   type GuestArchitecture,
-} from "./toolchain-cache.ts";
+  preparePrivateWorkerToolchain,
+} from "./worker-toolchain-storage.ts";
 import type { NativeWorkerCleanupObserver, NativeWorkerObserver, NativeWorkerResultObserver } from "./native-worker-observation.ts";
 
 const execFileAsync = promisify(execFile);
@@ -46,7 +45,6 @@ export type NativeProposedChangeRuntime = ProposedChangeRuntime & {
     committed: true;
     activeCheckoutPreserved: true;
   }>;
-  publicationStateDirectory(proposal: ReviewRequiredSummary): string;
 };
 
 type NativeProposedChangeRuntimeOptions = {
@@ -62,7 +60,7 @@ type NativeProposedChangeRuntimeOptions = {
   onWorkerCleaned?: NativeWorkerCleanupObserver;
   workspaceId?: string;
   stateRoot?: string;
-  toolchainCacheRoot?: string;
+  workerToolchainRoot?: string;
   herdr?: HerdrClient;
   processHost?: ProposedChangeProcessHost;
   pollIntervalMs?: number;
@@ -232,26 +230,6 @@ function requireString(value: unknown, field: string, maxLength = 16_384): strin
   return value[field];
 }
 
-async function readCommittedMiseConfig(repositoryPath: string, baseCommit: string): Promise<string> {
-  if (!/^[0-9a-f]{40}$/.test(baseCommit)) throw new Error("Invalid committed base for mise config");
-  try {
-    const { stdout } = await execFileAsync("/usr/bin/git", ["show", `${baseCommit}:.mise.toml`], {
-      cwd: repositoryPath,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
-    return stdout;
-  } catch (error) {
-    const detail = `${error instanceof Error ? error.message : String(error)}\n${
-      typeof error === "object" && error !== null && "stderr" in error && typeof error.stderr === "string"
-        ? error.stderr
-        : ""
-    }`;
-    if (/does not exist in|exists on disk, but not in|Path '.mise\.toml'/.test(detail)) return "";
-    throw error;
-  }
-}
-
 function defaultGuestArchitecture(): GuestArchitecture {
   if (process.arch === "arm64" || process.arch === "x64") return process.arch;
   throw new Error(`Unsupported host architecture for Linux guest toolchains: ${process.arch}`);
@@ -388,11 +366,9 @@ export async function createNativeProposedChangeRuntime(
           namedBase: request.namedBase,
           outputPath: join(directory, "base.bundle"),
         });
-        const toolchainCache = await prepareToolchainCache({
-          root: options.toolchainCacheRoot ?? join(stateRoot, "toolchain-cache"),
+        const toolchainCache = await preparePrivateWorkerToolchain({
+          root: options.workerToolchainRoot ?? join(stateRoot, "worker-toolchains"),
           workerId,
-          miseConfig: await readCommittedMiseConfig(options.cwd, prepared.baseCommit),
-          miseVersion: GUEST_MISE_VERSION,
           guestArchitecture: options.guestArchitecture ?? defaultGuestArchitecture(),
         });
         const policy = createProposedChangePolicy({
@@ -556,10 +532,6 @@ export async function createNativeProposedChangeRuntime(
         collectionDirectory: join(run.directory, "commit-collection"),
         branchName,
       });
-    },
-
-    publicationStateDirectory(proposal: ReviewRequiredSummary): string {
-      return ownedRun(proposal, "publish").directory;
     },
 
     async terminate(worker: ProposedChangeWorker): Promise<{ vmId: string; terminated: boolean }> {

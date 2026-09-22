@@ -11,9 +11,10 @@ stage-specific commands before the conversation-first Lead path was complete.
 The approved cleanup is Tickets 17–20: refocus the contract, connect one
 orchestrator, contract the public surface, then validate the refocused product.
 
-Tickets 17 and 18 define and implement the unified product interface; Tickets
-19–20 still have to contract and prove it. Until then, the specialized commands retained in the source
-are compatibility and development evidence, not the supported user experience.
+Tickets 17 and 18 define and implement the unified product interface. Ticket 19
+has removed the historical provider-, skill- and lifecycle-stage commands from
+discovery and from the release archive; Ticket 20 owns the final
+current-release proof.
 
 ## Approved product interface
 
@@ -58,13 +59,10 @@ product acceptance.
 
 ## Development and historical evidence
 
-The remaining sections document direct harnesses and capabilities built by the
-original ticket program. They are useful to reproduce implementation evidence,
-but they are not alternate product workflows and do not expand the release
-boundary above. In particular, the currently registered `/lead-read`,
-`/lead-read-go`, `/lead-change`, `/lead-implement`, `/lead-fixture`,
-`/lead-plan`, `/lead-triage` and `/lead-wayfind` commands are scheduled for
-removal from command discovery by Ticket 19.
+The remaining sections document repository-only harnesses and capabilities
+built by the original ticket program. They are useful to reproduce
+implementation evidence, but they are not installed commands, product
+workflows or contents of the release archive.
 
 ### Stage a local release archive
 
@@ -92,14 +90,14 @@ From a consuming project, activate this checkout as a project-local Pi package:
 pi install -l /absolute/path/to/pi-lead
 ```
 
-The historical `/lead-fixture` compatibility command creates a named tab with
-`--no-focus`; a trusted host launcher runs the harmless task in a Gondolin VM
+The `npm run fixture` harness creates a named tab with `--no-focus`; a trusted
+host launcher runs the harmless task in a Gondolin VM
 with an empty network allowlist, no host mounts and a newly constructed guest
 environment. A successful result is bound to its task, assignment, worker, VM,
 tab and pane IDs. The Lead collects it, confirms that the VM process has
 terminated, and only then closes the successful tab. Failed runs retain their
-stopped diagnostic tab and host-owned artifacts. The command itself is not part
-of the approved product surface; use `npm run fixture` to reproduce the proof.
+stopped diagnostic tab and host-owned artifacts. Run it from this repository
+checkout to reproduce the proof.
 
 For repository checks:
 
@@ -113,19 +111,11 @@ npm run fixture
 
 ### Run the ChatGPT worker proofs
 
-The old extension path admits a ChatGPT worker only for these compatibility
-forms:
-
-```text
-Lead: ask worker <question>
-/lead-read <question>
-Lead: ask worker --inputs CONTEXT.md,docs/adr/0001-isolate-first-real-worker.md -- <question>
-/lead-read --inputs CONTEXT.md,docs/adr/0001-isolate-first-real-worker.md -- <question>
-```
-
-Ordinary chat, steering, follow-ups and extension-originated messages cannot create workers. Both admission forms use the same two-worker concurrency limit as `/lead-fixture`.
-
-`--input`/`--inputs` explicitly selects one to three regular UTF-8 project files. Selection rejects absolute paths, traversal and symlinks, and caps the combined input at 12 KiB. The trusted Lead embeds those inputs in the bounded assignment; the guest still receives no project mount.
+These direct repository harnesses exercise the ChatGPT adapter without adding
+provider-specific request vocabulary to the installed Lead. Ordinary chat,
+steering, follow-ups and extension-originated messages cannot create workers;
+engineering requests admitted by the unified orchestrator share one
+two-worker concurrency limit.
 
 The worker runs the pinned native Pi JSON lifecycle in a Gondolin PTY inside the named Herdr tab and streams its native events there without taking Lead focus. The guest sees only synthetic provider placeholders. A trusted host hook refreshes and injects the ChatGPT OAuth bearer and account identity for the exact HTTPS `POST https://chatgpt.com/backend-api/codex/responses` request, rejects redirects, compressed responses and credential-bearing response headers or bodies, and never mounts the host filesystem. The streaming body guard detects credentials split across chunks before those bytes reach the guest. Cache warming and provider fallback are disabled. Success requires correlated native `agent_start`, authoritative assistant `message_end` and `agent_end` events; an idle or settled screen is not completion.
 
@@ -150,18 +140,16 @@ Current runtime evidence covers macOS arm64 only. Ubuntu 24.04 and Linux arm64/x
 
 ### Reproduce a validated proposed change
 
-The historical `/lead-change` command accepts a named branch or tag, one or more
-mise task names, and every dependency destination the guest may contact:
-
-```text
-/lead-change --base main --check test --check typecheck --allow dl-cdn.alpinelinux.org --allow registry.npmjs.org -- update the requested behavior
-```
+The repository fixture supplies a named branch, mise task names and the exact
+dependency destinations the guest may contact directly to the internal adapter.
 
 The Lead transfers only the named committed base through a Git bundle into a private Gondolin workspace. The worker has no host mount or control socket. Git 2.52.0 and mise 2025.8.20 are installed from the explicitly allowed Alpine repository when absent; project tool downloads need their own `--allow` entries. A rejected destination blocks the task and never expands the allowlist automatically.
 
 After the edit, the guest creates a synthetic proposal commit whose only parent is the selected base, resets to that exact commit for each declared `mise run <task>` check, and rejects a check that changes tracked content. The host imports the returned bundle into a fresh bare repository with system/global Git configuration, hooks, filters, external diffs and submodule recursion disabled. It collects bounded changed, added, deleted and renamed files, raw bytes, modes and confined symlink targets without checking out or executing guest content.
 
-A successful command returns `REVIEW_REQUIRED`; it neither creates a host commit nor publishes anything. Review, correction and host commit belong to Ticket 04.
+A successful adapter run returns `REVIEW_REQUIRED`; it neither creates a host
+commit nor publishes anything. Review, correction and host commit are exercised
+through the unified Lead implementation lifecycle.
 
 Run the credential-free macOS arm64 proofs inside Herdr:
 

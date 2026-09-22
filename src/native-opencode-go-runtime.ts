@@ -6,6 +6,11 @@ export async function createNativeOpenCodeGoRuntime(
 ): Promise<OpenCodeGoTaskRuntime> {
   return (await createNativeChatGptRuntime({
     ...options,
-    providerProfile: "opencode-go",
+    workerProfile: {
+      provider: "opencode-go",
+      allowedHost: "opencode.ai",
+      launcherPath: "./opencode-go-launcher.ts",
+      requireChatGptProtocol: false,
+    },
   })) as unknown as OpenCodeGoTaskRuntime;
 }
