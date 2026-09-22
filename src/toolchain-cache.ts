@@ -4,6 +4,12 @@ import { join, resolve } from "node:path";
 
 import { ReadonlyProvider, RealFSProvider, type VirtualProvider } from "@earendil-works/gondolin";
 
+import {
+  createPrivateMiseEnvironment,
+  GUEST_MISE_SEED_DIRECTORY,
+  type PrivateMiseEnvironment,
+} from "./mise-environment.ts";
+
 const SAFE_WORKER_ID = /^[A-Za-z0-9._:-]{1,160}$/;
 const MISE_VERSION = /^\d{4}\.\d{1,2}\.\d{1,2}-r\d+$/;
 const GUEST_ARCHITECTURES = new Set(["arm64", "x64"]);
@@ -22,15 +28,9 @@ export type ToolchainCachePlan = {
   };
   guest: {
     platform: `linux-${GuestArchitecture}-musl`;
-    seedDirectory: "/opt/pi-lead/mise-seed";
+    seedDirectory: typeof GUEST_MISE_SEED_DIRECTORY;
   };
-  environment: {
-    MISE_CACHE_DIR: string;
-    MISE_CONFIG_DIR: string;
-    MISE_DATA_DIR: string;
-    MISE_STATE_DIR: string;
-    PI_LEAD_MISE_SEED: "/opt/pi-lead/mise-seed";
-  };
+  environment: PrivateMiseEnvironment;
 };
 
 function requireWorkerId(workerId: string): string {
@@ -132,19 +132,12 @@ export async function prepareToolchainCache(options: {
   const state = (await hasAttestedSeed(seedDirectory, seedId)) ? "WARM" : "COLD";
   await mkdir(seedDirectory, { recursive: true, mode: 0o700 });
 
-  const privateRoot = `/tmp/pi-lead-${workerId}/mise`;
   return {
     state,
     seedId,
     host: { seedDirectory },
-    guest: { platform, seedDirectory: "/opt/pi-lead/mise-seed" },
-    environment: {
-      MISE_CACHE_DIR: `${privateRoot}/cache`,
-      MISE_CONFIG_DIR: `${privateRoot}/config`,
-      MISE_DATA_DIR: `${privateRoot}/data`,
-      MISE_STATE_DIR: `${privateRoot}/state`,
-      PI_LEAD_MISE_SEED: "/opt/pi-lead/mise-seed",
-    },
+    guest: { platform, seedDirectory: GUEST_MISE_SEED_DIRECTORY },
+    environment: createPrivateMiseEnvironment(workerId),
   };
 }
 

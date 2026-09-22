@@ -12,6 +12,7 @@ const RELEASE_SOURCE_FILES = [
   "src/chatgpt-task.ts",
   "src/chatgpt-worker-host.ts",
   "src/controller-dispatch.ts",
+  "src/dependency-request-policy.ts",
   "src/debug-review-task.ts",
   "src/effective-route-observation.ts",
   "src/git-proposal.ts",
@@ -19,6 +20,7 @@ const RELEASE_SOURCE_FILES = [
   "src/jev-intent-routing.ts",
   "src/lead.ts",
   "src/model-reasoning-routing.ts",
+  "src/mise-environment.ts",
   "src/native-chatgpt-runtime.ts",
   "src/native-debug-review-runtime.ts",
   "src/native-proposed-change-runtime.ts",
@@ -83,6 +85,7 @@ test("the release archive contains only the Lead and its internal adapters", asy
   };
   assert.equal(packageJson.scripts.fixture, "node src/run-fixture-cli.ts");
   assert.equal(packageJson.scripts["chatgpt-live"], "node src/run-chatgpt-live-cli.ts");
+  assert.equal(packageJson.scripts["package-acceptance"], "node src/run-package-acceptance-cli.ts");
 });
 
 test("a fresh consuming project activates the staged release archive and discovers only /lead", async () => {

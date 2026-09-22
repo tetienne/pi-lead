@@ -82,13 +82,14 @@ reports after one explicit retry of a zero-output provider `502`; successful
 review workers were cleaned. Publication remained deferred.
 
 Acceptance corrected deterministic outage routing for structured debug/review
-requests and fixed durable review completion for native three-dot Git
-comparisons. The live debug request reached the correct workflow but remained
-truthfully BLOCKED because its isolated mise feedback request reported
-`mise.jdx.dev` denied even when the exact host was recorded in the allowlist;
-its terminated-worker diagnostic tabs were retained. Live Jev was not run
-because its dedicated OpenRouter credential/cap gate was not configured;
-deterministic unavailable, malformed, ambiguous, stale and over-budget cases
-passed. Ubuntu, OpenCode Go, publication, cache optimization and advanced
-scheduling remain unclaimed. Full measurements and IDs are in
-`docs/release-acceptance.md`.
+requests, durable review completion for native three-dot Git comparisons, the
+pinned mise metadata transport, validation-only feedback collection and
+post-commit verification by delivery-branch name. A fresh debug conversation
+then reproduced `mise run test` failing, collected a separate diagnosis,
+implemented and independently reviewed the one-file correction, verified the
+delivered branch passing and cleaned all six successful workers. Live Jev was
+not run because its dedicated OpenRouter credential/cap gate was not
+configured; deterministic unavailable, malformed, ambiguous, stale and
+over-budget cases passed. Ubuntu, OpenCode Go, publication, cache optimization
+and advanced scheduling remain unclaimed. Full commands, measurements and IDs
+are in `docs/release-acceptance.md`.

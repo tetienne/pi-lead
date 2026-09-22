@@ -177,27 +177,43 @@ function sameWorker(worker: ProposedChangeWorker, result: ProposedChangeWorkerRe
     worker.piSessionId === result.piSessionId && worker.baseCommit === result.baseCommit;
 }
 
+export function assertDeliveredVerificationBase(
+  workerBaseCommit: string,
+  deliveredCommit: string,
+): void {
+  if (workerBaseCommit !== deliveredCommit) {
+    throw new Error("The delivery branch moved before verification could pin its committed base");
+  }
+}
+
 export async function createNativeDebugRuntime(options: NativeRouteOptions): Promise<DebugRuntime> {
   const implementation = await createNativeReviewFixCommitRuntime(options);
   const feedback = await createNativeProposedChangeRuntime({ ...options, workerMode: "validation-only", workerPhase: "DEBUG", onWorkerSpawn: undefined });
   const diagnostician = await createNativeChatGptRuntime({ ...options, workerPhase: "DEBUG" });
-  let verifiedBase: string | undefined;
+  let verifiedBase: { branchName: string; commit: string } | undefined;
   return {
     ...implementation,
     async commit(input, signal) {
       const commit = await implementation.commit(input, signal);
-      verifiedBase = commit.commit;
+      // Feedback workers deliberately accept only a branch or tag as their
+      // committed base. Retain its delivered commit as a separate invariant so
+      // a moved branch cannot redirect the later verification worker.
+      verifiedBase = { branchName: commit.branchName, commit: commit.commit };
       return commit;
     },
     async executeFeedback(input, signal): Promise<FeedbackEvidence> {
       const match = /^mise run ([A-Za-z0-9:_-]+)$/.exec(input.command);
       if (!match?.[1]) throw new Error("Debug feedback must name one allowlisted mise task");
+      if (input.phase === "VERIFY" && !verifiedBase) {
+        throw new Error("Debug verification requires a delivered implementation commit");
+      }
+      const verificationBase = input.phase === "VERIFY" ? verifiedBase : undefined;
       const worker = await feedback.launch({
         taskId: input.task.taskId,
         assignmentId: `${input.task.taskId}:feedback:${input.phase.toLowerCase()}:${randomUUID()}`,
         instruction: `Execute the ${input.phase.toLowerCase()} feedback task without changing files.`,
         repositoryPath: input.task.repositoryPath,
-        namedBase: input.phase === "VERIFY" ? verifiedBase ?? input.task.namedBase : input.task.namedBase,
+        namedBase: verificationBase?.branchName ?? input.task.namedBase,
         validationTasks: [match[1]],
         dependencyHosts: [...input.task.dependencyHosts],
         privateWorkspace: true,
@@ -205,6 +221,14 @@ export async function createNativeDebugRuntime(options: NativeRouteOptions): Pro
         hostMounts: [],
         allowedDependencyHosts: [...input.task.dependencyHosts],
       }, signal);
+      if (verificationBase) {
+        try {
+          assertDeliveredVerificationBase(worker.baseCommit, verificationBase.commit);
+        } catch (error) {
+          await feedback.terminate(worker);
+          throw error;
+        }
+      }
       let result: ProposedChangeWorkerResult;
       try {
         result = await feedback.waitForResult(worker, signal);

@@ -11,7 +11,7 @@ limits observed during acceptance.
 
 The host is macOS arm64 (`Darwin arm64`) with Node 24.14.1, npm 11.11.0, the
 repository-pinned Pi 0.86.1, Herdr 0.8.0 and Gondolin 0.12.0. The final
-`npm test` passed all 153 tests in 6.667 seconds and `npm run typecheck`
+`npm test` passed all 156 tests in 4.432 seconds and `npm run typecheck`
 passed. The suite covers
 the unified intent surface, unavailable/malformed/ambiguous/stale and
 over-budget Jev outcomes, model-route verification, implementation, debug,
@@ -19,14 +19,16 @@ read-only review, recovery, result correlation and cleanup policy.
 
 ### Fresh consuming-project activation
 
-The final `npm pack --dry-run --json` reported a 39-file `pi-lead@0.1.0`
-archive (78,681 bytes packed, 327,390 bytes unpacked, SHA-1
-`9acba21d8b7677e2230588ccd975fbf4f90d9cd4`).
+The final `npm pack --dry-run --json` reported a 41-file `pi-lead@0.1.0`
+archive (80,494 bytes packed, 331,852 bytes unpacked, SHA-1
+`d3a9ea3f810fdb8b2725cc0c11a8a9b932cc1905`); the exact reproduction commands
+are recorded below.
+
 Registering the `.tgz` itself with `pi install -l` exposed a documentation bug:
 Pi stored the archive path as an extension and then rejected its `.tgz` file
 type. The corrected local-artifact flow installs the archive and dependencies
 into a staging directory, then activates `stage/node_modules/pi-lead`; README
-instructions and the package regression test now use that shape.
+instructions and the package acceptance harness now use that shape.
 
 A fresh consuming project loaded that staged archive through Pi 0.86.1. Native
 RPC discovery reported `lead` as the package's only extension command. Ordinary
@@ -77,12 +79,18 @@ no findings in separate contexts. The Lead created local branch
 checkout, collected all results, confirmed all three VM terminations and tab
 closures, and correctly left publication deferred.
 
-The same Lead interface admitted a structured debug request. Its feedback
-worker failed closed with `Dependency destination mise.jdx.dev is not
-explicitly allowed`; repeating the request with that exact host present in the
-recorded allowlist produced the same result. Both attempts terminated their VMs
-and retained stopped diagnostic tabs as policy requires. This is an explicit
-live debug limitation, not a successful-debug claim.
+The same Lead interface then admitted the ordinary request “Debug the failing
+acceptance test in this consuming project”, asked only for the missing
+base/check/spec context, and completed the supplied context as task
+`671327d6-42b1-45dd-bd0d-caa7bb1cb197` in 85.167 seconds. The debug lifecycle
+recorded `mise run test` exiting 1 on `main`, collected a separate attributable
+diagnosis, changed only `value.txt`, passed the isolated check, received empty
+findings from independent Standards and Spec reviewers, committed
+`f6a41e83731a7ad6323872bf8e8d60cc3f7796fd` on
+`pi-lead/task-671327d6-42b1-45dd-bd0d-caa7bb1cb197`, and re-ran the same
+feedback successfully against that delivery branch. Its durable record reports
+six attempts, final-revision verification and confirmed VM/tab cleanup; active
+`main` remained unchanged and publication remained deferred.
 
 A structured read-only review of the delivered branch then completed as task
 `b62875d2-fa07-4ff3-8789-78a8f92f1fff`. One explicit retry followed a provider
@@ -92,11 +100,75 @@ findings, confirmed unchanged worktree and refs, pinned final commit
 `a89b128168cac76a676a83df8ef43116587232b4`, terminated both VMs and closed
 both successful tabs. Publication remained false.
 
-Acceptance drove three corrections: the local archive activation instructions
-now stage dependencies before Pi activation; the deterministic Jev-outage
-fallback distinguishes structured debug/review requests from implementation;
-and the durable review journal accepts the native three-dot Git comparison when
-pinning its final commit.
+Acceptance drove corrections to archive activation, deterministic Jev-outage
+classification, three-dot review journaling, pinned mise metadata transport,
+validation-only feedback collection and post-commit debug verification. The
+transport adapter upgrades only the pinned mise metadata hostname from HTTP to
+HTTPS and only when that exact hostname is already in the request's explicit
+allowlist; other plaintext or unapproved destinations remain denied.
+
+### Exact reproduction commands
+
+From the PI Lead checkout, the credential-free final checks are:
+
+```bash
+npm test
+npm run typecheck
+npm run package-acceptance
+npm run chatgpt-fixture
+npm run change-fixture
+env npm_config_cache=/tmp/pi-lead-final-npm-cache npm pack --dry-run --json
+git diff --check
+```
+
+The package acceptance command performs the documented `npm pack`,
+`npm install --prefix <stage> --ignore-scripts --omit=dev <archive>`, project
+local `pi install -l --approve <stage>/node_modules/pi-lead`, and offline native
+`get_commands` discovery in fresh temporary directories. It returned
+`{"status":"DONE","archive":"pi-lead-0.1.0.tgz","commands":["lead"]}`.
+
+The live runs were started from `/tmp/pi-lead-ticket20-live.diYsTP` inside the
+active Herdr pane. Each used a host-owned state directory outside the consuming
+Git worktree; the exact launches were:
+
+```bash
+PI_LEAD_CHATGPT_INCLUDED_QUOTA_CONFIRMED=yes \
+PI_LEAD_STATE_DIR=/tmp/pi-lead-ticket20-live-state-retained \
+PI_OFFLINE=1 \
+pi --mode rpc --offline --no-session --no-tools --approve
+
+PI_LEAD_CHATGPT_INCLUDED_QUOTA_CONFIRMED=yes \
+PI_LEAD_STATE_DIR=/tmp/pi-lead-ticket20-live-state2 \
+PI_OFFLINE=1 \
+pi --mode rpc --offline --no-session --no-tools --approve
+
+PI_LEAD_CHATGPT_INCLUDED_QUOTA_CONFIRMED=yes \
+PI_LEAD_STATE_DIR=/tmp/pi-lead-ticket20-debug-done-state \
+PI_OFFLINE=1 \
+pi --mode rpc --offline --no-session --no-tools --approve
+```
+
+The successful implementation input, successful standalone-review retry input,
+and successful two-turn debug conversation were, respectively:
+
+```text
+--base main --check test --allow dl-cdn.alpinelinux.org --spec spec.md -- Change value.txt from before to after. Do not change any other tracked file.
+--base main --spec spec.md --branch pi-lead/task-bffb63e8-851b-4c2d-8fa4-31768594e7e1
+Debug the failing acceptance test in this consuming project
+--base main --check test --allow dl-cdn.alpinelinux.org --allow mise.jdx.dev --spec spec.md -- Debug why the acceptance test says value.txt should be after when the main branch still contains before, then fix it.
+```
+
+Final cleanup and checkout inventory used:
+
+```bash
+herdr tab list
+git -C /tmp/pi-lead-ticket20-live.diYsTP status --short
+git -C /tmp/pi-lead-ticket20-live.diYsTP branch --show-current
+```
+
+Herdr returned only the two root user tabs and no Ticket 20 worker tab. Git
+status returned no output and the active branch was `main`, confirming checkout
+preservation.
 
 ### Open human gates and explicit limits
 
@@ -109,13 +181,12 @@ ChatGPT admission remains a per-session human gate. The live proof above ran
 only after explicit included-only confirmation; future sessions must make that
 current confirmation again.
 
-The final Herdr inventory contained no successful Ticket 20 worker tab. It did
-retain the two debug diagnostic tabs and the failed `502` reviewer tab described
-above, alongside two older historical diagnostics. Retention is intentional for
-failed/BLOCKED work and does not keep a VM alive. Their disposable consuming
-checkout and host-owned state remain under `/tmp/pi-lead-ticket20-live.diYsTP`
-and `/tmp/pi-lead-ticket20-live-state*` until those diagnostics are explicitly
-cleared.
+The final Herdr inventory contained only the two root user tabs and no Ticket 20
+worker tab. Earlier failed/BLOCKED results recorded stopped diagnostic tabs and
+confirmed VM termination; those tabs were no longer present at final inventory,
+while their host-owned diagnostic records remained. The disposable consuming
+checkout and state remain under `/tmp/pi-lead-ticket20-live.diYsTP` and
+`/tmp/pi-lead-ticket20-*state*`.
 
 Ubuntu, OpenCode Go, publication, cache optimization and advanced dependency
 scheduling remain deferred and were not run or inferred from these macOS

@@ -11,6 +11,20 @@ import {
   prepareToolchainCache,
 } from "../src/toolchain-cache.ts";
 import { assertGuestCachePlatform } from "../src/proposed-change-worker-host.ts";
+import { preparePrivateWorkerToolchain } from "../src/worker-toolchain-storage.ts";
+
+test("private worker toolchains keep the pinned mise binary from self-updating", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-private-toolchain-"));
+  const plan = await preparePrivateWorkerToolchain({
+    root,
+    workerId: "worker-pinned-mise",
+    guestArchitecture: "arm64",
+  });
+
+  assert.equal(plan.environment.MISE_AUTO_UPDATE, "0");
+  assert.equal(plan.environment.MISE_USE_VERSIONS_HOST, "0");
+  assert.equal(plan.environment.MISE_USE_VERSIONS_HOST_TRACK, "0");
+});
 
 test("a compatible trusted mise seed is reusable but remains read-only to every worker", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-lead-toolchain-cache-"));

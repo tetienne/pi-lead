@@ -248,3 +248,36 @@ test("explicit dependency hosts receive ordinary HTTPS access without credential
   );
   assert.deepEqual(mediation.allowedHosts, ["chatgpt.com", "registry.npmjs.org"]);
 });
+
+test("an explicitly allowed mise metadata request is upgraded to HTTPS before policy evaluation", async () => {
+  const credential = { accessToken: "host-token", accountId: "host-account" };
+  const mediation = createChatGptMediation({
+    initialCredential: credential,
+    async refreshCredential() {
+      throw new Error("dependency requests must not refresh ChatGPT credentials");
+    },
+    placeholderNonce: "mise-https-upgrade",
+    additionalAllowedHosts: ["mise.jdx.dev"],
+  });
+
+  const upgraded = await mediation.httpHooks.onRequest?.(
+    new Request("http://mise.jdx.dev/versions/mise", { method: "GET" }),
+  );
+  assert.ok(upgraded instanceof Request);
+  assert.equal(upgraded.url, "https://mise.jdx.dev/versions/mise");
+  assert.equal(await mediation.httpHooks.isRequestAllowed?.(upgraded), true);
+
+  const unapproved = createChatGptMediation({
+    initialCredential: credential,
+    async refreshCredential() {
+      return credential;
+    },
+    placeholderNonce: "mise-not-allowed",
+  });
+  assert.equal(
+    await unapproved.httpHooks.isRequestAllowed?.(
+      new Request("http://mise.jdx.dev/versions/mise", { method: "GET" }),
+    ),
+    false,
+  );
+});

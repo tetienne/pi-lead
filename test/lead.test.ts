@@ -294,7 +294,7 @@ test("structured debug and review requests remain usable when Jev is unavailable
   }, context), { action: "handled" });
   assert.deepEqual(await inputHandler?.({
     source: "user",
-    text: "--base HEAD --branch HEAD",
+    text: "--base HEAD --spec .scratch/pi-lead/issues/20-refocused-product-acceptance.md --branch HEAD",
   }, context), { action: "handled" });
 
   assert.deepEqual(executed, ["debug:mise run test", "review:HEAD..HEAD"]);

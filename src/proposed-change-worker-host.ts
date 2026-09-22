@@ -17,6 +17,8 @@ import { observeProcessExit } from "./process-observation.ts";
 import type { ValidationEvidence } from "./proposed-change-task.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
 import { waitForControllerDispatch } from "./controller-dispatch.ts";
+import { upgradeExplicitMiseMetadataRequest } from "./dependency-request-policy.ts";
+import { parsePrivateMiseEnvironment } from "./mise-environment.ts";
 import {
   createReadonlyToolchainSeed,
   GUEST_MISE_VERSION,
@@ -84,24 +86,9 @@ function parseToolchainCache(value: unknown): WorkerToolchainPlan {
   ) {
     throw new Error("Invalid toolchain cache launch record");
   }
-  const environmentValue = value.environment;
-  const environment = Object.fromEntries(
-    ["MISE_CACHE_DIR", "MISE_CONFIG_DIR", "MISE_DATA_DIR", "MISE_STATE_DIR", "PI_LEAD_MISE_SEED"].map(
-      (name) => {
-        const field = environmentValue[name];
-        if (typeof field !== "string") throw new Error("Invalid toolchain cache environment");
-        return [name, field];
-      },
-    ),
-  ) as WorkerToolchainStorage["environment"];
-  if (
-    environment.PI_LEAD_MISE_SEED !== value.guest.seedDirectory ||
-    !environment.MISE_CACHE_DIR.startsWith("/tmp/pi-lead-") ||
-    !environment.MISE_CONFIG_DIR.startsWith("/tmp/pi-lead-") ||
-    !environment.MISE_DATA_DIR.startsWith("/tmp/pi-lead-") ||
-    !environment.MISE_STATE_DIR.startsWith("/tmp/pi-lead-")
-  ) {
-    throw new Error("Toolchain cache writes are not private to the guest worker");
+  const environment = parsePrivateMiseEnvironment(value.environment);
+  if (environment.PI_LEAD_MISE_SEED !== value.guest.seedDirectory) {
+    throw new Error("Toolchain cache seed does not match the guest mount");
   }
   return {
     state: value.state,
@@ -556,13 +543,18 @@ export async function runProposedChangeWorkerHost(
       let firstPolicyRejection: string | undefined;
       const hooks = createHttpHooks({
         allowedHosts: [...allowedHosts],
+        onRequest(request) {
+          return upgradeExplicitMiseMetadataRequest(request, allowedHosts);
+        },
         isRequestAllowed(request) {
           const url = new URL(request.url);
-          if (url.protocol === "https:" && allowedHosts.has(url.hostname)) {
-            return true;
+          if (url.protocol !== "https:") {
+            firstPolicyRejection ??=
+              `Dependency request protocol ${url.protocol} for ${url.hostname} is not allowed`;
+            return false;
           }
-          firstPolicyRejection ??=
-            `Dependency destination ${url.hostname} is not explicitly allowed`;
+          if (allowedHosts.has(url.hostname)) return true;
+          firstPolicyRejection ??= `Dependency destination ${url.hostname} is not explicitly allowed`;
           return false;
         },
       });
@@ -772,12 +764,14 @@ export async function runProposedChangeWorkerHost(
         throw new Error(parsed.status === "failed" ? parsed.detail : stderr.trim() || "Pi worker failed");
       }
     }
-    const proposedCommit = await packageProposal(
-      vm,
-      launch,
-      environment,
-      options.stateDirectory,
-    );
+    const proposedCommit = launch.workerMode === "validation-only"
+      ? launch.baseCommit
+      : await packageProposal(
+          vm,
+          launch,
+          environment,
+          options.stateDirectory,
+        );
     const validation = await runValidationTasks(
       vm,
       launch,
@@ -808,15 +802,14 @@ export async function runProposedChangeWorkerHost(
     });
   } catch (error) {
     const policyRejection = getPolicyRejection();
-    const dependencyDenied = policyRejection?.startsWith("Dependency destination ") === true;
-    const detail = dependencyDenied
+    const detail = policyRejection
       ? policyRejection
       : error instanceof Error
         ? error.message
         : String(error);
     const target = resourcesStarted ? "error.json" : "launch-error.json";
     await writeJsonAtomically(join(options.stateDirectory, target), {
-      reason: dependencyDenied ? "DEPENDENCY_DESTINATION_DENIED" : "RUNTIME_FAILURE",
+      reason: policyRejection ? "DEPENDENCY_DESTINATION_DENIED" : "RUNTIME_FAILURE",
       detail,
     });
     await appendFile(runtimeLogPath, `PI Lead change BLOCKED: ${detail}\n`, {

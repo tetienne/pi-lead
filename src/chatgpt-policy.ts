@@ -1,5 +1,7 @@
 import { createHttpHooks, type CreateHttpHooksResult } from "@earendil-works/gondolin";
 
+import { upgradeExplicitMiseMetadataRequest } from "./dependency-request-policy.ts";
+
 export const CHATGPT_TOKEN_ENV = "PI_LEAD_CHATGPT_TOKEN";
 export const CHATGPT_ACCOUNT_ENV = "PI_LEAD_CHATGPT_ACCOUNT_ID";
 export const CHATGPT_HOST = "chatgpt.com";
@@ -229,8 +231,9 @@ export function createChatGptMediation(options: ChatGptMediationOptions): ChatGp
       if (currentViolation) recordPolicyRejection(currentViolation);
       return currentViolation === undefined;
     },
-    async onRequest(request) {
-      if (isDependencyRequest(request)) return;
+    async onRequest(originalRequest) {
+      const request = upgradeExplicitMiseMetadataRequest(originalRequest, dependencyHosts);
+      if (isDependencyRequest(request)) return request;
       const violation = providerRequestViolation(request, tokenPlaceholder, accountPlaceholder);
       if (violation) {
         throw new Error(`ChatGPT request is outside policy: ${violation}`);

@@ -12,11 +12,13 @@ review, result collection and cleanup. The installed extension exposes only
 selection remain internal.
 
 Current acceptance is local macOS arm64 activation with the ChatGPT Pro worker
-path. A live natural-language implementation completed isolated validation,
+path. A live native-input implementation completed isolated validation,
 independent Standards and Spec review, a local task-branch commit, result
 collection and confirmed cleanup after the operator confirmed included-only
-usage. Credential-free deterministic, packaging and isolated-runtime checks are
-recorded beside that proof in [release acceptance](docs/release-acceptance.md).
+usage. The same interface also completed a failing-feedback debug cycle and a
+read-only branch review. Credential-free deterministic, packaging and
+isolated-runtime checks are recorded beside that proof in
+[release acceptance](docs/release-acceptance.md).
 
 Each future live ChatGPT run still requires a current included-quota
 confirmation. Live Jev routing separately requires a dedicated OpenRouter key
@@ -114,8 +116,14 @@ For repository checks:
 ```bash
 npm test
 npm run typecheck
+npm run package-acceptance
 npm run fixture
 ```
+
+`npm run package-acceptance` packs the checkout, installs the archive's
+production dependencies into a fresh staging directory, activates that exact
+installed package in a fresh consumer and asserts that native discovery exposes
+only `/lead`. It needs npm registry access but no provider credential.
 
 `npm run fixture` is the direct integration harness and must itself run inside Herdr. It does not use a model or provider account.
 

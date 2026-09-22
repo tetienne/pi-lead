@@ -122,7 +122,14 @@ function explicitWorkflowFallback(raw: string): JevWorkflow | "AMBIGUOUS" | unde
     if (pattern.test(input) && !matches.includes(workflow)) matches.push(workflow);
   };
   add("DEBUG", /\b(debug|diagnos(?:e|is)|bug|crash|regression|failing)\b/);
-  add("REVIEW", /\b(review|audit|inspect (?:the )?branch)\b|^--base\s+\S+\s+--branch\s+\S+/);
+  add("REVIEW", /\b(review|audit|inspect (?:the )?branch)\b/);
+  try {
+    parseStandaloneReviewInput(raw);
+    if (!matches.includes("REVIEW")) matches.push("REVIEW");
+  } catch {
+    // Other structured workflow inputs are classified by their semantic signal
+    // or by the implementation default below.
+  }
   add("RESEARCH", /\b(research|investigate|find out|compare options)\b/);
   add("TRIAGE", /\btriage\b/);
   add("WAYFIND", /\b(wayfind|map (?:the|this|a) (?:effort|migration|project))\b/);
