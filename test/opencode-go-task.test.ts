@@ -43,6 +43,10 @@ test("the Lead exposes OpenCode Go only through its explicit bounded command", a
     async runOpenCodeGo(request) {
       return { status: "DONE", ...request, workerId: "worker", vmId: "vm", tabId: "tab", paneId: "pane", piSessionId: "session", artifactId: "artifact", output: "answer", vmTerminated: true };
     },
+    async routeIntent(_input, workflow) {
+      assert.equal(workflow, "CHAT");
+      return { status: "ROUTED", workflow: "CHAT", source: "explicit" };
+    },
   })(pi);
   await commands.get("lead-read-go")?.("Question", { cwd: "/consumer", ui: { notify() {} } });
   assert.equal(entries[0]?.type, "pi-lead:opencode-go-summary");

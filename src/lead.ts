@@ -384,7 +384,10 @@ export function createLeadExtension(dependencies: LeadDependencies) {
     if (dependencies.runOpenCodeGo) {
       pi.registerCommand("lead-read-go", {
         description: "Ask an isolated OpenCode Go worker a bounded read-only question",
-        handler: async (args, context) => runOpenCodeGo(args, context),
+        handler: async (args, context) => {
+          const action = await admitRequest(args, context, "CHAT");
+          if (action === "continue") await runOpenCodeGo(args, context);
+        },
       });
     }
 
