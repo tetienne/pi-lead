@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { test } from "node:test";
@@ -83,4 +83,46 @@ test("the release archive contains only the Lead and its internal adapters", asy
   };
   assert.equal(packageJson.scripts.fixture, "node src/run-fixture-cli.ts");
   assert.equal(packageJson.scripts["chatgpt-live"], "node src/run-chatgpt-live-cli.ts");
+});
+
+test("a fresh consuming project discovers /lead as the only PI Lead command", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-consumer-"));
+  try {
+    const consumer = join(root, "consumer");
+    await mkdir(consumer);
+    const environment = {
+      ...process.env,
+      PI_CODING_AGENT_DIR: join(root, "pi-state"),
+      PI_OFFLINE: "1",
+    };
+    execFileSync("pi", ["install", "-l", "--approve", process.cwd()], {
+      cwd: consumer,
+      env: environment,
+      stdio: "pipe",
+    });
+    const output = execFileSync(
+      "pi",
+      ["--mode", "rpc", "--offline", "--no-session", "--no-tools", "--approve"],
+      {
+        cwd: consumer,
+        env: environment,
+        encoding: "utf8",
+        input: `${JSON.stringify({ id: "commands", type: "get_commands" })}\n`,
+      },
+    );
+    const response = output
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as {
+        id?: string;
+        data?: { commands?: Array<{ name: string; source: string; sourceInfo?: { path?: string } }> };
+      })
+      .find((entry) => entry.id === "commands");
+    const piLeadCommands = response?.data?.commands?.filter(
+      (command) => command.source === "extension" && command.sourceInfo?.path?.endsWith("/src/lead.ts"),
+    );
+    assert.deepEqual(piLeadCommands?.map((command) => command.name), ["lead"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

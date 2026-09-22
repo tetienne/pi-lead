@@ -17,7 +17,7 @@ export type GuestArchitecture = "arm64" | "x64";
  * writable mise directories inside its VM.
  */
 export type WorkerToolchainStorage = {
-  state: "COLD" | "WARM";
+  state: "COLD";
   seedId: string;
   host: { seedDirectory: string };
   guest: {
@@ -64,6 +64,6 @@ export async function preparePrivateWorkerToolchain(options: {
   };
 }
 
-export function createReadonlyToolchainSeed(plan: WorkerToolchainStorage): VirtualProvider {
+export function createReadonlyToolchainSeed(plan: Pick<WorkerToolchainStorage, "host">): VirtualProvider {
   return new ReadonlyProvider(new RealFSProvider(plan.host.seedDirectory));
 }

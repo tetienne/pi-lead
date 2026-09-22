@@ -28,6 +28,10 @@ import { PI_REASONING_LEVELS, type PiReasoningLevel } from "./model-reasoning-ro
 const GUEST_GIT_PACKAGE = "git=2.52.0-r0";
 const GUEST_MISE_PACKAGE = `mise=${GUEST_MISE_VERSION}`;
 
+type WorkerToolchainPlan = Omit<WorkerToolchainStorage, "state"> & {
+  state: "COLD" | "WARM";
+};
+
 type LaunchRecord = {
   taskId: string;
   assignmentId: string;
@@ -43,7 +47,7 @@ type LaunchRecord = {
   workerMode: "change" | "research" | "validation-only";
   dependencyHosts: string[];
   validationTasks: string[];
-  toolchainCache: WorkerToolchainStorage;
+  toolchainCache: WorkerToolchainPlan;
   controllerHeartbeatTimeoutMs: number;
   controllerAdmissionRequired: boolean;
 };
@@ -65,7 +69,7 @@ function stringArray(value: unknown, field: string, maxEntries: number): string[
   });
 }
 
-function parseToolchainCache(value: unknown): WorkerToolchainStorage {
+function parseToolchainCache(value: unknown): WorkerToolchainPlan {
   if (!isRecord(value) || !isRecord(value.host) || !isRecord(value.guest) || !isRecord(value.environment)) {
     throw new Error("Invalid toolchain cache launch record");
   }
@@ -105,7 +109,7 @@ function parseToolchainCache(value: unknown): WorkerToolchainStorage {
     host: { seedDirectory: value.host.seedDirectory },
     guest: { platform: value.guest.platform, seedDirectory: value.guest.seedDirectory },
     environment,
-  } as WorkerToolchainStorage;
+  } as WorkerToolchainPlan;
 }
 
 function parseLaunchRecord(value: unknown): LaunchRecord {
@@ -235,7 +239,7 @@ async function seedPrivateMiseStorage(
 
 export async function assertGuestCachePlatform(
   vm: Pick<VM, "exec">,
-  plan: WorkerToolchainStorage,
+  plan: WorkerToolchainPlan,
 ): Promise<void> {
   const architecture = await vm.exec(["/bin/uname", "-m"]);
   const expectedArchitecture = plan.guest.platform === "linux-arm64-musl" ? "aarch64" : "x86_64";

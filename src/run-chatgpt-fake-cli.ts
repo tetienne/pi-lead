@@ -116,6 +116,7 @@ await writeJsonAtomically(join(stateDirectory, "launch.json"), {
   tabId: "fake-tab",
   paneId: "fake-pane",
   modelId: "gpt-5.6-luna",
+  reasoning: "off",
   controllerHeartbeatTimeoutMs: 60_000,
   policy: {
     provider: "openai-codex",

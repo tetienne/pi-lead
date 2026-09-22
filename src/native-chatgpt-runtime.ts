@@ -301,15 +301,12 @@ export async function createNativeChatGptRuntime(
         allowedHosts: readonly string[];
       };
       if (
-        (profile.requireChatGptProtocol
-          ? profileRequest.provider !== profile.provider ||
-            profileRequest.transport !== "sse" ||
-            profileRequest.cacheWarming !== "off" ||
-            profileRequest.allowedHosts.length !== 1 ||
-            profileRequest.allowedHosts[0] !== profile.allowedHost
-          : profileRequest.provider !== profile.provider ||
-            profileRequest.allowedHosts.length !== 1 ||
-            profileRequest.allowedHosts[0] !== profile.allowedHost) ||
+        profileRequest.provider !== profile.provider ||
+        profileRequest.allowedHosts.length !== 1 ||
+        profileRequest.allowedHosts[0] !== profile.allowedHost ||
+        (profile.requireChatGptProtocol && (
+          profileRequest.transport !== "sse" || profileRequest.cacheWarming !== "off"
+        )) ||
         request.allowWebSockets !== false ||
         request.focus !== false ||
         request.hostMounts.length !== 0 ||

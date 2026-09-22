@@ -9,23 +9,25 @@ development tooling.
 
 **Status:** ready-for-agent
 
+**Resolution:** DONE
+
 ## Acceptance criteria
 
-- [ ] Remove the provider-, skill- and stage-specific public commands replaced
+- [x] Remove the provider-, skill- and stage-specific public commands replaced
   by the unified orchestrator; retain only `/lead <request>`. Cancellation uses
   native Pi interruption/session shutdown and status stays conversational.
-- [ ] Keep fixture and live-proof runners available as development scripts
+- [x] Keep fixture and live-proof runners available as development scripts
   without registering them as product workflows.
-- [ ] Every shipped feature module is reachable from the Lead through the
+- [x] Every shipped feature module is reachable from the Lead through the
   approved interface or explicitly identified as an internal adapter; delete or
   exclude orphan and deferred implementations from the release path.
-- [ ] Provider availability changes routing policy, not the command vocabulary;
+- [x] Provider availability changes routing policy, not the command vocabulary;
   OpenCode Go and future providers can be added or removed without teaching the
   user a new interaction.
-- [ ] Preserve deterministic policy, worker isolation, credential confinement,
+- [x] Preserve deterministic policy, worker isolation, credential confinement,
   review requirements, result correlation and cleanup while contracting the
   surface.
-- [ ] Update command-discovery tests, package contents and README examples so no
+- [x] Update command-discovery tests, package contents and README examples so no
   removed command is advertised or silently required.
 
 ## Context and constraints
@@ -63,3 +65,24 @@ Created from the 2026-09-22 scope audit and approved by the user. The audit
 identified `lead-read`, `lead-read-go`, `lead-change`, `lead-implement`,
 `lead-fixture`, `lead-plan`, `lead-triage` and `lead-wayfind` as the accidental
 surface to reconcile, not as a predetermined list of files to delete blindly.
+
+Implemented on 2026-09-22. The extension now registers only `/lead`; natural
+requests and `/lead` use the same admission/orchestration path, and historical
+command-shaped text receives no privileged parsing. The release archive uses an
+explicit production allowlist whose contents are checked against the runtime
+reachability graph, excluding deferred publication, provider-specific and
+repository-only fixture entry points while retaining the latter as development
+scripts. Production worker toolchain storage is cold and worker-private, and
+successful review ends at a local reviewed commit.
+
+Validation: native Pi RPC discovery from a fresh consuming project found only
+`/lead` from this extension; the deterministic suite and typecheck passed; the
+ChatGPT fake-provider and proposed-change development fixtures passed. The
+isolated live-proof fixture produced correlated guest evidence for denied
+egress, absent host credentials and a writable private workspace, but its
+environment cleanup remained `CLEANUP_UNCONFIRMED`; its diagnostic tab and
+artifacts were retained. This does not claim fresh live-runtime acceptance,
+which remains owned by Ticket 20. Parallel standards and specification reviews
+found no contract violation; their two maintainability observations were
+resolved by simplifying provider-policy validation and making the production
+toolchain state exactly `COLD`.
