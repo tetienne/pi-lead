@@ -350,7 +350,7 @@ test("ordinary input and /lead admit every supported Matt workflow through one o
   });
 });
 
-test("a natural implementation request without its approved validation context is precisely blocked", async () => {
+test("a natural implementation request asks conversationally for its approved validation context", async () => {
   let inputHandler:
     | ((event: { source: string; text: string }, context: unknown) => Promise<{ action: string }>)
     | undefined;
@@ -377,7 +377,7 @@ test("a natural implementation request without its approved validation context i
     { action: "handled" },
   );
   assert.deepEqual(notices, [{
-    message: "PI Lead implement: BLOCKED — separate the instruction with --",
-    level: "error",
+    message: "PI Lead implement: clarification required — which approved specification, named base, and mise checks should govern this change?",
+    level: "info",
   }]);
 });

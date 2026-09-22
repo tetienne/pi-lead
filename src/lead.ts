@@ -466,8 +466,8 @@ export function createLeadExtension(dependencies: LeadDependencies) {
           parsed = parseProposedChangeInput(args);
         } catch (error) {
           context.ui.notify(
-            `PI Lead implement: BLOCKED — ${error instanceof Error ? error.message : String(error)}`,
-            "error",
+            "PI Lead implement: clarification required — which approved specification, named base, and mise checks should govern this change?",
+            "info",
           );
           return;
         }
