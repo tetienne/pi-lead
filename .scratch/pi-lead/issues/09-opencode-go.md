@@ -4,7 +4,7 @@
 
 **Blocked by:** [02: Complete a ChatGPT Pro read-only worker task](02-chatgpt-worker.md)
 
-**Status:** ready-for-agent
+**Status:** BLOCKED
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -46,6 +46,8 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
 
 ## Comments
+
+2026-09-22: BLOCKED on the included-quota human gate. A live PI Lead OpenCode Go worker reached the provider using the operator's configured account and returned `429` with `GoUsageLimitError: Go usage limit exceeded`. It stopped as `BLOCKED`; no paid-balance fallback was used. This is live evidence of quota exhaustion, not the required successful streaming/model-selection acceptance. Do not retry until included quota returns and keep the account's **Use balance** option disabled.
 
 Implementation completed 2026-09-21, pending the ticket's explicit live-account human gate. `lead-read-go` creates a bounded read-only worker using Pi's native `opencode-go` provider and its pinned `gpt-5.6-luna` catalog record; no OpenCode CLI or separate client was introduced. The host holds `OPENCODE_API_KEY`, substitutes only at `https://opencode.ai/zen/go/v1/responses`, preserves Pi's `x-opencode-session` and `x-opencode-client: pi` headers, denies redirects/alternate destinations and fails closed on reflected keys. Exhaustion is a terminal `QUOTA_EXHAUSTED` result with no paid-provider fallback.
 

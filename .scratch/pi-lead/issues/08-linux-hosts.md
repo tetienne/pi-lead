@@ -4,7 +4,7 @@
 
 **Blocked by:** [02: Complete a ChatGPT Pro read-only worker task](02-chatgpt-worker.md)
 
-**Status:** IN PROGRESS
+**Status:** BLOCKED
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -48,5 +48,7 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
 
 ## Comments
+
+2026-09-22: BLOCKED. The required Ubuntu 24.04 LTS x86_64 and arm64 runtime environments are unavailable, and the user confirmed they cannot be verified. This ticket makes no compatibility claim from the reusable scenario runner, unit tests, upstream support, or the existing macOS evidence. The exact host/provider, confinement, termination, and no-focus artifacts remain required before it can resume.
 
 The reusable host-matrix scenario runner was added in revision `11530fc` on 2026-09-21. It pins the approved Node/Pi/Gondolin/mise versions, requires Ubuntu 24.04 verification for Linux, and will report each of the toolchain, credential, confinement, termination, and no-focus Herdr checks as BLOCKED until its correlated artifact is collected and verified. It deliberately records unavailable target hardware as BLOCKED rather than inferring compatibility. Unit coverage (88 passing tests) and typechecking passed; no real provider/Herdr/VM scenario was run during this implementation, so macOS and both Ubuntu acceptance environments remain explicit runtime blockers.

@@ -4,7 +4,7 @@
 
 **Blocked by:** [07: Reuse safe toolchain caches across repeated tasks](07-safe-toolchain-caches.md); [08: Run the isolated task path on both Linux architectures](08-linux-hosts.md); [09: Use OpenCode Go when included quota is available](09-opencode-go.md); [11: Select allowed models and reasoning at worker spawn](11-model-reasoning-routing.md); [13: Diagnose bugs and review existing branches](13-debug-and-review.md); [14: Triage incoming work and resolve large design maps](14-triage-and-wayfinding.md); [15: Execute the dependency frontier with two workers](15-dependency-scheduler.md)
 
-**Status:** ready-for-agent
+**Status:** BLOCKED
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -50,3 +50,7 @@ Run the required checks and an independent Standards/Spec review of this ticket'
 - [Workspace And Mise](../../../docs/research/workspace-and-mise.md)
 
 Read source version caveats before using an API; research is source evidence, not runtime acceptance. Bootstrap and consuming-project policy govern actual permissions. Request human-only setup only when it becomes necessary, never by asking for a secret in chat.
+
+## Comments
+
+2026-09-22: BLOCKED by Ticket 08 and Ticket 09. Ubuntu 24.04 x86_64/arm64 evidence cannot currently be collected, and a live OpenCode Go attempt reached the provider but stopped at `429 GoUsageLimitError` because included quota is exhausted. The final acceptance ticket must not claim supported-host or successful OpenCode Go coverage until those independent gates are resolved.
