@@ -45,6 +45,7 @@ test("native change runtime transfers the named base and collects only its corre
   await writeFile(join(consumer, "local.txt"), "must remain local\n");
   const statusBefore = await git(consumer, "status", "--porcelain=v1", "--untracked-files=all");
   let stateDirectory = "";
+  let routeVerified = false;
   const herdr: HerdrClient = {
     async createBackgroundTab(request) {
       assert.deepEqual(request, {
@@ -107,7 +108,11 @@ test("native change runtime transfers the named base and collects only its corre
       await git(guest, "bundle", "create", join(stateDirectory, "proposal.bundle"), PROPOSAL_REF);
       await writeFile(
         join(stateDirectory, "resources.json"),
-        JSON.stringify({ workerId: launch.workerId, vmId: "vm-change" }),
+        JSON.stringify({
+          workerId: launch.workerId,
+          vmId: "vm-change",
+          effectiveRoute: { provider: "openai-codex", modelId: "gpt-5.6-luna", reasoning: "medium" },
+        }),
       );
       await writeFile(
         join(stateDirectory, "result.json"),
@@ -140,6 +145,16 @@ test("native change runtime transfers the named base and collects only its corre
     herdr,
     processHost,
     pollIntervalMs: 1,
+    modelId: "gpt-5.6-luna",
+    reasoning: "high",
+    onWorkerSpawn(effective) {
+      assert.deepEqual(effective, {
+        provider: "openai-codex",
+        modelId: "gpt-5.6-luna",
+        reasoning: "medium",
+      });
+      routeVerified = true;
+    },
   });
 
   const worker = await runtime.launch({
@@ -156,6 +171,7 @@ test("native change runtime transfers the named base and collects only its corre
     allowedDependencyHosts: ["registry.npmjs.org"],
   });
   const result = await runtime.waitForResult(worker);
+  assert.equal(routeVerified, true);
   assert.deepEqual(result.toolchainCache, {
     seedId: (JSON.parse(await readFile(join(stateDirectory, "launch.json"), "utf8")) as { toolchainCache: { seedId: string } }).toolchainCache.seedId,
     state: "COLD",

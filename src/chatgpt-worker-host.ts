@@ -13,6 +13,7 @@ import {
 import { MAX_CHATGPT_TASK_CHARS } from "./chatgpt-input.ts";
 import { observeProcessExit } from "./process-observation.ts";
 import type { NativePiEvent, ProviderFailure } from "./chatgpt-task.ts";
+import { PI_REASONING_LEVELS, type PiReasoningLevel } from "./model-reasoning-routing.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
 
 type ResolvedAuthLike = {
@@ -35,7 +36,7 @@ export type ParsedPiJsonResult =
     };
 
 export interface ChatGptCredentialSource {
-  assertModelAvailable(modelId: string): void;
+  assertModelAvailable(modelId: string, reasoning: PiReasoningLevel): PiReasoningLevel;
   getCredential(signal?: AbortSignal): Promise<ChatGptCredential>;
 }
 
@@ -200,13 +201,23 @@ class NativePiCredentialSource implements ChatGptCredentialSource {
     this.#runtime = runtime;
   }
 
-  assertModelAvailable(modelId: string): void {
-    if (!this.#runtime.getModel("openai-codex", modelId)) {
+  assertModelAvailable(modelId: string, reasoning: PiReasoningLevel): PiReasoningLevel {
+    const model = this.#runtime.getModel("openai-codex", modelId);
+    if (!model) {
       throw new ProviderSetupError(
         "MODEL_UNAVAILABLE",
         `The approved ChatGPT model ${modelId} is unavailable in the pinned Pi catalog`,
       );
     }
+    if (!model.reasoning) return "off";
+    const supported = PI_REASONING_LEVELS.filter(
+      (level) => model.thinkingLevelMap?.[level] !== null,
+    );
+    if (supported.includes(reasoning)) return reasoning;
+    const requested = PI_REASONING_LEVELS.indexOf(reasoning);
+    return supported.find((level) => PI_REASONING_LEVELS.indexOf(level) > requested) ??
+      [...supported].reverse().find((level) => PI_REASONING_LEVELS.indexOf(level) < requested) ??
+      "off";
   }
 
   async getCredential(signal?: AbortSignal): Promise<ChatGptCredential> {
@@ -255,6 +266,7 @@ type LaunchRecord = {
   tabId: string;
   paneId: string;
   modelId: string;
+  reasoning: PiReasoningLevel;
   controllerHeartbeatTimeoutMs: number;
 };
 
@@ -281,6 +293,10 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
   if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 1_000) {
     throw new Error("Invalid controller heartbeat timeout");
   }
+  const reasoning = requireString(value, "reasoning", 16);
+  if (!(PI_REASONING_LEVELS as readonly string[]).includes(reasoning)) {
+    throw new Error("Invalid ChatGPT reasoning level");
+  }
   return {
     taskId: requireString(value, "taskId", 160),
     assignmentId: requireString(value, "assignmentId", 160),
@@ -290,6 +306,7 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
     tabId: requireString(value, "tabId", 160),
     paneId: requireString(value, "paneId", 160),
     modelId: requireString(value, "modelId", 160),
+    reasoning: reasoning as PiReasoningLevel,
     controllerHeartbeatTimeoutMs: timeout,
   };
 }
@@ -446,7 +463,7 @@ export async function runChatGptWorkerHost(options: RunChatGptWorkerHostOptions)
   try {
     const credentialSource =
       options.credentialSource ?? (await createNativePiCredentialSource(abortController.signal));
-    credentialSource.assertModelAvailable(launch.modelId);
+    const effectiveReasoning = credentialSource.assertModelAvailable(launch.modelId, launch.reasoning);
     const initialCredential = await credentialSource.getCredential(abortController.signal);
     const mediation = createChatGptMediation({
       initialCredential,
@@ -473,6 +490,11 @@ export async function runChatGptWorkerHost(options: RunChatGptWorkerHostOptions)
     await writeJsonAtomically(join(options.stateDirectory, "resources.json"), {
       workerId: launch.workerId,
       vmId,
+      effectiveRoute: {
+        provider: "openai-codex",
+        modelId: launch.modelId,
+        reasoning: effectiveReasoning,
+      },
     });
     resourcesStarted = true;
     abortController.signal.throwIfAborted();
@@ -512,7 +534,7 @@ export async function runChatGptWorkerHost(options: RunChatGptWorkerHostOptions)
         "--model",
         launch.modelId,
         "--thinking",
-        "off",
+        launch.reasoning,
         "--no-tools",
         "--no-extensions",
         "--no-skills",

@@ -82,8 +82,9 @@ const accessToken = `header.${Buffer.from(
 ).toString("base64url")}.signature`;
 const accountId = "host-account-fake";
 const credentialSource: ChatGptCredentialSource = {
-  assertModelAvailable(modelId) {
+  assertModelAvailable(modelId, reasoning) {
     assert.equal(modelId, "gpt-5.6-luna");
+    return reasoning;
   },
   async getCredential() {
     return { accessToken, accountId };

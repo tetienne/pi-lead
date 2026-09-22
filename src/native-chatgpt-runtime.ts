@@ -19,6 +19,7 @@ import {
 } from "./chatgpt-task.ts";
 import { MAX_CHATGPT_TASK_CHARS } from "./chatgpt-input.ts";
 import type { HerdrClient } from "./native-runtime.ts";
+import { PI_REASONING_LEVELS, type EffectivePiRoute, type PiReasoningLevel } from "./model-reasoning-routing.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
 
 const execFileAsync = promisify(execFile);
@@ -41,6 +42,8 @@ export interface ChatGptProcessHost {
 type NativeChatGptRuntimeOptions = {
   cwd: string;
   modelId?: string;
+  reasoning?: PiReasoningLevel;
+  onWorkerSpawn?(effective: EffectivePiRoute): void;
   workspaceId?: string;
   stateRoot?: string;
   herdr?: HerdrClient;
@@ -210,6 +213,19 @@ function requireString(value: unknown, field: string, maxLength = 1024 * 1024): 
   return value[field];
 }
 
+function parseEffectiveRoute(value: unknown, provider: EffectivePiRoute["provider"]): EffectivePiRoute {
+  if (!isRecord(value) || !isRecord(value.effectiveRoute)) {
+    throw new Error("Invalid worker route observation");
+  }
+  const route = value.effectiveRoute;
+  const modelId = requireString(route, "modelId", 160);
+  const reasoning = requireString(route, "reasoning", 16);
+  if (route.provider !== provider || !(PI_REASONING_LEVELS as readonly string[]).includes(reasoning)) {
+    throw new Error("Invalid worker route observation");
+  }
+  return { provider, modelId, reasoning: reasoning as PiReasoningLevel };
+}
+
 function parseNativeEvents(value: unknown): NativePiEvent[] {
   if (!isRecord(value) || !Array.isArray(value.nativeEvents)) {
     throw new Error("Invalid ChatGPT artifact: nativeEvents");
@@ -272,6 +288,7 @@ export async function createNativeChatGptRuntime(
     options.stateRoot ?? process.env.PI_LEAD_STATE_DIR ?? join(homedir(), ".local", "state", "pi-lead");
   const pollIntervalMs = options.pollIntervalMs ?? 100;
   const modelId = options.modelId ?? "gpt-5.6-luna";
+  const reasoning = options.reasoning ?? "off";
   const runs = new Map<string, RunState>();
 
   return {
@@ -335,6 +352,7 @@ export async function createNativeChatGptRuntime(
           tabId: tab.tabId,
           paneId: tab.paneId,
           modelId,
+          reasoning,
           controllerHeartbeatTimeoutMs: 5_000,
           policy: {
             provider: profileRequest.provider,
@@ -360,6 +378,8 @@ export async function createNativeChatGptRuntime(
         if (requireString(resources, "workerId", 160) !== workerId) {
           throw new Error("Launcher returned the wrong worker identity");
         }
+        const provider = profile === "chatgpt" ? "openai-codex" : "opencode-go";
+        if (options.onWorkerSpawn) options.onWorkerSpawn(parseEffectiveRoute(resources, provider));
         const worker: ChatGptWorker = {
           taskId: request.taskId,
           assignmentId: request.assignmentId,

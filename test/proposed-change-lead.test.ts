@@ -8,6 +8,7 @@ import type {
   ReviewRequiredSummary,
 } from "../src/proposed-change-task.ts";
 import type { CompleteLocalCodingRequest } from "../src/review-fix-commit-task.ts";
+import type { WorkerRouteAuthorization } from "../src/lead.ts";
 
 test("the Lead change command records a review-required proposal without calling it done", async () => {
   const commands = new Map<string, (args: string, context: unknown) => Promise<void>>();
@@ -177,12 +178,141 @@ test("the Lead implement command reserves review capacity and records a delivere
   assert.match(requests[0]?.specification.digest ?? "", /^[0-9a-f]{64}$/);
   assert.match(requests[0]?.standards.digest ?? "", /^[0-9a-f]{64}$/);
   assert.equal(entries[0]?.type, "pi-lead:complete-task-summary");
-  assert.deepEqual(notifications, [
-    {
-      message: `PI Lead implement: DONE — committed ${"b".repeat(40)} on pi-lead/task-task-4`,
-      level: "info",
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0]?.message ?? "", new RegExp(`committed ${"b".repeat(40)} on pi-lead/task-task-4`));
+  assert.match(notifications[0]?.message ?? "", /checks none reported; review none reported; route legacy; cleanup confirmed; publication deferred/);
+  assert.equal(notifications[0]?.level, "info");
+});
+
+test("a unified implementation verifies the effective model and reasoning at worker spawn", async () => {
+  const commands = new Map<string, (args: string, context: any) => Promise<void>>();
+  const entries: Array<{ type: string; data: any }> = [];
+  const state = {
+    version: 1,
+    activeWorkers: 0,
+    maxActiveWorkers: 2,
+    providers: {
+      "openai-codex": { authenticated: true, quotaAvailable: true },
+      "opencode-go": { authenticated: false, quotaAvailable: false },
     },
-  ]);
+    availableModels: {
+      "openai-codex": ["gpt-5.6-luna"],
+      "opencode-go": [],
+    },
+    budgetAvailable: true,
+    minimumConfidence: 0.8,
+    routes: [{
+      provider: "openai-codex" as const,
+      modelId: "gpt-5.6-luna",
+      reasoning: "high" as const,
+      allowedEffectiveReasoning: ["medium", "high"] as const,
+      taskClasses: ["DEMANDING"] as const,
+      contextClasses: ["STANDARD", "LARGE"] as const,
+    }],
+  };
+  const judgment = {
+    questionId: "worker-resource" as const,
+    type: "resource" as const,
+    stateVersion: 1,
+    taskClass: "DEMANDING" as const,
+    contextClass: "STANDARD" as const,
+    confidence: 1,
+  };
+  const pi = {
+    on() { return () => undefined; },
+    registerCommand(name: string, definition: { handler: (args: string, context: any) => Promise<void> }) {
+      commands.set(name, definition.handler);
+    },
+    appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async authorizeWorkerRoute(): Promise<WorkerRouteAuthorization> {
+      return {
+        state,
+        judgment,
+      };
+    },
+    async runCompleteLocalCoding(request, _cwd, _signal, route) {
+      assert.equal(route?.selection.modelId, "gpt-5.6-luna");
+      assert.deepEqual(route?.verifySpawn({
+        provider: "openai-codex",
+        modelId: "gpt-5.6-luna",
+        reasoning: "medium",
+      }), {
+        status: "VERIFIED",
+        selection: route?.selection,
+        effectiveReasoning: "medium",
+        clamped: true,
+      });
+      return {
+        status: "DONE",
+        taskId: request.taskId,
+        proposal: {
+          status: "REVIEW_REQUIRED", taskId: request.taskId, assignmentId: "build",
+          workerId: "worker", vmId: "vm", tabId: "tab", paneId: "pane", piSessionId: "session",
+          baseCommit: "a".repeat(40), proposedCommit: "b".repeat(40), validations: [], artifactId: "artifact",
+          files: [], humanGate: true, hostCommitted: false, published: false, vmTerminated: true,
+        },
+        reviews: [], reviewHistory: [], reviewCycles: 0,
+        commit: { branchName: `pi-lead/task-${request.taskId}`, commit: "b".repeat(40), committed: true, activeCheckoutPreserved: true },
+        published: false, specification: request.specification, standards: request.standards,
+      };
+    },
+    async routeIntent(_input, workflow) {
+      assert.equal(workflow, "IMPLEMENT");
+      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
+    },
+  })(pi);
+
+  await commands.get("lead-implement")?.(
+    "--base main --check test --spec .scratch/pi-lead/issues/18-unified-orchestration.md -- Complete orchestration.",
+    { cwd: process.cwd(), ui: { notify() {} } },
+  );
+
+  assert.equal(entries[0]?.type, "pi-lead:complete-task-summary");
+  assert.deepEqual(entries[0]?.data.workerRoutes, [{
+    status: "VERIFIED",
+    selection: {
+      provider: "openai-codex", modelId: "gpt-5.6-luna", reasoning: "high",
+      allowedEffectiveReasoning: ["medium", "high"], fallback: false,
+    },
+    effectiveReasoning: "medium",
+    clamped: true,
+  }]);
+});
+
+test("an unavailable worker route records a precise BLOCKED implementation outcome", async () => {
+  const commands = new Map<string, (args: string, context: any) => Promise<void>>();
+  const entries: Array<{ type: string; data: any }> = [];
+  let ran = false;
+  const pi = {
+    on() { return () => undefined; },
+    registerCommand(name: string, definition: { handler: (args: string, context: any) => Promise<void> }) {
+      commands.set(name, definition.handler);
+    },
+    appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async authorizeWorkerRoute() { throw new Error("worker route NO_ADEQUATE_ROUTE"); },
+    async runCompleteLocalCoding() { ran = true; throw new Error("must not run"); },
+    async routeIntent(_input, workflow) {
+      assert.equal(workflow, "IMPLEMENT");
+      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
+    },
+  })(pi);
+
+  await commands.get("lead-implement")?.(
+    "--base main --check test --spec .scratch/pi-lead/issues/18-unified-orchestration.md -- Complete orchestration.",
+    { cwd: process.cwd(), ui: { notify() {} } },
+  );
+
+  assert.equal(ran, false);
+  assert.equal(entries[0]?.type, "pi-lead:complete-task-summary");
+  assert.equal(entries[0]?.data.status, "BLOCKED");
+  assert.equal(entries[0]?.data.reason, "BUILD_BLOCKED");
+  assert.match(entries[0]?.data.detail, /NO_ADEQUATE_ROUTE/);
 });
 
 test("an implementation waiting for its two review slots is queued until the current task releases them", async () => {

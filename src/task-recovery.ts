@@ -290,6 +290,26 @@ export class TaskRecordStore {
     return value === undefined ? undefined : validateRecord(value);
   }
 
+  async listInterruptedTaskIds(): Promise<string[]> {
+    const directory = resolve(this.#root, "tasks");
+    let names: string[];
+    try {
+      names = await readdir(directory);
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT") return [];
+      throw error;
+    }
+    const interrupted: string[] = [];
+    for (const name of names.sort()) {
+      if (!name.endsWith(".json")) continue;
+      const taskId = name.slice(0, -".json".length);
+      if (!TASK_ID.test(taskId)) continue;
+      const record = await this.load(taskId);
+      if (record && record.status !== "DONE") interrupted.push(record.taskId);
+    }
+    return interrupted;
+  }
+
   async applyRetention(now: Date): Promise<string[]> {
     return this.#exclusively((writer) => this.#applyRetention(now, writer));
   }

@@ -42,7 +42,11 @@ test("native ChatGPT runtime persists no credential and binds native Pi evidence
       const launch = JSON.parse(launchText) as { workerId: string; piSessionId: string };
       await writeFile(
         join(stateDirectory, "resources.json"),
-        JSON.stringify({ workerId: launch.workerId, vmId: "vm-chatgpt" }),
+        JSON.stringify({
+          workerId: launch.workerId,
+          vmId: "vm-chatgpt",
+          effectiveRoute: { provider: "openai-codex", modelId: "gpt-5.6-luna", reasoning: "medium" },
+        }),
       );
     },
   };
@@ -54,6 +58,15 @@ test("native ChatGPT runtime persists no credential and binds native Pi evidence
     processHost,
     pollIntervalMs: 1,
     modelId: "gpt-5.6-luna",
+    reasoning: "high",
+    onWorkerSpawn(effective) {
+      assert.deepEqual(effective, {
+        provider: "openai-codex",
+        modelId: "gpt-5.6-luna",
+        reasoning: "medium",
+      });
+      calls.push("verify-route");
+    },
   });
 
   const worker = await runtime.launch({
@@ -72,10 +85,12 @@ test("native ChatGPT runtime persists no credential and binds native Pi evidence
   });
   const launch = JSON.parse(await readFile(join(stateDirectory, "launch.json"), "utf8")) as {
     modelId: string;
+    reasoning: string;
     piSessionId: string;
     policy: unknown;
   };
   assert.equal(launch.modelId, "gpt-5.6-luna");
+  assert.equal(launch.reasoning, "high");
   assert.equal(launch.piSessionId, worker.piSessionId);
   assert.deepEqual(launch.policy, {
     provider: "openai-codex",
@@ -111,5 +126,5 @@ test("native ChatGPT runtime persists no credential and binds native Pi evidence
   );
   assert.deepEqual(await runtime.terminate(worker), { vmId: worker.vmId, terminated: true });
   await runtime.closeSuccessfulTab(worker.tabId);
-  assert.deepEqual(calls, ["create-tab", "start-launcher", "close-tab"]);
+  assert.deepEqual(calls, ["create-tab", "start-launcher", "verify-route", "close-tab"]);
 });

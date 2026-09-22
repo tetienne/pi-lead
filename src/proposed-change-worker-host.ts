@@ -22,6 +22,7 @@ import {
   MISE_SEED_CONTENT_DIRECTORIES,
   type ToolchainCachePlan,
 } from "./toolchain-cache.ts";
+import { PI_REASONING_LEVELS, type PiReasoningLevel } from "./model-reasoning-routing.ts";
 
 const GUEST_GIT_PACKAGE = "git=2.52.0-r0";
 const GUEST_MISE_PACKAGE = `mise=${GUEST_MISE_VERSION}`;
@@ -37,6 +38,7 @@ type LaunchRecord = {
   tabId: string;
   paneId: string;
   modelId: string;
+  reasoning: PiReasoningLevel;
   dependencyHosts: string[];
   validationTasks: string[];
   toolchainCache: ToolchainCachePlan;
@@ -141,6 +143,10 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
   if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 1_000) {
     throw new Error("Invalid controller heartbeat timeout");
   }
+  const reasoning = requireString(value, "reasoning", 16);
+  if (!(PI_REASONING_LEVELS as readonly string[]).includes(reasoning)) {
+    throw new Error("Invalid proposed-change reasoning level");
+  }
   return {
     taskId: requireString(value, "taskId", 160),
     assignmentId: requireString(value, "assignmentId", 160),
@@ -152,6 +158,7 @@ function parseLaunchRecord(value: unknown): LaunchRecord {
     tabId: requireString(value, "tabId", 160),
     paneId: requireString(value, "paneId", 160),
     modelId: requireString(value, "modelId", 160),
+    reasoning: reasoning as PiReasoningLevel,
     dependencyHosts: allowedHosts.slice(1),
     validationTasks: validation,
     toolchainCache: parseToolchainCache(value.toolchainCache),
@@ -518,6 +525,7 @@ export async function runProposedChangeWorkerHost(
   let getPolicyRejection = (): string | undefined => undefined;
   try {
     let redact = (value: string) => value;
+    let effectiveReasoning = launch.reasoning;
     let environment: Record<string, string>;
     let httpHooks;
     if (options.fixtureEdit) {
@@ -541,7 +549,7 @@ export async function runProposedChangeWorkerHost(
     } else {
       const credentialSource =
         options.credentialSource ?? (await createNativePiCredentialSource(abortController.signal));
-      credentialSource.assertModelAvailable(launch.modelId);
+      effectiveReasoning = credentialSource.assertModelAvailable(launch.modelId, launch.reasoning);
       const initialCredential = await credentialSource.getCredential(abortController.signal);
       const mediation = createChatGptMediation({
         initialCredential,
@@ -574,6 +582,11 @@ export async function runProposedChangeWorkerHost(
     await writeJsonAtomically(join(options.stateDirectory, "resources.json"), {
       workerId: launch.workerId,
       vmId,
+      effectiveRoute: {
+        provider: "openai-codex",
+        modelId: launch.modelId,
+        reasoning: effectiveReasoning,
+      },
     });
     resourcesStarted = true;
     abortController.signal.throwIfAborted();
@@ -672,7 +685,7 @@ export async function runProposedChangeWorkerHost(
           "--model",
           launch.modelId,
           "--thinking",
-          "off",
+          launch.reasoning,
           "--no-extensions",
           "--skill",
           "implement",

@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 import { collectGitProposal, deliverGitProposal, prepareCommittedBase } from "./git-proposal.ts";
 import type { HerdrClient } from "./native-runtime.ts";
+import { PI_REASONING_LEVELS, type EffectivePiRoute, type PiReasoningLevel } from "./model-reasoning-routing.ts";
 import { createProposedChangePolicy } from "./proposed-change-policy.ts";
 import {
   ProposedChangeLaunchFailure,
@@ -50,6 +51,8 @@ type NativeProposedChangeRuntimeOptions = {
   cwd: string;
   guestArchitecture?: GuestArchitecture;
   modelId?: string;
+  reasoning?: PiReasoningLevel;
+  onWorkerSpawn?(effective: EffectivePiRoute): void;
   workspaceId?: string;
   stateRoot?: string;
   toolchainCacheRoot?: string;
@@ -210,6 +213,19 @@ function requireString(value: unknown, field: string, maxLength = 16_384): strin
     throw new Error(`Invalid proposed-change artifact: ${field}`);
   }
   return value[field];
+}
+
+function parseEffectiveRoute(value: unknown): EffectivePiRoute {
+  if (!isRecord(value) || !isRecord(value.effectiveRoute)) {
+    throw new Error("Invalid proposed-change worker route observation");
+  }
+  const route = value.effectiveRoute;
+  const modelId = requireString(route, "modelId", 160);
+  const reasoning = requireString(route, "reasoning", 16);
+  if (route.provider !== "openai-codex" || !(PI_REASONING_LEVELS as readonly string[]).includes(reasoning)) {
+    throw new Error("Invalid proposed-change worker route observation");
+  }
+  return { provider: "openai-codex", modelId, reasoning: reasoning as PiReasoningLevel };
 }
 
 async function readCommittedMiseConfig(repositoryPath: string, baseCommit: string): Promise<string> {
@@ -404,6 +420,7 @@ export async function createNativeProposedChangeRuntime(
           tabId: tab.tabId,
           paneId: tab.paneId,
           modelId: options.modelId ?? "gpt-5.6-luna",
+          reasoning: options.reasoning ?? "off",
           toolchainCache,
           policy,
           controllerHeartbeatTimeoutMs: 5_000,
@@ -423,6 +440,7 @@ export async function createNativeProposedChangeRuntime(
         if (requireString(resources, "workerId", 160) !== workerId) {
           throw new Error("Launcher returned the wrong worker identity");
         }
+        if (options.onWorkerSpawn) options.onWorkerSpawn(parseEffectiveRoute(resources));
         const worker: ProposedChangeWorker = {
           taskId: request.taskId,
           assignmentId: request.assignmentId,

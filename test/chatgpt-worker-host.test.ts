@@ -88,7 +88,7 @@ test("native credential setup refreshes local auth state before asserting subscr
         return options.refreshOnCreate;
       },
       getModel() {
-        return {} as never;
+        return { reasoning: true, thinkingLevelMap: { high: null } } as never;
       },
       async getAuth() {
         return {
@@ -106,6 +106,7 @@ test("native credential setup refreshes local auth state before asserting subscr
   });
 
   assert.equal(refreshOnCreate, true);
+  assert.equal(source.assertModelAvailable("gpt-5.6-luna", "high"), "medium");
   assert.deepEqual(await source.getCredential(), {
     accessToken: `header.${Buffer.from(
       JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account-1" } }),

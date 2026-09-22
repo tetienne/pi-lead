@@ -87,6 +87,37 @@ test("a durable task store serializes concurrent controller updates for one proj
   assert.ok((await first.load(identity.taskId))?.updatedAt);
 });
 
+test("the host can enumerate unfinished durable tasks for Lead restart admission", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-recovery-"));
+  const store = new TaskRecordStore({ root });
+  await store.save(interruptedRecord());
+  await store.save(interruptedRecord({
+    taskId: "task-done",
+    identity: { ...identity, taskId: "task-done" },
+    status: "DONE",
+    actions: [
+      { id: "prompt-1", kind: "PROMPT", phase: "INTENDED" },
+      { id: "prompt-1", kind: "PROMPT", phase: "OBSERVED" },
+    ],
+    finalCommit: "b".repeat(40),
+    verification: {
+      finalRevisionVerified: true,
+      checks: ["npm test"],
+      independentReviewArtifactIds: ["standards", "spec"],
+      correctionCycles: 0,
+    },
+    artifacts: ["artifacts/task-done.json"],
+    cleanup: { vmTerminated: true, successfulTabClosed: true },
+    diagnostics: {
+      outcome: "SUCCESS",
+      logDirectory: "logs/task-done",
+      completedAt: "2026-09-21T10:01:00.000Z",
+    },
+  }));
+
+  assert.deepEqual(await store.listInterruptedTaskIds(), ["task-6"]);
+});
+
 test("a mismatched observed action cannot resolve an intended prompt", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-lead-recovery-"));
   const store = new TaskRecordStore({ root });

@@ -305,12 +305,16 @@ test("ordinary input and /lead admit every supported Matt workflow through one o
   let inputHandler:
     | ((event: { source: string; text: string }, context: unknown) => Promise<{ action: string }>)
     | undefined;
+  let messageEnd: ((event: any, context: unknown) => void) | undefined;
+  let agentSettled: ((event: any, context: unknown) => void) | undefined;
   const sent: string[] = [];
   const notices: Array<{ message: string; level: string }> = [];
   const workflows = ["CHAT", "IMPLEMENT", "IDEATE", "DEBUG", "REVIEW", "RESEARCH", "TRIAGE", "WAYFIND", "OPERATE"] as const;
   const pi = {
-    on(name: string, handler: typeof inputHandler) {
+    on(name: string, handler: any) {
       if (name === "input") inputHandler = handler;
+      if (name === "message_end") messageEnd = handler;
+      if (name === "agent_settled") agentSettled = handler;
       return () => undefined;
     },
     registerCommand(name: string, definition: { handler: (args: string, context: unknown) => Promise<void> }) {
@@ -337,6 +341,10 @@ test("ordinary input and /lead admit every supported Matt workflow through one o
   assert.deepEqual(await inputHandler?.({ source: "user", text: "chat" }, context), { action: "continue" });
   for (const request of ["implement", "ideate", "debug", "review", "research", "triage", "wayfind"]) {
     assert.deepEqual(await inputHandler?.({ source: "user", text: request }, context), { action: "handled" });
+    if (request === "debug" || request === "review" || request === "research") {
+      messageEnd?.({ message: { role: "assistant", content: [{ type: "text", text: "done" }] } }, context);
+      agentSettled?.({}, context);
+    }
   }
   await commands.get("lead")?.("operate", context);
 
@@ -388,4 +396,88 @@ test("a natural implementation request asks conversationally for its approved va
     message: "PI Lead implement: clarification required — which approved specification, named base, and mise checks should govern this change?",
     level: "info",
   }]);
+});
+
+test("Lead restart admits host-owned recovery before any new engineering task", async () => {
+  let sessionStart: ((event: { reason: string }, context: any) => Promise<void>) | undefined;
+  let inputHandler: ((event: { source: string; text: string }, context: any) => Promise<{ action: string }>) | undefined;
+  let implementationRuns = 0;
+  const entries: Array<{ type: string; data: unknown }> = [];
+  const notices: string[] = [];
+  const pi = {
+    on(name: string, handler: any) {
+      if (name === "session_start") sessionStart = handler;
+      if (name === "input") inputHandler = handler;
+      return () => undefined;
+    },
+    registerCommand() {},
+    appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async runCompleteLocalCoding() { implementationRuns++; throw new Error("must not run"); },
+    async recoverInterrupted() {
+      return [{ taskId: "task-interrupted", reason: "RESUME_CONFIRMATION_REQUIRED", resumeAllowed: true }];
+    },
+    async routeIntent(input) {
+      return input === "hello"
+        ? { status: "ROUTED", workflow: "CHAT", source: "jev" }
+        : { status: "ROUTED", workflow: "IMPLEMENT", source: "jev" };
+    },
+  })(pi);
+  const context = { cwd: "/consumer", ui: { notify(message: string) { notices.push(message); } } };
+
+  await sessionStart?.({ reason: "startup" }, context);
+  assert.deepEqual(await inputHandler?.({ source: "user", text: "hello" }, context), { action: "continue" });
+  assert.deepEqual(await inputHandler?.({ source: "user", text: "implement it" }, context), { action: "handled" });
+
+  assert.equal(implementationRuns, 0);
+  assert.equal(entries[0]?.type, "pi-lead:recovery-summary");
+  assert.match(notices.join("\n"), /task-interrupted.*confirmation required/i);
+});
+
+test("native debug, review, and research workflows record attributable settled results", async () => {
+  let inputHandler: ((event: { source: string; text: string }, context: any) => Promise<{ action: string }>) | undefined;
+  let messageEnd: ((event: any, context: any) => Promise<void> | void) | undefined;
+  let agentSettled: ((event: any, context: any) => Promise<void> | void) | undefined;
+  const sent: string[] = [];
+  const entries: Array<{ type: string; data: any }> = [];
+  const notices: string[] = [];
+  const pi = {
+    on(name: string, handler: any) {
+      if (name === "input") inputHandler = handler;
+      if (name === "message_end") messageEnd = handler;
+      if (name === "agent_settled") agentSettled = handler;
+      return () => undefined;
+    },
+    registerCommand() {},
+    appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
+    sendUserMessage(message: string) { sent.push(message); },
+  } as unknown as ExtensionAPI;
+  const workflows = ["DEBUG", "REVIEW", "RESEARCH"] as const;
+  let route = 0;
+  createLeadExtension({
+    async runFixture() { throw new Error("not used"); },
+    async routeIntent() {
+      return { status: "ROUTED", workflow: workflows[route++] ?? "CHAT", source: "jev" };
+    },
+  })(pi);
+  const context = { cwd: "/consumer", ui: { notify(message: string) { notices.push(message); } } };
+
+  for (const workflow of workflows) {
+    assert.deepEqual(await inputHandler?.({ source: "user", text: `${workflow.toLowerCase()} this` }, context), { action: "handled" });
+    const started = entries.at(-1)?.data;
+    assert.equal(started.workflow, workflow);
+    assert.match(sent.at(-1) ?? "", new RegExp(started.taskId));
+    assert.deepEqual(await inputHandler?.({ source: "user", text: "Here is a follow-up detail" }, context), { action: "continue" });
+    assert.equal(route, workflows.indexOf(workflow) + 1);
+    await messageEnd?.({ message: { role: "assistant", content: [{ type: "text", text: `${workflow} complete` }] } }, context);
+    await agentSettled?.({}, context);
+    assert.deepEqual(entries.at(-1), {
+      type: "pi-lead:workflow-summary",
+      data: { status: "DONE", taskId: started.taskId, workflow, output: `${workflow} complete` },
+    });
+  }
+
+  assert.equal(notices.filter((notice) => /DONE/.test(notice)).length, 3);
 });

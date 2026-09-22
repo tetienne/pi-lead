@@ -13,6 +13,7 @@ import {
   type ReviewReport,
 } from "./review-fix-commit-task.ts";
 import { isRecord, readJsonIfPresent, writeJsonAtomically } from "./state-files.ts";
+import type { EffectivePiRoute, PiReasoningLevel } from "./model-reasoning-routing.ts";
 import { publishTaskBranch, type PublicationEvent } from "./git-publication.ts";
 
 function displayFile(file: ReviewInput["proposal"]["files"][number]): string {
@@ -103,6 +104,8 @@ export async function createNativeReviewFixCommitRuntime(options: {
   stateRoot?: string;
   workspaceId?: string;
   modelId?: string;
+  reasoning?: PiReasoningLevel;
+  onWorkerSpawn?(effective: EffectivePiRoute): void;
   gitRemoteName?: string;
   gitRemoteUrl?: string;
 }): Promise<ReviewFixCommitRuntime> {
