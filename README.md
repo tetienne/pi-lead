@@ -18,7 +18,7 @@ The specification, architectural decisions and 16-ticket breakdown are approved.
 - [Decisions and research index](docs/planning/decisions.md)
 - [Local tracker conventions](docs/agents/issue-tracker.md)
 
-ChatGPT Pro is the first worker provider; OpenCode Go remains supported when included quota is available. Jev uses OpenRouter with a $1/day ceiling, not a spending target. Target hosts are macOS arm64 and Ubuntu 24.04 LTS x86_64/arm64, with mise-managed toolchains.
+The current release scope is macOS arm64 with ChatGPT Pro. Ubuntu 24.04 LTS x86_64/arm64 and OpenCode Go remain deferred work, not compatibility claims. Jev uses OpenRouter with a $1/day ceiling, not a spending target; mise manages project toolchains.
 
 ## Install and run the isolated fixture
 

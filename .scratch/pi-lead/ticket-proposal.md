@@ -23,7 +23,7 @@ Source: [approved specification](spec.md). Each linked ticket is the authoritati
 | [13: Diagnose bugs and review existing branches](issues/13-debug-and-review.md) | 04 | “debug this” follows the native diagnosis loop and “review this branch” returns independent Standards/Spec findings without forcing an implementation workflow. |
 | [14: Triage incoming work and resolve large design maps](issues/14-triage-and-wayfinding.md) | 12 | requests to triage incoming issues or map a large uncertain effort follow Matt's native local-tracker workflows and lead into the approved spec/ticket path. |
 | [15: Execute the dependency frontier with two workers](issues/15-dependency-scheduler.md) | 04, 06, 12 | the Lead takes an approved local ticket graph, runs only unblocked work with at most two workers, integrates verified results and leaves an accurate graph when a task blocks or execution is interrupted. |
-| [16: Verify reusable installation and the complete supported experience](issues/16-complete-acceptance.md) | 07, 08, 09, 11, 13, 14, 15 | a fresh consuming project can install a pinned package and complete the approved end-to-end workflows with documented operating limits on every supported host target. |
+| [16: Verify reusable installation and the current release experience](issues/16-complete-acceptance.md) | 07, 11, 13, 14, 15 | a fresh consuming project can install a pinned package and complete the macOS arm64/ChatGPT Pro workflows with Ubuntu and OpenCode Go explicitly deferred. |
 
 ## Dependency overview
 
@@ -46,8 +46,6 @@ flowchart TD
   F --> O
   L --> O
   G --> P[16 Complete acceptance]
-  H --> P
-  I --> P
   K --> P
   M --> P
   N --> P
@@ -59,14 +57,14 @@ flowchart TD
 | Approved spec stories | Primary ticket coverage |
 | --- | --- |
 | 1–2, 5–7, 17–18, 20–23, 36–37, 41–42 | 01–02, extended by 06 and 16 |
-| 3 | 08, 16 |
+| 3 | 08 (deferred from the current release) |
 | 4, 25–26 | 03, 07 |
 | 8–9, 31–34 | 10–11 |
 | 10–14, 24 | 12, 14–15 |
 | 15–16, 35 | 04, 13 |
 | 19 | 04, 15 |
 | 27–28 | 04–05 |
-| 29–30 | 02, 09 |
+| 29–30 | 02; 09 is deferred from the current release |
 | 38–40 | 01, 06 |
 
 ## Approval and execution

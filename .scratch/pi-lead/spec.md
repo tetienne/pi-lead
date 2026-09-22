@@ -15,6 +15,10 @@ Start with ChatGPT Pro because the user currently has available quota there and 
 
 The completed experience is: natural-language request → appropriate workflow → only necessary visible workers → validated and independently reviewed result → collection and cleanup → final summary with branch/commit/push information and no unnecessary active workers.
 
+## Release-scope amendment — 2026-09-22
+
+The user authorized the current release to bypass Ticket 08 (Ubuntu 24.04 x86_64/arm64 acceptance) and Ticket 09 (a successful OpenCode Go run). Current-release acceptance therefore covers macOS arm64 and ChatGPT Pro only. The broader host/provider goals remain deferred roadmap work: Tickets 08 and 09 stay BLOCKED, are not treated as DONE, and this release makes no Ubuntu compatibility or successful OpenCode Go claim.
+
 ## User Stories
 
 1. As a user, I want to activate PI Lead per consuming project, so that unrelated projects remain unaffected.
@@ -66,7 +70,7 @@ The completed experience is: natural-language request → appropriate workflow �
 
 Use a single reusable distribution with internal modules rather than a monolithic extension. Prefer native pinned project-local Pi package installation; no bespoke installer, provider framework, layout manager, distributed scheduler or permanent daemon in the initial design. Project activation includes an explicit allowlist of trusted package resources. Repository-controlled extensions and configuration must not become trusted host code merely because they are present.
 
-The source baseline is installed Pi 0.86.1, Herdr 0.8.0, and mise 2026.9.1. Gondolin source was inspected at revision 29fa74d802112f29c720990aced26165e0d57d84; its package manifest says 0.12.0, but an installable release has not yet been selected. Pin verified compatible releases during implementation; do not substitute newer APIs silently. QEMU is the initial Gondolin backend candidate. macOS/Linux support is an acceptance obligation, not a claim that current integrations have run successfully.
+The source baseline is installed Pi 0.86.1, Herdr 0.8.0, and mise 2026.9.1. Gondolin source was inspected at revision 29fa74d802112f29c720990aced26165e0d57d84; its package manifest says 0.12.0, but an installable release has not yet been selected. Pin verified compatible releases during implementation; do not substitute newer APIs silently. QEMU is the initial Gondolin backend candidate. Broader macOS/Linux support remains a deferred acceptance obligation, not a claim that current integrations have run successfully.
 
 ### Intake and workflow
 
