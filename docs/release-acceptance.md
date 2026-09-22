@@ -59,11 +59,17 @@ paid/provider-authenticated request.
 
 ## Deterministic final coverage
 
-`npm test` and `npm run typecheck` cover lifecycle, isolation, ChatGPT policy,
-review/fix, publication, routing budget, dependency scheduling, recovery,
-retention, and current-release deferrals. The current-release host-matrix API
-includes only macOS arm64 and lists the deferred targets explicitly, preventing
-macOS evidence from becoming an implicit Linux or OpenCode Go claim.
+Final local validation of code revision `a5c3eca` passed `npm test` (138 tests),
+`npm run typecheck`, and `git diff c14c7b8...HEAD --check`. Independent
+Standards and Spec reviews corrected the current-release matrix to require both
+macOS arm64 and ChatGPT Pro evidence. It now blocks a macOS scenario carrying
+OpenCode Go evidence. The broader host matrix remains provider-neutral for
+future supported-host work.
+
+The deterministic suite covers lifecycle, isolation, ChatGPT policy, review/fix,
+publication, routing budget, dependency scheduling, recovery, retention, and
+current-release deferrals. It does not turn those controlled seams into an
+unrun final Herdr/provider/retention acceptance claim.
 
 ## Explicit limits and remaining human gates
 

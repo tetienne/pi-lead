@@ -6,7 +6,10 @@
 
 **Status:** BLOCKED
 
-**Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
+**Execution gate:** the user approved this plan and its ticket granularity, and
+authorized implementation on 2026-09-22. The remaining blocker is the existing
+human gate for a publication destination that supports a native Pi version pin;
+this ticket does not authorize creating or publishing that destination.
 
 ## Acceptance criteria
 
@@ -76,5 +79,15 @@ credential-reflection fixtures all passed with correlated identities and
 confirmed VM termination; the proposed-change fixture remained correctly at
 `REVIEW_REQUIRED` with the checkout preserved. The paired cache measurement
 reported `NO_IMPROVEMENT` (warm mise readiness regressed), which is documented
-rather than presented as a performance gain. `npm test`, typechecking, and the
-independent review remain required against the final implementation revision.
+rather than presented as a performance gain.
+
+Final local validation for code revision `a5c3eca`: `npm test` passed 138 tests,
+`npm run typecheck` passed, and `git diff c14c7b8...HEAD --check` passed. An
+independent Standards/Spec review corrected the current-release runner so it
+requires ChatGPT Pro evidence in addition to macOS arm64; an OpenCode Go
+scenario now returns `BLOCKED`. The final review found no remaining standards
+violation or scope creep. It retained the truthful incomplete-acceptance
+findings: no newly run authenticated provider/Herdr final scenario, no final
+retention/tab inventory, and no true native Pi install/upgrade pin. Those are
+the reasons this ticket remains BLOCKED, rather than a claim that local fixtures
+complete the release.
