@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { resolveNaturalImplementationInput } from "../src/implementation-intake.ts";
 import { configuredIntentRouter, createLeadExtension } from "../src/lead.ts";
 
 test("the installed Lead exposes only the unified /lead command", () => {
@@ -230,7 +231,7 @@ test("/lead submits the unchanged natural-language request to Jev before conside
   assert.deepEqual(routed, ["Could you untangle this for me?"]);
 });
 
-test("ordinary engineering intent fails closed through deterministic admission when Jev is unavailable", async () => {
+test("ordinary engineering intent fails closed without exposing adapter parameters when repository context is unavailable", async () => {
   let inputHandler: ((event: { source: string; text: string }, context: any) => Promise<{ action: string }>) | undefined;
   const notices: string[] = [];
   const pi = {
@@ -247,7 +248,8 @@ test("ordinary engineering intent fails closed through deterministic admission w
   const context = { cwd: process.cwd(), ui: { notify(message: string) { notices.push(message); } } };
 
   assert.deepEqual(await inputHandler?.({ source: "user", text: "implement the approved change" }, context), { action: "handled" });
-  assert.match(notices[0] ?? "", /which approved specification, named base, and mise checks/);
+  assert.match(notices[0] ?? "", /repository context could not be resolved automatically/);
+  assert.doesNotMatch(notices[0] ?? "", /--base|--spec|--check|named base|mise checks/);
 });
 
 test("structured debug and review requests remain usable when Jev is unavailable", async () => {
@@ -360,11 +362,12 @@ test("ordinary input and /lead admit every supported Matt workflow through one o
   });
 });
 
-test("a natural implementation request asks conversationally for its approved validation context", async () => {
+test("a natural implementation request resolves repository context without exposing adapter options", async () => {
   let inputHandler:
     | ((event: { source: string; text: string }, context: unknown) => Promise<{ action: string }>)
     | undefined;
   const notices: Array<{ message: string; level: string }> = [];
+  const requests: Array<{ instruction: string; namedBase: string; validationTasks: readonly string[] }> = [];
   const pi = {
     on(name: string, handler: typeof inputHandler) {
       if (name === "input") inputHandler = handler;
@@ -374,7 +377,15 @@ test("a natural implementation request asks conversationally for its approved va
     appendEntry() {},
   } as unknown as ExtensionAPI;
   createLeadExtension({
-    async runCompleteLocalCoding() { throw new Error("not reached"); },
+    resolveImplementationInput: resolveNaturalImplementationInput,
+    async runCompleteLocalCoding(request) {
+      requests.push(request);
+      return {
+        status: "BLOCKED", taskId: request.taskId, reason: "BUILD_BLOCKED", detail: "controlled stop",
+        reviews: [], reviewHistory: [], reviewCycles: 0, diagnosticsRetained: true,
+        specification: request.specification, standards: request.standards,
+      };
+    },
     async routeIntent() { return { status: "ROUTED", workflow: "IMPLEMENT", source: "jev" }; },
   })(pi);
 
@@ -385,10 +396,12 @@ test("a natural implementation request asks conversationally for its approved va
     ),
     { action: "handled" },
   );
-  assert.deepEqual(notices, [{
-    message: "PI Lead implement: clarification required — which approved specification, named base, and mise checks should govern this change?",
-    level: "info",
+  assert.deepEqual(requests.map(({ instruction, namedBase, validationTasks }) => ({ instruction, namedBase, validationTasks })), [{
+    instruction: "Implement a new welcome screen",
+    namedBase: "main",
+    validationTasks: ["test", "typecheck"],
   }]);
+  assert.match(notices.at(-1)?.message ?? "", /PI Lead implement: BLOCKED — controlled stop/);
 });
 
 test("Lead restart admits host-owned recovery before any new engineering task", async () => {

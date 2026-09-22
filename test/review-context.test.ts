@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { pinReviewStandards } from "../src/review-context.ts";
+import { pinReviewSpecification, pinReviewStandards } from "../src/review-context.ts";
 
 test("pins repository constraints, security rules, and either ADR convention", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-lead-review-context-"));
@@ -30,5 +30,24 @@ test("pins repository constraints, security rules, and either ADR convention", a
     assert.match(standards.digest, /^[0-9a-f]{64}$/);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a specification cannot escape through an intermediate directory symlink", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-lead-review-context-"));
+  const outside = await mkdtemp(join(tmpdir(), "pi-lead-review-outside-"));
+  try {
+    await writeFile(join(outside, "spec.md"), "outside scope\n");
+    await symlink(outside, join(root, "linked"));
+
+    await assert.rejects(
+      pinReviewSpecification(root, "linked/spec.md"),
+      /escapes the consuming project/,
+    );
+  } finally {
+    await Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(outside, { recursive: true, force: true }),
+    ]);
   }
 });

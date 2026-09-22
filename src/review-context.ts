@@ -8,6 +8,9 @@ export type PinnedReviewDocument = {
   contents: string;
 };
 
+const MAX_SPECIFICATION_BYTES = 64 * 1024;
+const MAX_STANDARD_SOURCE_BYTES = 32 * 1024;
+
 function isWithin(root: string, candidate: string): boolean {
   const fromRoot = relative(root, candidate);
   return fromRoot !== "" && fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`);
@@ -28,7 +31,9 @@ async function readConfinedFile(root: string, source: string, maxBytes: number):
   if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > maxBytes) {
     throw new Error(`Review source must be a regular file of at most ${maxBytes} bytes: ${source}`);
   }
-  const contents = await readFile(candidate, "utf8");
+  const resolvedCandidate = await realpath(candidate);
+  if (!isWithin(root, resolvedCandidate)) throw new Error("Review source escapes the consuming project");
+  const contents = await readFile(resolvedCandidate, "utf8");
   if (!contents.trim()) throw new Error(`Review source is empty: ${source}`);
   return contents;
 }
@@ -43,7 +48,7 @@ function pinned(source: string, contents: string): PinnedReviewDocument {
 
 export async function pinReviewSpecification(cwd: string, source: string): Promise<PinnedReviewDocument> {
   const root = await realpath(cwd);
-  return pinned(source, await readConfinedFile(root, source, 32 * 1024));
+  return pinned(source, await readConfinedFile(root, source, MAX_SPECIFICATION_BYTES));
 }
 
 export async function pinReviewStandards(cwd: string): Promise<PinnedReviewDocument> {
@@ -74,7 +79,7 @@ export async function pinReviewStandards(cwd: string): Promise<PinnedReviewDocum
   const documents: string[] = [];
   for (const source of candidates) {
     try {
-      documents.push(`--- ${source} ---\n${await readConfinedFile(root, source, 32 * 1024)}`);
+      documents.push(`--- ${source} ---\n${await readConfinedFile(root, source, MAX_STANDARD_SOURCE_BYTES)}`);
     } catch (error) {
       if (error instanceof Error && error.message.includes("ENOENT")) continue;
       throw error;

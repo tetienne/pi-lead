@@ -13,6 +13,7 @@ import {
 } from "./model-reasoning-routing.ts";
 import { createJevIntentRouter, JEV_WORKFLOWS, type JevRoutingOutcome, type JevWorkflow } from "./jev-intent-routing.ts";
 import { createOpenRouterJevTransport } from "./openrouter-jev-transport.ts";
+import { resolveNaturalImplementationInput } from "./implementation-intake.ts";
 import { planningSkillPrompt } from "./planning-intake.ts";
 import { triageSkillPrompt, wayfinderSkillPrompt } from "./tracker-intake.ts";
 import { parseProposedChangeInput } from "./proposed-change-input.ts";
@@ -87,6 +88,10 @@ type LeadDependencies = {
   recoverInterrupted?(cwd: string): Promise<readonly RecoveryAdmission[]>;
   confirmRecovery?(cwd: string, taskId: string): Promise<void>;
   routeIntent?(input: string): Promise<JevRoutingOutcome>;
+  resolveImplementationInput?(
+    request: string,
+    cwd: string,
+  ): Promise<ReturnType<typeof parseProposedChangeInput>>;
 };
 
 function parseStandaloneReviewInput(raw: string): {
@@ -707,11 +712,18 @@ export function createLeadExtension(dependencies: LeadDependencies) {
         try {
           parsed = parseProposedChangeInput(args);
         } catch (error) {
-          context.ui.notify(
-            "PI Lead implement: clarification required — which approved specification, named base, and mise checks should govern this change?",
-            "info",
-          );
-          return;
+          try {
+            if (!dependencies.resolveImplementationInput) {
+              throw new Error("repository context could not be resolved automatically");
+            }
+            parsed = await dependencies.resolveImplementationInput(args, context.cwd);
+          } catch (resolutionError) {
+            context.ui.notify(
+              `PI Lead implement: clarification required — ${resolutionError instanceof Error ? resolutionError.message : String(resolutionError)}`,
+              "info",
+            );
+            return;
+          }
         }
         let specification: CompleteLocalCodingRequest["specification"];
         let standards: CompleteLocalCodingRequest["standards"];
@@ -847,6 +859,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
 
 export default createLeadExtension({
   routeIntent: configuredIntentRouter(),
+  resolveImplementationInput: resolveNaturalImplementationInput,
   authorizeWorkerRoute: authorizeNativeChatGptRoute,
   async recoverInterrupted(cwd) {
     const { recoverNativeInterruptedTasks } = await import("./native-task-recovery.ts");

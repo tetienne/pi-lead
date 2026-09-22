@@ -17,6 +17,7 @@ const RELEASE_SOURCE_FILES = [
   "src/effective-route-observation.ts",
   "src/git-proposal.ts",
   "src/herdr-client.ts",
+  "src/implementation-intake.ts",
   "src/jev-intent-routing.ts",
   "src/lead.ts",
   "src/model-reasoning-routing.ts",
