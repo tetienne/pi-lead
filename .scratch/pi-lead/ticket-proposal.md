@@ -21,8 +21,8 @@ current delivery status.
 | [05: Push validated task branches through explicit policy](issues/05-controlled-push.md) | ready-for-human; resolved DONE | 04 | Built controlled task-branch publication as an internal capability. |
 | [06: Recover interrupted work and retain useful diagnostics](issues/06-recovery-retention.md) | wontfix (superseded by 18) | 05 | Recovery is implemented and tested but is not connected to the main Lead. |
 | [07: Reuse safe toolchain caches across repeated tasks](issues/07-safe-toolchain-caches.md) | ready-for-human; resolved DONE | 03 | Proved isolated cache seeds and recorded that the measured warm path did not improve. |
-| [08: Run the isolated task path on both Linux architectures](issues/08-linux-hosts.md) | ready-for-human (deferred) | 02 | Deferred Linux evidence; not part of the current release claim. |
-| [09: Use OpenCode Go when included quota is available](issues/09-opencode-go.md) | ready-for-human (deferred) | 02 | Provider adapter exists, but a successful included-quota run remains deferred. |
+| [08: Run the isolated task path on both Linux architectures](issues/08-linux-hosts.md) | wontfix (deferred) | 02 | Deferred Linux evidence; not part of the current release claim. |
+| [09: Use OpenCode Go when included quota is available](issues/09-opencode-go.md) | wontfix (deferred) | 02 | Provider adapter exists, but a successful included-quota run remains deferred. |
 | [10: Route natural-language intent through bounded Jev calls](issues/10-jev-intent-routing.md) | wontfix (superseded by 18) | 02 | Deterministic routing exists; bounded live Jev evaluation transfers to Ticket 18. |
 | [11: Select allowed models and reasoning at worker spawn](issues/11-model-reasoning-routing.md) | wontfix (superseded by 18) | 10 | Selection policy exists but has no production caller at worker spawn. |
 | [12: Turn an idea into approved specs and vertical tickets](issues/12-idea-to-tickets.md) | ready-for-human; resolved DONE | 02 | Planning reaches installed Matt skills, though its command surface will be contracted. |
