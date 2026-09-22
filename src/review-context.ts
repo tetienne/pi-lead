@@ -50,9 +50,11 @@ export async function pinReviewStandards(cwd: string): Promise<PinnedReviewDocum
   const root = await realpath(cwd);
   const candidates = [
     "AGENTS.md",
+    "CONSTRAINTS.md",
     "CODING_STANDARDS.md",
     "CONTRIBUTING.md",
     "CONTEXT.md",
+    "docs/security-rules.md",
     "docs/agents/issue-tracker.md",
     "docs/agents/domain.md",
     "docs/planning/matt-workflow.md",
@@ -60,13 +62,14 @@ export async function pinReviewStandards(cwd: string): Promise<PinnedReviewDocum
     ".agents/skills/tdd/SKILL.md",
     ".agents/skills/code-review/SKILL.md",
   ];
-  try {
-    const adrDirectory = resolve(root, "docs/adr");
-    for (const entry of await readdir(adrDirectory)) {
-      if (entry.endsWith(".md")) candidates.push(`docs/adr/${entry}`);
+  for (const directory of ["docs/adr", "docs/decisions"] as const) {
+    try {
+      for (const entry of await readdir(resolve(root, directory))) {
+        if (entry.endsWith(".md")) candidates.push(`${directory}/${entry}`);
+      }
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("ENOENT")) throw error;
     }
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes("ENOENT")) throw error;
   }
   const documents: string[] = [];
   for (const source of candidates) {

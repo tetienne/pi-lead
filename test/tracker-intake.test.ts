@@ -14,6 +14,9 @@ test("frames incoming work for Matt triage without treating its claim as verifie
   assert.match(prompt, /ready-for-human/);
   assert.match(prompt, /wontfix/);
   assert.match(prompt, /durable agent-ready brief/i);
+  assert.match(prompt, /docs\/agents\/issue-tracker\.md/);
+  assert.match(prompt, /do not invent a second tracker/i);
+  assert.doesNotMatch(prompt, /local Markdown tracker/i);
   assert.match(prompt, /Do not retriage generated ready tickets/i);
   assert.match(prompt, /\/skill:handoff/);
   assert.match(prompt, /\/skill:wizard/);
@@ -25,7 +28,9 @@ test("frames a foggy effort as decision mapping that hands off to specification"
 
   assert.match(prompt, /^\/skill:wayfinder /);
   assert.match(prompt, /decision map/i);
-  assert.match(prompt, /\.scratch\/<effort>\/map\.md/);
+  assert.match(prompt, /docs\/agents\/issue-tracker\.md/);
+  assert.match(prompt, /do not invent a second tracker/i);
+  assert.doesNotMatch(prompt, /\.scratch\/<effort>\/map\.md/);
   assert.match(prompt, /blocking edges/i);
   assert.match(prompt, /research.*human decisions|human decisions.*research/i);
   assert.match(prompt, /claim/i);

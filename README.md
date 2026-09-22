@@ -73,6 +73,18 @@ built by the original ticket program. They are useful to reproduce
 implementation evidence, but they are not installed commands, product
 workflows or contents of the release archive.
 
+### Install the pinned Git package
+
+Activate the public package for one consuming project with the immutable
+release tag:
+
+```bash
+pi install -l --approve git:github.com/tetienne/pi-lead@v0.1.0
+```
+
+`--approve` grants trust for that install command only; Pi records the pinned
+source in the consuming project's `.pi/settings.json`.
+
 ### Stage a local release archive
 
 The checkout command below is useful while developing PI Lead, but a filesystem
@@ -86,11 +98,9 @@ npm install --prefix /absolute/path/to/stage --ignore-scripts --omit=dev /absolu
 pi install -l --approve /absolute/path/to/stage/node_modules/pi-lead
 ```
 
-`--approve` grants trust for that install command only; the package setting is
-written to the consuming project's `.pi/settings.json`. A true reproducible Pi
-pin must be an explicitly versioned npm source or a git commit source. Creating
-or publishing either destination remains a human gate and is not part of this
-package.
+The staged archive path is useful for local release acceptance only. A reusable
+consumer should install the immutable Git tag above rather than depend on a
+machine-specific path.
 
 ### Run the isolated fixture proof
 

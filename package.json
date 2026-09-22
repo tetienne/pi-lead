@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tetienne/pi-lead.git"
+  },
+  "homepage": "https://github.com/tetienne/pi-lead#readme",
+  "bugs": {
+    "url": "https://github.com/tetienne/pi-lead/issues"
+  },
   "files": [
     ".mise.toml",
     ".agents/skills/research/SKILL.md",
@@ -80,6 +88,6 @@
     "typescript": "5.9.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "0.86.1"
   }
 }
