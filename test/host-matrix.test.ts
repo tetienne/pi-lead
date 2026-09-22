@@ -19,9 +19,10 @@ const identity: HostScenarioIdentity = {
   piSessionId: "session-1",
 };
 
-function passedEvidence(prefix: string): HostScenarioEvidence {
+function passedEvidence(prefix: string, provider: "chatgpt-pro" | "opencode-go" = "chatgpt-pro"): HostScenarioEvidence {
   const artifact = (name: string) => ({ path: `/evidence/${prefix}-${name}.json`, identity });
   return {
+    provider,
     versions: { node: "24.14.1", pi: "0.86.1", gondolin: "0.12.0", mise: "2025.8.20-r0" },
     checks: {
       toolchainVersions: { status: "passed", artifact: artifact("versions") },
@@ -208,4 +209,18 @@ test("the current release matrix covers macOS ChatGPT Pro only and names deferre
       reason: "A successful OpenCode Go worker is deferred until included quota is available.",
     },
   ]);
+});
+
+test("the current release matrix blocks a macOS scenario without ChatGPT Pro evidence", async () => {
+  const results = await runCurrentReleaseHostMatrix({
+    identity,
+    verifyArtifact: collectedArtifact,
+    observedHost: { platform: "darwin", architecture: "arm64", operatingSystem: "macOS" },
+    async execute(scenario) {
+      return passedEvidence(scenario.target.id, "opencode-go");
+    },
+  });
+
+  assert.equal(results[0]?.status, "BLOCKED");
+  assert.match(results[0]?.detail ?? "", /ChatGPT Pro/i);
 });

@@ -34,6 +34,8 @@ export type HostMatrixPins = {
   mise: string;
 };
 
+export type HostScenarioProvider = "chatgpt-pro" | "opencode-go";
+
 export type HostCheckEvidence =
   | { status: "passed"; artifact: HostArtifactReference }
   | { status: "blocked"; detail: string }
@@ -53,6 +55,7 @@ export type HostArtifactReference = {
 };
 
 export type HostScenarioEvidence = {
+  provider: HostScenarioProvider;
   versions: HostMatrixPins;
   checks: Record<HostMatrixCheck, HostCheckEvidence>;
 };
@@ -66,6 +69,8 @@ export type HostMatrixScenario = {
 export type HostMatrixResult = {
   target: HostTarget;
   observedHost: HostObservation;
+  provider?: HostScenarioProvider;
+  requiredProvider?: HostScenarioProvider;
   pins: HostMatrixPins;
   checks: Record<HostMatrixCheck, HostCheckEvidence>;
   missingChecks: HostMatrixCheck[];
@@ -223,6 +228,7 @@ export async function currentHostObservation(): Promise<HostObservation> {
 export async function runHostMatrixScenario(options: {
   target: HostTarget;
   observedHost?: HostObservation;
+  requiredProvider?: HostScenarioProvider;
   identity: HostScenarioIdentity;
   verifyArtifact: (artifact: HostArtifactReference) => Promise<boolean>;
   execute: (scenario: HostMatrixScenario) => Promise<HostScenarioEvidence>;
@@ -255,17 +261,23 @@ export async function runHostMatrixScenario(options: {
   });
   const missing = missingChecks(checks);
   const failed = missing.some((check) => checks[check].status === "failed");
+  const providerMatches =
+    options.requiredProvider === undefined || evidence.provider === options.requiredProvider;
   const detail =
-    missing.length === 0
+    !providerMatches
+      ? `Host matrix scenario requires ${options.requiredProvider === "chatgpt-pro" ? "ChatGPT Pro" : options.requiredProvider} evidence; observed ${evidence.provider}`
+      : missing.length === 0
       ? `Host matrix scenario completed on ${target.id}`
       : missing.map((check) => `${check}: ${checkDetail(checks[check])}`).join("; ");
   return {
     target,
     observedHost,
+    provider: evidence.provider,
+    requiredProvider: options.requiredProvider,
     pins: PINS,
     checks,
     missingChecks: missing,
-    status: missing.length === 0 ? "DONE" : failed ? "FAILED" : "BLOCKED",
+    status: missing.length === 0 && providerMatches ? "DONE" : failed ? "FAILED" : "BLOCKED",
     detail,
   };
 }
@@ -307,6 +319,7 @@ export async function runCurrentReleaseHostMatrix(options: {
       runHostMatrixScenario({
         target: supportedHostTarget(id),
         observedHost,
+        requiredProvider: "chatgpt-pro",
         identity: options.identity,
         verifyArtifact: options.verifyArtifact,
         execute: options.execute,
