@@ -1,6 +1,8 @@
 ---
-status: accepted
+status: superseded
 ---
+
+> Superseded by [ADR 0005](0005-lead-is-a-tool-driven-conversation.md) (2026-09-22).
 
 # Separate durable task ownership from native conversations
 

@@ -1,3 +1,5 @@
+> Historical: evidence for the implementation replaced by [ADR 0005](adr/0005-lead-is-a-tool-driven-conversation.md).
+
 # Release acceptance evidence
 
 ## Refocused Ticket 20 acceptance — 2026-09-22
