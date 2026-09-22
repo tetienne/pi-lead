@@ -20,6 +20,26 @@ The specification, architectural decisions and 16-ticket breakdown are approved.
 
 The current release scope is macOS arm64 with ChatGPT Pro. Ubuntu 24.04 LTS x86_64/arm64 and OpenCode Go remain deferred work, not compatibility claims. Jev uses OpenRouter with a $1/day ceiling, not a spending target; mise manages project toolchains.
 
+See [current release acceptance evidence](docs/release-acceptance.md) for the
+measured macOS run, the local-package limitation, and the outstanding human
+gates.
+
+## Stage a local release archive
+
+The checkout command below is useful while developing PI Lead, but a filesystem
+path is not a native Pi package pin. To stage the release artifact locally:
+
+```bash
+npm pack
+pi install -l --approve /absolute/path/to/pi-lead-0.1.0.tgz
+```
+
+`--approve` grants trust for that install command only; the package setting is
+written to the consuming project's `.pi/settings.json`. A true reproducible Pi
+pin must be an explicitly versioned npm source or a git commit source. Creating
+or publishing either destination remains a human gate and is not part of this
+package.
+
 ## Install and run the isolated fixture
 
 The pinned baseline is Node 24.14.1, Pi 0.86.1, Herdr 0.8.0 and Gondolin 0.12.0. QEMU must be available on the host.

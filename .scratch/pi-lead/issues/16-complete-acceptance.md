@@ -4,7 +4,7 @@
 
 **Blocked by:** [07: Reuse safe toolchain caches across repeated tasks](07-safe-toolchain-caches.md); [11: Select allowed models and reasoning at worker spawn](11-model-reasoning-routing.md); [13: Diagnose bugs and review existing branches](13-debug-and-review.md); [14: Triage incoming work and resolve large design maps](14-triage-and-wayfinding.md); [15: Execute the dependency frontier with two workers](15-dependency-scheduler.md)
 
-**Status:** ready-for-agent
+**Status:** BLOCKED
 
 **Execution gate:** the user approved this plan and its ticket granularity. Application implementation remains paused until the user asks to begin. A ready status alone does not override that hold or unfinished blocking tickets.
 
@@ -54,3 +54,27 @@ Read source version caveats before using an API; research is source evidence, no
 ## Comments
 
 2026-09-22: The user explicitly approved bypassing Tickets 08 and 09 for this release. Ticket 16 now accepts only macOS arm64/ChatGPT Pro evidence. Ubuntu 24.04 x86_64/arm64 and a successful OpenCode Go worker remain deferred, with no compatibility or successful-provider claim; Ticket 08 and Ticket 09 remain BLOCKED rather than DONE.
+
+2026-09-22: Implemented the current-release acceptance guard and recorded the
+actual local evidence in `docs/release-acceptance.md`. The host matrix now has
+a macOS-arm64-only current-release entry point and explicit Ubuntu/OpenCode Go
+deferrals, so a successful macOS scenario cannot imply a deferred target.
+
+Fresh consuming-project activation was exercised with the repository's pinned
+Pi 0.86.1 and a locally packed `pi-lead@0.1.0` archive. An unapproved local
+install was rejected; the explicitly approved install wrote only the consuming
+project setting and an isolated Pi config recorded no saved trust decision.
+The archive packages successfully, but Pi classifies a filesystem archive as a
+mutable local source rather than a native version pin. No npm package or git
+release destination was created or published. This ticket is therefore BLOCKED
+on the existing human publication gate for a real `npm:name@version` or
+`git:repository@commit` install/upgrade acceptance; local release artifacts are
+retained.
+
+Current macOS runtime evidence: the fake ChatGPT turn, cancellation, and
+credential-reflection fixtures all passed with correlated identities and
+confirmed VM termination; the proposed-change fixture remained correctly at
+`REVIEW_REQUIRED` with the checkout preserved. The paired cache measurement
+reported `NO_IMPROVEMENT` (warm mise readiness regressed), which is documented
+rather than presented as a performance gain. `npm test`, typechecking, and the
+independent review remain required against the final implementation revision.

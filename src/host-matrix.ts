@@ -73,6 +73,11 @@ export type HostMatrixResult = {
   detail: string;
 };
 
+export type CurrentReleaseDeferral = {
+  target: "ubuntu-24.04-x64" | "ubuntu-24.04-arm64" | "opencode-go";
+  reason: string;
+};
+
 const TARGETS: Record<SupportedHostId, HostTarget> = {
   "macos-arm64": {
     id: "macos-arm64",
@@ -101,6 +106,23 @@ const TARGET_IDS: readonly SupportedHostId[] = [
   "macos-arm64",
   "ubuntu-24.04-x64",
   "ubuntu-24.04-arm64",
+];
+
+const CURRENT_RELEASE_TARGET_IDS: readonly SupportedHostId[] = ["macos-arm64"];
+
+const CURRENT_RELEASE_DEFERRALS: readonly CurrentReleaseDeferral[] = [
+  {
+    target: "ubuntu-24.04-x64",
+    reason: "Ubuntu 24.04 x86_64 acceptance is deferred from the current release.",
+  },
+  {
+    target: "ubuntu-24.04-arm64",
+    reason: "Ubuntu 24.04 arm64 acceptance is deferred from the current release.",
+  },
+  {
+    target: "opencode-go",
+    reason: "A successful OpenCode Go worker is deferred until included quota is available.",
+  },
 ];
 
 const PINS: HostMatrixPins = {
@@ -173,6 +195,10 @@ async function verifyScenarioEvidence(options: {
 
 export function supportedHostTarget(id: SupportedHostId): HostTarget {
   return TARGETS[id];
+}
+
+export function currentReleaseDeferrals(): readonly CurrentReleaseDeferral[] {
+  return CURRENT_RELEASE_DEFERRALS;
 }
 
 export async function currentHostObservation(): Promise<HostObservation> {
@@ -255,6 +281,29 @@ export async function runSupportedHostMatrix(options: {
   const observedHost = options.observedHost ?? (await currentHostObservation());
   return Promise.all(
     TARGET_IDS.map((id) =>
+      runHostMatrixScenario({
+        target: supportedHostTarget(id),
+        observedHost,
+        identity: options.identity,
+        verifyArtifact: options.verifyArtifact,
+        execute: options.execute,
+      }),
+    ),
+  );
+}
+
+// Current-release acceptance is intentionally narrower than the supported-host
+// matrix. Deferred targets stay visible through currentReleaseDeferrals instead
+// of being inferred from macOS evidence.
+export async function runCurrentReleaseHostMatrix(options: {
+  observedHost?: HostObservation;
+  identity: HostScenarioIdentity;
+  verifyArtifact: (artifact: HostArtifactReference) => Promise<boolean>;
+  execute: (scenario: HostMatrixScenario) => Promise<HostScenarioEvidence>;
+}): Promise<HostMatrixResult[]> {
+  const observedHost = options.observedHost ?? (await currentHostObservation());
+  return Promise.all(
+    CURRENT_RELEASE_TARGET_IDS.map((id) =>
       runHostMatrixScenario({
         target: supportedHostTarget(id),
         observedHost,

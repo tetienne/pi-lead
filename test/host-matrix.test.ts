@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  currentReleaseDeferrals,
+  runCurrentReleaseHostMatrix,
   runHostMatrixScenario,
   runSupportedHostMatrix,
   supportedHostTarget,
@@ -178,4 +180,32 @@ test("the matrix retains unrun Linux targets as explicit blockers beside complet
     "ubuntu-24.04-arm64",
   ]);
   assert.deepEqual(results.map((result) => result.status), ["DONE", "BLOCKED", "BLOCKED"]);
+});
+
+test("the current release matrix covers macOS ChatGPT Pro only and names deferred targets", async () => {
+  const results = await runCurrentReleaseHostMatrix({
+    identity,
+    verifyArtifact: collectedArtifact,
+    observedHost: { platform: "darwin", architecture: "arm64", operatingSystem: "macOS" },
+    async execute(scenario) {
+      return passedEvidence(scenario.target.id);
+    },
+  });
+
+  assert.deepEqual(results.map((result) => result.target.id), ["macos-arm64"]);
+  assert.deepEqual(results.map((result) => result.status), ["DONE"]);
+  assert.deepEqual(currentReleaseDeferrals(), [
+    {
+      target: "ubuntu-24.04-x64",
+      reason: "Ubuntu 24.04 x86_64 acceptance is deferred from the current release.",
+    },
+    {
+      target: "ubuntu-24.04-arm64",
+      reason: "Ubuntu 24.04 arm64 acceptance is deferred from the current release.",
+    },
+    {
+      target: "opencode-go",
+      reason: "A successful OpenCode Go worker is deferred until included quota is available.",
+    },
+  ]);
 });
