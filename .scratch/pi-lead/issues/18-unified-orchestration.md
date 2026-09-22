@@ -68,3 +68,22 @@ Created from the 2026-09-22 scope audit and approved by the user. Tickets 06,
 10, 11 and 13 are superseded historical slices; this ticket owns their
 unfinished integration requirements rather than merely adding another command
 beside them.
+
+2026-09-22: Added the first unified-admission slice in commit `ea16dd2`.
+Ordinary native input and `/lead <request>` now share one Jev admission
+boundary. The boundary preserves CHAT in the Lead, dispatches IDEATE, TRIAGE
+and WAYFIND to their installed Matt contracts, dispatches DEBUG, REVIEW and
+RESEARCH to their installed Matt skill contracts, fails closed for ambiguity
+and OPERATE, and routes a controlled IMPLEMENT request through the existing
+validated, independently reviewed local-commit lifecycle. Legacy read,
+implement, planning, triage and wayfinding adapters now enter that boundary.
+
+The ticket remains ready-for-agent: independent Spec review found that
+spawn-time model/reasoning verification, host-owned recovery admission, and
+native DEBUG/REVIEW/RESEARCH lifecycle adapters are still not integrated. The
+remaining legacy `lead-read-go`, `lead-change` and `lead-fixture` adapters also
+need to cross the boundary before Ticket 19 contracts the public surface.
+Validation for this slice: `npm test` (140 passing), `npm run typecheck`, and
+`git diff --check` passed. Independent Standards review found no hard
+repository-standard violation; it identified the remaining compatibility
+adapter gap above.
