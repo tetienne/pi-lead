@@ -250,6 +250,56 @@ test("ordinary engineering intent fails closed through deterministic admission w
   assert.match(notices[0] ?? "", /which approved specification, named base, and mise checks/);
 });
 
+test("structured debug and review requests remain usable when Jev is unavailable", async () => {
+  let inputHandler:
+    | ((event: { source: string; text: string }, context: any) => Promise<{ action: string }>)
+    | undefined;
+  const executed: string[] = [];
+  const pi = {
+    on(name: string, handler: typeof inputHandler) {
+      if (name === "input") inputHandler = handler;
+      return () => undefined;
+    },
+    registerCommand() {}, appendEntry() {},
+  } as unknown as ExtensionAPI;
+  createLeadExtension({
+    routeIntent: configuredIntentRouter({}),
+    async runDebug(request) {
+      executed.push(`debug:${request.feedbackCommand}`);
+      return {
+        status: "BLOCKED",
+        reason: "REPRODUCTION_NOT_FAILED",
+        detail: "controlled feedback passed",
+        diagnosticsRetained: true,
+      };
+    },
+    async runReview(request) {
+      executed.push(`review:${request.namedBase}..${request.reviewBranch}`);
+      return {
+        status: "DONE",
+        taskId: request.taskId,
+        comparisonSource: "git:HEAD..HEAD",
+        reports: [],
+        specification: { status: "MISSING_SPECIFICATION" },
+        readOnly: true,
+        published: false,
+      };
+    },
+  })(pi);
+  const context = { cwd: process.cwd(), ui: { notify() {} } };
+
+  assert.deepEqual(await inputHandler?.({
+    source: "user",
+    text: "--base HEAD --check test --spec .scratch/pi-lead/issues/20-refocused-product-acceptance.md -- reproduce this crash",
+  }, context), { action: "handled" });
+  assert.deepEqual(await inputHandler?.({
+    source: "user",
+    text: "--base HEAD --branch HEAD",
+  }, context), { action: "handled" });
+
+  assert.deepEqual(executed, ["debug:mise run test", "review:HEAD..HEAD"]);
+});
+
 test("ordinary input and /lead admit every supported Matt workflow through one orchestrator", async () => {
   const commands = new Map<string, (args: string, context: unknown) => Promise<void>>();
   let inputHandler:

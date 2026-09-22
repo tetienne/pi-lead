@@ -4,17 +4,26 @@ A reusable Pi package for engineering work with visible Herdr workers, whole-wor
 
 ## Project status
 
-The original specification and 16-ticket implementation program have been
-audited against the bootstrap brief. Their isolation, policy and lifecycle
-evidence is retained, but the product surface drifted into provider-, skill- and
-stage-specific commands before the conversation-first Lead path was complete.
-The approved cleanup is Tickets 17–20: refocus the contract, connect one
-orchestrator, contract the public surface, then validate the refocused product.
+PI Lead is now the refocused conversation-first product: one persistent Lead
+accepts ordinary engineering requests, applies bounded Jev judgment and Matt
+workflows, and owns visible isolated workers through validation, independent
+review, result collection and cleanup. The installed extension exposes only
+`/lead` as an explicit escape hatch; provider, model, skill and lifecycle-stage
+selection remain internal.
 
-Tickets 17 and 18 define and implement the unified product interface. Ticket 19
-has removed the historical provider-, skill- and lifecycle-stage commands from
-discovery and from the release archive; Ticket 20 owns the final
-current-release proof.
+Current acceptance is local macOS arm64 activation with the ChatGPT Pro worker
+path. A live natural-language implementation completed isolated validation,
+independent Standards and Spec review, a local task-branch commit, result
+collection and confirmed cleanup after the operator confirmed included-only
+usage. Credential-free deterministic, packaging and isolated-runtime checks are
+recorded beside that proof in [release acceptance](docs/release-acceptance.md).
+
+Each future live ChatGPT run still requires a current included-quota
+confirmation. Live Jev routing separately requires a dedicated OpenRouter key
+with the approved $1/day provider cap; without that gate, deterministic
+unavailable and clarification behavior remains the supported result. Linux,
+OpenCode Go, publication, cache optimization and advanced scheduling remain
+deferred.
 
 ## Approved product interface
 
@@ -42,7 +51,7 @@ module disposition is recorded in the
 - [Bootstrap brief](PI_LEAD_BOOTSTRAP.md)
 - [Approved specification](.scratch/pi-lead/spec.md)
 - [Ticket graph and index](.scratch/pi-lead/ticket-proposal.md)
-- [Current cleanup frontier](.scratch/pi-lead/issues/19-contract-public-surface.md)
+- [Current acceptance ticket](.scratch/pi-lead/issues/20-refocused-product-acceptance.md)
 - [First ticket: isolated fixture](.scratch/pi-lead/issues/01-isolated-fixture.md)
 - [Second ticket: ChatGPT worker](.scratch/pi-lead/issues/02-chatgpt-worker.md)
 - [Third ticket: validated proposed change](.scratch/pi-lead/issues/03-validated-proposed-change.md)
@@ -52,10 +61,8 @@ module disposition is recorded in the
 
 The current release scope is macOS arm64 with ChatGPT Pro. Ubuntu 24.04 LTS x86_64/arm64 and OpenCode Go remain deferred work, not compatibility claims. Jev uses OpenRouter with a $1/day ceiling, not a spending target; mise manages project toolchains.
 
-See [historical release evidence](docs/release-acceptance.md) for the measured
-macOS proofs and their limits. That evidence predates the refocused interface;
-Ticket 20, not the superseded Ticket 16 narrative, will establish current
-product acceptance.
+See [release acceptance](docs/release-acceptance.md) for measured refocused and
+historical evidence, unrun scenarios and remaining human gates.
 
 ## Development and historical evidence
 
@@ -67,11 +74,14 @@ workflows or contents of the release archive.
 ### Stage a local release archive
 
 The checkout command below is useful while developing PI Lead, but a filesystem
-path is not a native Pi package pin. To stage the release artifact locally:
+path is not a native Pi package pin. A `.tgz` cannot itself be registered as a
+Pi extension; install the archive and its runtime dependencies into a staging
+directory, then activate that installed package directory:
 
 ```bash
 npm pack
-pi install -l --approve /absolute/path/to/pi-lead-0.1.0.tgz
+npm install --prefix /absolute/path/to/stage --ignore-scripts --omit=dev /absolute/path/to/pi-lead-0.1.0.tgz
+pi install -l --approve /absolute/path/to/stage/node_modules/pi-lead
 ```
 
 `--approve` grants trust for that install command only; the package setting is

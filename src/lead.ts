@@ -118,15 +118,21 @@ function parseStandaloneReviewInput(raw: string): {
 function explicitWorkflowFallback(raw: string): JevWorkflow | "AMBIGUOUS" | undefined {
   const input = raw.trim().toLowerCase();
   const matches: JevWorkflow[] = [];
-  const add = (workflow: JevWorkflow, pattern: RegExp) => { if (pattern.test(input)) matches.push(workflow); };
+  const add = (workflow: JevWorkflow, pattern: RegExp) => {
+    if (pattern.test(input) && !matches.includes(workflow)) matches.push(workflow);
+  };
   add("DEBUG", /\b(debug|diagnos(?:e|is)|bug|crash|regression|failing)\b/);
-  add("REVIEW", /\b(review|audit|inspect (?:the )?branch)\b/);
+  add("REVIEW", /\b(review|audit|inspect (?:the )?branch)\b|^--base\s+\S+\s+--branch\s+\S+/);
   add("RESEARCH", /\b(research|investigate|find out|compare options)\b/);
   add("TRIAGE", /\btriage\b/);
   add("WAYFIND", /\b(wayfind|map (?:the|this|a) (?:effort|migration|project))\b/);
   add("IDEATE", /\b(ideate|brainstorm|shape (?:this|an?|the) idea|plan (?:an?|the|this))\b/);
   add("OPERATE", /\b(operate|deploy|publish|merge|force[- ]?push|privileged)\b/);
-  add("IMPLEMENT", /(?:^|\b)(implement|build|create|add|change|update|refactor)\b|^--base\b/);
+  add("IMPLEMENT", /(?:^|\b)(implement|build|create|add|change|update|refactor)\b/);
+  // Structured implementation, debug, research and review requests all begin
+  // with --base. Treat that shape as IMPLEMENT only when no semantic or
+  // review-specific signal selected another workflow.
+  if (matches.length === 0) add("IMPLEMENT", /^--base\b/);
   if (matches.length === 1) return matches[0];
   if (matches.length > 1) return "AMBIGUOUS";
   if (/^(?:how|what|why|where|when|who|can|could|would|is|are|do|does)\b|\?$/.test(input)) return "CHAT";

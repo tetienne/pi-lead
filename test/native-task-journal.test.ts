@@ -106,10 +106,10 @@ test("a completed standalone review becomes a durable DONE record with final-rev
     phase: "VERIFY",
   });
   await journal.recordReview({
-    status: "DONE", taskId: "task-review", comparisonSource: `git:${commit}..${commit}`,
+    status: "DONE", taskId: "task-review", comparisonSource: `git:${commit}...${commit}`,
     reports: [{
       taskId: "task-review", axis: "STANDARDS", reviewerId: "worker", contextId: "session",
-      comparisonSource: `git:${commit}..${commit}`, standardsDigest: "d".repeat(64), findings: [],
+      comparisonSource: `git:${commit}...${commit}`, standardsDigest: "d".repeat(64), findings: [],
       readOnly: true, published: false,
     }],
     specification: { status: "MISSING_SPECIFICATION" }, readOnly: true, published: false,

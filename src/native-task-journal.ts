@@ -210,8 +210,8 @@ export async function createNativeTaskJournal(options: {
       const comparison = summary.comparisonSource.startsWith("git:")
         ? summary.comparisonSource.slice("git:".length)
         : summary.comparisonSource;
-      const finalCommit = comparison.split("..")[1];
-      if (!finalCommit || !/^[0-9a-f]{40}$/.test(finalCommit)) {
+      const finalCommit = /^[0-9a-f]{40}\.\.\.?([0-9a-f]{40})$/.exec(comparison)?.[1];
+      if (!finalCommit) {
         throw new Error("Standalone review completion is not pinned to a final commit");
       }
       const reportIds = summary.reports.map((report) =>

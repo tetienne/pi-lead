@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { test } from "node:test";
@@ -85,17 +85,33 @@ test("the release archive contains only the Lead and its internal adapters", asy
   assert.equal(packageJson.scripts["chatgpt-live"], "node src/run-chatgpt-live-cli.ts");
 });
 
-test("a fresh consuming project discovers /lead as the only PI Lead command", async () => {
+test("a fresh consuming project activates the staged release archive and discovers only /lead", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-lead-consumer-"));
   try {
     const consumer = join(root, "consumer");
     await mkdir(consumer);
+    const cache = join(root, "npm-cache");
+    await mkdir(cache);
     const environment = {
       ...process.env,
       PI_CODING_AGENT_DIR: join(root, "pi-state"),
       PI_OFFLINE: "1",
+      npm_config_cache: cache,
     };
-    execFileSync("pi", ["install", "-l", "--approve", process.cwd()], {
+    const packed = JSON.parse(execFileSync("npm", ["pack", "--json", "--pack-destination", root], {
+      cwd: process.cwd(),
+      env: environment,
+      encoding: "utf8",
+    })) as Array<{ filename: string }>;
+    const filename = packed[0]?.filename;
+    assert.ok(filename, "npm pack must report its archive filename");
+    execFileSync("tar", ["-xzf", join(root, filename), "-C", root], { stdio: "pipe" });
+    // Dependency installation is npm's responsibility. Reuse this checkout's
+    // installed dependency tree here so the test stays deterministic/offline
+    // while Pi loads the exact files staged in the release archive.
+    await symlink(join(process.cwd(), "node_modules"), join(root, "package", "node_modules"), "dir");
+
+    execFileSync("pi", ["install", "-l", "--approve", join(root, "package")], {
       cwd: consumer,
       env: environment,
       stdio: "pipe",

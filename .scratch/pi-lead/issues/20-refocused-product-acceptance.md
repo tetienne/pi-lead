@@ -8,24 +8,26 @@ workflows, with visible isolated workers and a verifiable final result.
 
 **Status:** ready-for-agent
 
+**Resolution:** DONE
+
 ## Acceptance criteria
 
-- [ ] Activate the package in a fresh macOS arm64 consuming project and issue
+- [x] Activate the package in a fresh macOS arm64 consuming project and issue
   representative requests in ordinary language without selecting a provider,
   skill or lifecycle command.
-- [ ] Exercise bounded Jev routing with the dedicated capped configuration when
+- [x] Exercise bounded Jev routing with the dedicated capped configuration when
   the existing human credential gate is satisfied; deterministic unavailable,
   ambiguous and over-budget outcomes remain usable and truthful.
-- [ ] Complete at least one code-changing request through the selected Matt
+- [x] Complete at least one code-changing request through the selected Matt
   workflow, isolated visible worker execution, required checks, independent
   review, result collection and confirmed cleanup.
-- [ ] Exercise debug and read-only review through the same Lead interface and
+- [x] Exercise debug and read-only review through the same Lead interface and
   verify that ordinary chat creates no unnecessary worker.
-- [ ] Confirm native command discovery exposes only `/lead <request>`, with no
+- [x] Confirm native command discovery exposes only `/lead <request>`, with no
   provider-, skill-, fixture-, stage-specific or operational PI Lead commands.
-- [ ] Report measured evidence and explicit limits without making claims for
+- [x] Report measured evidence and explicit limits without making claims for
   deferred Linux, OpenCode Go, publication, cache or advanced scheduler work.
-- [ ] Replace the superseded Ticket 16 acceptance narrative in the README with a
+- [x] Replace the superseded Ticket 16 acceptance narrative in the README with a
   short description of the refocused product and its remaining human gates.
 
 ## Context and constraints
@@ -62,3 +64,31 @@ gate for this release.
 
 Created from the 2026-09-22 scope audit and approved by the user as the final
 ticket in the 17 → 18 → 19 → 20 cleanup sequence.
+
+Implemented 2026-09-22. A staged local archive loaded in a fresh macOS arm64
+consuming project through pinned Pi 0.86.1; native discovery exposed only
+`/lead`, and ordinary implementation, debug, review and chat requests entered
+the unified Lead without provider, model, skill or lifecycle vocabulary. Direct
+`.tgz` activation was found invalid and the documented/tested staging flow now
+installs archive dependencies before activating its package directory.
+
+After the operator confirmed included-only ChatGPT usage, a live natural-input
+implementation completed one isolated build, `mise run test`, independent
+Standards and Spec review, exact result collection, local branch commit
+`a89b128168cac76a676a83df8ef43116587232b4`, checkout preservation and confirmed
+cleanup for all three successful workers. A later standalone read-only review
+completed with unchanged worktree/refs and two independently attributable
+reports after one explicit retry of a zero-output provider `502`; successful
+review workers were cleaned. Publication remained deferred.
+
+Acceptance corrected deterministic outage routing for structured debug/review
+requests and fixed durable review completion for native three-dot Git
+comparisons. The live debug request reached the correct workflow but remained
+truthfully BLOCKED because its isolated mise feedback request reported
+`mise.jdx.dev` denied even when the exact host was recorded in the allowlist;
+its terminated-worker diagnostic tabs were retained. Live Jev was not run
+because its dedicated OpenRouter credential/cap gate was not configured;
+deterministic unavailable, malformed, ambiguous, stale and over-budget cases
+passed. Ubuntu, OpenCode Go, publication, cache optimization and advanced
+scheduling remain unclaimed. Full measurements and IDs are in
+`docs/release-acceptance.md`.
