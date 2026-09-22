@@ -55,6 +55,10 @@ test("the Lead change command records a review-required proposal without calling
         vmTerminated: true,
       } satisfies ReviewRequiredSummary;
     },
+    async routeIntent(_input, workflow) {
+      assert.equal(workflow, "IMPLEMENT");
+      return { status: "ROUTED", workflow: "IMPLEMENT", source: "explicit" };
+    },
   })(pi);
 
   await commands.get("lead-change")?.(

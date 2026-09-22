@@ -42,6 +42,10 @@ test("the Lead fixture command delegates once and records its correlated summary
         vmTerminated: true,
       } satisfies FixtureSummary;
     },
+    async routeIntent(_input, workflow) {
+      assert.equal(workflow, "CHAT");
+      return { status: "ROUTED", workflow: "CHAT", source: "explicit" };
+    },
   });
   extension(pi);
 
@@ -108,6 +112,10 @@ test("the Lead admits at most two fixture workers concurrently", async () => {
         output: "fixture complete",
         vmTerminated: true,
       };
+    },
+    async routeIntent(_input, workflow) {
+      assert.equal(workflow, "CHAT");
+      return { status: "ROUTED", workflow: "CHAT", source: "explicit" };
     },
   })(pi);
   const context = { cwd: "/consumer", ui: { notify() {} } };

@@ -191,6 +191,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       request: string,
       context: { cwd: string; ui: { notify(message: string, level: "info" | "error"): void } },
       explicitWorkflow?: JevWorkflow,
+      onExplicitAdmission?: () => Promise<void>,
     ): Promise<"continue" | "handled"> => {
       if (!dependencies.routeIntent) {
         context.ui.notify("PI Lead intent: routing unavailable; no worker was started", "error");
@@ -204,6 +205,10 @@ export function createLeadExtension(dependencies: LeadDependencies) {
         return "handled";
       }
       if (outcome.status === "ROUTED") {
+        if (onExplicitAdmission && outcome.workflow === explicitWorkflow) {
+          await onExplicitAdmission();
+          return "handled";
+        }
         if (outcome.workflow === "CHAT") return "continue";
         if (outcome.workflow === "IDEATE" || outcome.workflow === "TRIAGE" || outcome.workflow === "WAYFIND") {
           try {
@@ -385,8 +390,7 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       pi.registerCommand("lead-read-go", {
         description: "Ask an isolated OpenCode Go worker a bounded read-only question",
         handler: async (args, context) => {
-          const action = await admitRequest(args, context, "CHAT");
-          if (action === "continue") await runOpenCodeGo(args, context);
+          await admitRequest(args, context, "CHAT", async () => runOpenCodeGo(args, context));
         },
       });
     }
@@ -396,6 +400,9 @@ export function createLeadExtension(dependencies: LeadDependencies) {
       pi.registerCommand("lead-change", {
         description: "Ask an isolated worker for a validated change requiring human review",
         handler: async (args, context) => {
+          let admitted = false;
+          await admitRequest(args, context, "IMPLEMENT", async () => { admitted = true; });
+          if (!admitted) return;
           let parsed: ReturnType<typeof parseProposedChangeInput>;
           try {
             parsed = parseProposedChangeInput(args);
@@ -562,6 +569,9 @@ export function createLeadExtension(dependencies: LeadDependencies) {
     pi.registerCommand("lead-fixture", {
       description: "Run the PI Lead isolated fixture",
       handler: async (_args, context) => {
+        let admitted = false;
+        await admitRequest("Run the isolated fixture", context, "CHAT", async () => { admitted = true; });
+        if (!admitted) return;
         const request = { taskId: randomUUID(), assignmentId: randomUUID() };
         let summary: FixtureRunSummary;
         if (activeWorkerSlots() + 1 > MAX_ACTIVE_WORKERS) {
