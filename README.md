@@ -47,7 +47,10 @@ you ─► Lead (Pi, your tab)
   any Pi provider or subscription works. A worker is a Pi like the Lead: same
   skills, prompts and `AGENTS.md`, plus the repository's own skills when you
   trust the project, but no host-side extensions except Herdr's Pi
-  integration (working/idle badges).
+  integration (working/idle badges). When an implement, prototype or debug
+  worker finishes `done` with no recorded test run, or a failing last one,
+  `finish` sends it back once to run the tests or report `partial`; the next
+  `finish` goes through (`"steerUnverifiedDone": false` disables this).
 - **Toolchains** come from the project's mise config: the first worker runs
   `mise install` in a sandbox into a per-project cache, later workers mount it
   read-only and start instantly. (Your Mac's own mise cache holds macOS
@@ -102,7 +105,8 @@ pi install -l git:github.com/tetienne/pi-lead@v0.4.0
   "jev": { "via": "openrouter", "dailyBudgetUsd": 1, "display": "normal" },
   "keepFailedWorkers": true,
   "leadGuard": "confirm",
-  "waitingTimeoutMinutes": 120
+  "waitingTimeoutMinutes": 120,
+  "steerUnverifiedDone": true
 }
 ```
 

@@ -6,7 +6,7 @@ import type { LeadConfig, Tier } from "./config.ts";
 import { workspaceFromPaneId, type Herdr } from "./herdr.ts";
 import { defaultTier, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, workerPrompt, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
@@ -168,8 +168,6 @@ type Worker = WorkerInfo & {
   resumed: boolean;
   reroutes: number;
 };
-
-const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debug"];
 
 export function slugify(text: string): string {
   return (
@@ -495,6 +493,7 @@ export function createDelegator(deps: DelegateDeps) {
       resultPath: worker.resultPath,
       sandbox,
       jev: deps.config.jev,
+      steerUnverifiedDone: deps.config.steerUnverifiedDone,
       readonlyMounts: [
         ...(deps.readonlyMounts ?? []),
         ...(resources.skills.length || resources.prompts.length || resources.appendSystem ? [resourceDir] : []),
