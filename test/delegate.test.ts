@@ -423,6 +423,7 @@ test("the launch script and the task carry the toolchain cache and Herdr hint", 
   await pending;
   assert.equal(seen.task?.toolchainCache, "/cache/project");
   assert.equal(seen.task?.stuckDetection, true);
+  assert.equal(seen.task?.steerUnverifiedDone, true);
   assert.match(seen.script!, /export HERDR_AGENT=pi/);
 });
 

@@ -55,6 +55,11 @@ export type LeadConfig = {
    * worker/stuck.ts): once, then once more telling it to finish as blocked.
    */
   stuckDetection: boolean;
+  /**
+   * A worker that finishes code work as `done` without a passing test run is
+   * sent back once to run the tests, or to finish as `partial`.
+   */
+  steerUnverifiedDone: boolean;
 };
 
 export type LeadGuardMode = "confirm" | "off";
@@ -88,6 +93,7 @@ export const DEFAULT_CONFIG: LeadConfig = {
   leadGuard: "confirm",
   waitingTimeoutMinutes: 120,
   stuckDetection: true,
+  steerUnverifiedDone: true,
 };
 
 type PartialConfig = {
@@ -99,6 +105,7 @@ type PartialConfig = {
   leadGuard?: LeadGuardMode;
   waitingTimeoutMinutes?: number;
   stuckDetection?: boolean;
+  steerUnverifiedDone?: boolean;
 };
 
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
@@ -115,6 +122,7 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     leadGuard: override.leadGuard === "off" || override.leadGuard === "confirm" ? override.leadGuard : base.leadGuard,
     waitingTimeoutMinutes: override.waitingTimeoutMinutes ?? base.waitingTimeoutMinutes,
     stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
+    steerUnverifiedDone: override.steerUnverifiedDone ?? base.steerUnverifiedDone,
   };
 }
 
