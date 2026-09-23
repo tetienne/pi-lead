@@ -1,0 +1,56 @@
+name: Release
+
+# Release Please keeps a release PR open on main that bumps package.json,
+# package-lock.json, README.md and CHANGELOG.md from Conventional Commits.
+# Merging it creates the vX.Y.Z tag and the GitHub release on the commit that
+# already carries the new version, so no workflow ever pushes to main.
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write # release labels
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Optional npm distribution (pi install npm:pi-lead@X.Y.Z, pi.dev gallery).
+  # Off until the repository variable NPM_PUBLISH is "true" and npm Trusted
+  # Publishing is configured for this workflow file: no npm token is stored.
+  npm:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true' && vars.NPM_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.14.1
+          registry-url: https://registry.npmjs.org
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm publish --provenance --access public

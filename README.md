@@ -74,9 +74,11 @@ Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
 
 ## Install
 
+<!-- x-release-please-start-version -->
 ```bash
 pi install -l git:github.com/tetienne/pi-lead@v0.2.0
 ```
+<!-- x-release-please-end -->
 
 ## Configure
 
@@ -127,6 +129,16 @@ npm install
 npm test
 npm run typecheck
 ```
+
+## Release
+
+Versions come from [Conventional Commits](https://www.conventionalcommits.org)
+on `main` (`fix:` → patch, `feat:` → minor, `feat!:` → minor while in 0.x).
+[Release Please](https://github.com/googleapis/release-please) keeps a
+`chore(main): release X.Y.Z` pull request up to date with the bumped
+`package.json`, `package-lock.json`, this README and `CHANGELOG.md`. Merging it
+tags `vX.Y.Z` and publishes the GitHub release; never tag or bump by hand.
+Squash-merged pull requests need a conventional title.
 
 The previous implementation (Gondolin-hosted Pi, ChatGPT-only workers, task
 journals) is in git history before ADR 0005; its research notes under
