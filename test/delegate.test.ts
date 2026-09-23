@@ -279,6 +279,26 @@ test("the implement path asks Jev readiness and difficulty in one call", async (
   await pending;
 });
 
+test("confirmed tickets and other kinds skip readiness but Jev still picks the tier", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, {
+    maxWorkers: 1,
+    judge: {
+      intake: async () => ({ readiness: { ready: false, missing: ["acceptance"] } }),
+      modelTier: async () => ({ tier: "deep", difficulty: 3.4 }),
+    },
+  });
+  for (const params of [
+    { kind: "implement", title: "Confirmed", task: "t", confirmedReady: true },
+    { kind: "debug", title: "Flaky", task: "t" },
+  ] as const) {
+    const pending = nextOutcome();
+    const started = await delegator.start(params, io);
+    assert.equal(started.status, "started");
+    assert.match(started.text, /tier deep, Jev difficulty 3\.4\/4/);
+    await pending;
+  }
+});
+
 test("reviews start from the reviewed branch and report Jev's severity", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
     replies: [{ status: "done", findings: "SQL injection in search" }],
