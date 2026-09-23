@@ -63,30 +63,31 @@ test("the Matt skills ship with the package and are discovered", async () => {
   assert.ok(manifest.files.includes(".agents/skills/"));
 });
 
-test("workers get the Lead's skills and, in trusted projects, the repo's skills and prompts", async () => {
-  const clone = await mkdtemp(join(tmpdir(), "pi-lead-clone-"));
-  await mkdir(join(clone, ".agents", "skills"), { recursive: true });
-  await mkdir(join(clone, ".pi", "prompts"), { recursive: true });
+test("workers get the Lead's skills plus host copies of the repo's resources, and no extensions", () => {
   const base = {
     taskPath: "/tmp/t/task.json",
     prompt: "/skill:implement do it",
     route: { model: "anthropic/claude-sonnet-5", thinking: "high" as const, tier: "deep" as const },
     label: "lead: x",
-    clonePath: clone,
   };
-  const trusted = workerCommand({ ...base, projectTrusted: true });
-  for (const flag of ["--no-approve", "--no-extensions", "--no-builtin-tools"]) assert.ok(trusted.includes(flag), flag);
-  assert.ok(!trusted.includes("--no-skills"), "global skills load like in the Lead");
-  assert.match(trusted[trusted.indexOf("-e") + 1]!, /src\/worker\/extension\.ts$/);
-  const skillArgs = trusted.flatMap((arg, i) => (arg === "--skill" ? [trusted[i + 1]!] : []));
+  const argv = workerCommand({
+    ...base,
+    resources: { skills: ["/tmp/t/resources/agents-skills"], prompts: ["/tmp/t/resources/prompts"], appendSystem: "/tmp/t/resources/APPEND_SYSTEM.md" },
+  });
+  for (const flag of ["--no-approve", "--no-extensions", "--no-builtin-tools"]) assert.ok(argv.includes(flag), flag);
+  assert.ok(!argv.includes("--no-skills"), "global skills load like in the Lead");
+  assert.match(argv[argv.indexOf("-e") + 1]!, /src\/worker\/extension\.ts$/);
+  const skillArgs = argv.flatMap((arg, i) => (arg === "--skill" ? [argv[i + 1]!] : []));
   assert.equal(skillArgs.length, 2);
-  assert.ok(skillArgs.includes(join(clone, ".agents", "skills")));
-  assert.equal(trusted[trusted.indexOf("--prompt-template") + 1], join(clone, ".pi", "prompts"));
-  assert.deepEqual(trusted.slice(-2), ["--", "/skill:implement do it"]);
+  assert.ok(skillArgs.includes("/tmp/t/resources/agents-skills"));
+  assert.equal(argv[argv.indexOf("--prompt-template") + 1], "/tmp/t/resources/prompts");
+  assert.equal(argv[argv.indexOf("--append-system-prompt") + 1], "/tmp/t/resources/APPEND_SYSTEM.md");
+  assert.ok(!argv.some((arg) => arg.includes("/repo")), "nothing is read from the guest-writable clone");
+  assert.deepEqual(argv.slice(-2), ["--", "/skill:implement do it"]);
 
-  const untrusted = workerCommand({ ...base, projectTrusted: false });
-  assert.equal(untrusted.filter((arg) => arg === "--skill").length, 1);
-  assert.ok(!untrusted.includes("--prompt-template"));
+  const bare = workerCommand({ ...base, resources: { skills: [], prompts: [] } });
+  assert.equal(bare.filter((arg) => arg === "--skill").length, 1);
+  assert.ok(!bare.includes("--prompt-template"));
 });
 
 test("Herdr's Pi integration is found where `herdr integration install pi` writes it", async () => {

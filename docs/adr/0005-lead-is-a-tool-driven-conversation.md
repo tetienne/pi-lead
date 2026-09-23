@@ -34,12 +34,14 @@ second provider, publication, scheduling and recovery journals.
    runs on the host with `--no-extensions --no-builtin-tools --no-approve`,
    plus one trusted extension that re-registers `read`, `write`, `edit`,
    `bash`, `ls`, `find` and `grep` inside a Gondolin VM. The VM mounts a
-   throw-away local clone of the repository at `/workspace`; no host home,
+   throw-away local clone of the repository at `/workspace` (plus skill
+   folders and the project's toolchain cache, read-only); no host home,
    credential, socket or original checkout is mounted. No provider secret ever
    enters the guest, so every Pi provider and subscription works for workers.
    The host brings work back with `git fetch` from that clone, never by running
-   git inside it.
-6. **Jev judges, code decides.** Jev (TypeSafe `jev-latest` via the official
+   git inside it; the worker's Pi and its Herdr tab shell run outside the clone
+   and read host copies of the repository's text resources (ADR 0006).
+6. **Jev judges, code decides.** Jev (TypeSafe `jev-1.13` by default, via the official
    SDK, directly or through OpenRouter) answers closed-set questions whose
    answers map to deterministic actions: model tier, ticket readiness, egress
    requests, worker verdicts, review severity, failure kind and ticket overlap.

@@ -194,13 +194,14 @@ export function createJudge(options: {
     },
 
     async egress({ task, method, url }) {
-      let host: string;
+      let key: string;
       try {
-        host = new URL(url).host;
+        const parsed = new URL(url);
+        // Per path, not per host: one judged URL must not vouch for the rest of the host.
+        key = `${method} ${parsed.host}${parsed.pathname}`;
       } catch {
         return "deny";
       }
-      const key = `${method} ${host}`;
       const cached = egressCache.get(key);
       if (cached) return cached;
       const answers = await run(

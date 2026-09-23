@@ -52,3 +52,20 @@ test("without a human, unsure requests are denied", async () => {
   const allow = createEgressPolicy({ allowedHosts: [], task: "t", judge: judgeSaying("ask") });
   assert.equal(await allow({ method: "GET", url: "https://unknown.example" }), false);
 });
+
+test("allowlisted hosts are trusted for downloads only", async () => {
+  const calls: string[] = [];
+  const allow = createEgressPolicy({ allowedHosts: ["github.com"], task: "t", judge: judgeSaying("deny", calls) });
+  assert.equal(await allow({ method: "GET", url: "https://github.com/org/repo/archive/main.tar.gz" }), true);
+  assert.equal(await allow({ method: "POST", url: "https://github.com/org/repo.git/git-upload-pack" }), true, "git fetch");
+  assert.equal(await allow({ method: "POST", url: "https://github.com/attacker/x.git/git-receive-pack" }), false, "git push is judged");
+  assert.deepEqual(calls, ["https://github.com/attacker/x.git/git-receive-pack"]);
+});
+
+test("Jev decisions are not stretched to the whole host", async () => {
+  const calls: string[] = [];
+  const allow = createEgressPolicy({ allowedHosts: [], task: "t", judge: judgeSaying("allow", calls) });
+  await allow({ method: "GET", url: "https://docs.rs/a" });
+  await allow({ method: "GET", url: "https://docs.rs/b" });
+  assert.equal(calls.length, 2);
+});

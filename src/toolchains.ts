@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { LeadConfig } from "./config.ts";
@@ -13,6 +13,11 @@ import { createEgressPolicy } from "./worker/egress.ts";
  * its own: one directory per project, filled by `mise install` in a warm-up
  * VM the first time a worker needs it (or when the mise config changes), then
  * mounted read-only into every worker. After the first run it is instant.
+ *
+ * Each mise configuration gets its own cache directory, and the "ready"
+ * marker lives outside it: a warm-up can only ever write the cache of the
+ * configuration it installs, so a worker-authored mise.toml (a review of a
+ * worker branch) cannot poison the tools other workers use.
  */
 
 export const MISE_CONFIG_FILES = [
@@ -48,6 +53,10 @@ export async function toolchainKey(clonePath: string, image: string | undefined)
   let found = false;
   for (const file of MISE_CONFIG_FILES) {
     try {
+      // The clone comes from the repository: never follow a committed symlink
+      // (to a host secret or /dev/zero) from the host.
+      const stat = await lstat(join(clonePath, file));
+      if (!stat.isFile() || stat.size > 1 << 20) continue;
       const content = await readFile(join(clonePath, file));
       hash.update(`${file}\0`).update(content).update("\0");
       found = true;
@@ -113,8 +122,8 @@ export function createToolchains(options: {
       const key = await toolchainKey(input.clonePath, options.sandbox.image);
       if (!key) return undefined;
       const project = createHash("sha256").update(input.repoRoot).digest("hex").slice(0, 16);
-      const cacheDir = join(options.root, project);
-      const marker = join(cacheDir, `.pi-lead-ready-${key}`);
+      const cacheDir = join(options.root, project, key);
+      const marker = join(options.root, project, `${key}.ready`);
       try {
         await access(marker);
         return cacheDir;

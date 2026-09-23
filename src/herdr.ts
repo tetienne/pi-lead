@@ -46,13 +46,10 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
       return { tabId, paneId };
     },
     async sendToAgent(paneId, text) {
-      try {
-        // Targets accept the pane id hosting a detected agent (HERDR_AGENT=pi, Herdr's Pi integration).
-        await herdr(["agent", "prompt", paneId, text]);
-      } catch {
-        // Not detected as an agent: type the text into Pi's editor as one line, then Enter.
-        await herdr(["pane", "run", paneId, text.replace(/\s*\n\s*/g, " ")]);
-      }
+      // Only through the agent surface: the target must be a live, detected
+      // agent (HERDR_AGENT=pi, Herdr's Pi integration). Never type into the
+      // pane, which could be a host shell once Pi has exited.
+      await herdr(["agent", "prompt", paneId, text]);
     },
     async closeTab(tabId) {
       await herdr(["tab", "close", tabId]);

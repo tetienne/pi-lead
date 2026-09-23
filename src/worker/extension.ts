@@ -1,4 +1,4 @@
-import { rename, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { VM } from "@earendil-works/gondolin";
@@ -10,7 +10,7 @@ import { createAskJev, createJudge, createLedger } from "../jev.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
-import { registerSandboxTools } from "./sandbox-tools.ts";
+import { registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
 
 /**
  * Loaded only into worker Pi processes (`--no-extensions -e`). Pi and this
@@ -22,7 +22,7 @@ export default function worker(pi: ExtensionAPI) {
 
   let task: WorkerTask | undefined;
   let latestContext: ExtensionContext | undefined;
-  let running: Promise<{ vm: VM; shellPath: string; env: Record<string, string> }> | undefined;
+  let running: Promise<SandboxHandle> | undefined;
   let seq = 0;
 
   const loadTask = async () => {
@@ -30,6 +30,13 @@ export default function worker(pi: ExtensionAPI) {
     const path = pi.getFlag("pi-lead-task");
     if (typeof path !== "string" || !path) throw new Error("PI Lead worker started without --pi-lead-task");
     task = await readJsonFile<WorkerTask>(path);
+    // Continue numbering after a /reload or /new in this tab, so the Lead sees the next finish.
+    try {
+      const previous = JSON.parse(await readFile(task.resultPath, "utf8")) as { seq?: unknown };
+      if (typeof previous.seq === "number" && Number.isInteger(previous.seq)) seq = previous.seq;
+    } catch {
+      // No result yet.
+    }
     return task;
   };
 
@@ -48,6 +55,8 @@ export default function worker(pi: ExtensionAPI) {
     const mounts: Record<string, Mount> = { [GUEST_WORKSPACE]: { host: current.clonePath } };
     // Read-only: a worker must not be able to poison the toolchains of the next one.
     if (current.toolchainCache) mounts[GUEST_MISE_DIR] = { host: current.toolchainCache, readonly: true };
+    // Skill folders at their host paths, so a skill's templates and scripts resolve in the guest.
+    for (const dir of current.readonlyMounts ?? []) mounts[dir] = { host: dir, readonly: true };
     const vm = await createSandboxVm({ label: `pi-lead ${current.title}`, sandbox: current.sandbox, mounts, allowRequest: allow });
     const env = guestEnv(current.toolchainCache !== undefined);
     const probe = await vm.exec(["/bin/sh", "-lc", "command -v bash || true; command -v git || true"], { env });
@@ -57,7 +66,7 @@ export default function worker(pi: ExtensionAPI) {
       throw new Error("the Gondolin image has no git; build one with `npm run sandbox:image`");
     }
     ctx?.ui.setStatus("pi-lead", `Gondolin: ${vm.id.slice(0, 8)} · ${current.branch}`);
-    return { vm, shellPath: bash || "/bin/sh", env };
+    return { vm, shellPath: bash || "/bin/sh", env, root: current.clonePath };
   };
 
   const ensureVm = (ctx?: ExtensionContext) => {
@@ -83,13 +92,17 @@ export default function worker(pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = await loadTask();
-      const { vm } = await ensureVm(ctx);
+      const { vm, env } = await ensureVm(ctx);
       // Commit anything left in the tree, inside the guest, so the host only
-      // ever fetches from the clone.
-      await vm.exec(
-        ["/bin/sh", "-lc", 'git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes")'],
-        { cwd: GUEST_WORKSPACE, env: guestEnv(false) },
+      // ever fetches from the clone. A failed commit (hook, identity) must not
+      // lose work: report it to the model instead of finishing.
+      const commit = await vm.exec(
+        ["/bin/sh", "-lc", 'git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes") 2>&1'],
+        { cwd: GUEST_WORKSPACE, env },
       );
+      if (commit.exitCode !== 0) {
+        throw new Error(`Could not commit the remaining changes; fix this, commit, then call finish again:\n${commit.stdout.slice(-2_000)}`);
+      }
       const result: WorkerResult = {
         version: 1,
         id: current.id,
@@ -99,22 +112,20 @@ export default function worker(pi: ExtensionAPI) {
         ...(params.findings ? { findings: params.findings } : {}),
       };
       if (params.status === "done") {
-        // The Lead closes a finished worker's tab as soon as it reads the
-        // result: stop the VM first so no guest outlives the tab.
+        // The Lead usually closes a finished worker's tab: stop the VM first
+        // so no guest outlives it. Pi stays up in case the Lead disagrees and
+        // relays more work; the next tool call starts a fresh VM on the clone.
         running = undefined;
         await vm.close();
       }
       const temporary = `${current.resultPath}.tmp`;
       await writeFile(temporary, JSON.stringify(result));
       await rename(temporary, current.resultPath);
-      if (params.status === "done") setTimeout(() => ctx.shutdown(), 200);
       return {
         content: [
           {
             type: "text",
-            text: params.status === "done"
-              ? "Reported to the PI Lead. Stop here."
-              : "Reported to the PI Lead. This tab stays open; a human may continue here.",
+            text: "Reported to the PI Lead. Stop here and wait: the Lead may send more input.",
           },
         ],
         details: result,

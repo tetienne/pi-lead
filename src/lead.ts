@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,18 +37,21 @@ export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefin
   return existsSync(path) ? path : undefined;
 }
 
-/** A worker is a Pi like the Lead: same skills and prompts, but no host-side extensions. */
-export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, clonePath, projectTrusted }) => {
-  const project = (...parts: string[]) => {
-    const path = join(clonePath, ...parts);
-    return existsSync(path) ? [path] : [];
-  };
+/** Global skill folders, as Pi discovers them for the Lead. */
+export function globalSkillDirs(agentDir = getAgentDir(), home = homedir()): string[] {
+  return [join(agentDir, "skills"), join(home, ".agents", "skills")].filter((dir) => existsSync(dir));
+}
+
+/**
+ * A worker is a Pi like the Lead: same package and global skills and prompts,
+ * plus host copies of the repository's own (see context-snapshot.ts). Code is
+ * the exception: project and global extensions would run on the host, outside
+ * the VM, so only the worker extension and Herdr's Pi integration load.
+ */
+export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, resources }) => {
   const herdr = findHerdrPiExtension();
   return [
     ...piInvocation(),
-    // Project-local *code* (.pi/extensions, packages) would run on the host,
-    // outside the sandbox: never load it. Global extensions are excluded for
-    // the same reason. Text resources are passed explicitly below.
     "--no-approve",
     "--no-extensions",
     "-e",
@@ -56,13 +60,9 @@ export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, c
     "--no-builtin-tools",
     "--skill",
     SKILLS_DIR,
-    ...(projectTrusted
-      ? [
-          ...[...project(".agents", "skills"), ...project(".pi", "skills")].flatMap((path) => ["--skill", path]),
-          ...project(".pi", "prompts").flatMap((path) => ["--prompt-template", path]),
-          ...project(".pi", "APPEND_SYSTEM.md").flatMap((path) => ["--append-system-prompt", path]),
-        ]
-      : []),
+    ...resources.skills.flatMap((path) => ["--skill", path]),
+    ...resources.prompts.flatMap((path) => ["--prompt-template", path]),
+    ...(resources.appendSystem ? ["--append-system-prompt", resources.appendSystem] : []),
     "--model",
     route.model,
     "--thinking",
@@ -82,6 +82,7 @@ export default function lead(pi: ExtensionAPI) {
   let delegator: Delegator | undefined;
   let ui: ExtensionContext["ui"] | undefined;
   let lastProgress = "";
+  let closed = false;
 
   const status = () => {
     const workers = delegator?.list() ?? [];
@@ -111,9 +112,13 @@ export default function lead(pi: ExtensionAPI) {
       workspace: gitWorkspace,
       workerCommand,
       toolchains: createToolchains({ root: join(agentDir, "pi-lead", "toolchains"), sandbox: config.sandbox, judge }),
+      // So a skill's own files (templates, scripts) resolve inside the VM too.
+      readonlyMounts: [SKILLS_DIR, ...globalSkillDirs(agentDir)],
       stateRoot: join(agentDir, "pi-lead", "workers"),
       // Each result wakes the Lead, which tells the user and follows "Next".
       onOutcome(outcome) {
+        // After session_shutdown this `pi` is stale; the delegator reports into the void.
+        if (closed) return;
         status();
         pi.sendMessage(
           { customType: "pi-lead-worker", content: outcome.text, display: true, details: { status: outcome.status, worker: outcome.worker } },
@@ -135,11 +140,15 @@ export default function lead(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    closed = false;
     await setup(ctx);
   });
 
+  // Workers belong to the Lead session: when it ends (quit, /new, /resume,
+  // /reload), they are stopped and cleaned up before the session goes away.
   pi.on("session_shutdown", async () => {
-    delegator?.shutdown();
+    closed = true;
+    await delegator?.shutdown();
   });
 
   pi.on("before_agent_start", async (event) => ({ systemPrompt: `${event.systemPrompt}\n${leadGuidance(SKILLS_DIR)}` }));

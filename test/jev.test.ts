@@ -89,12 +89,14 @@ test("readiness lists the failed checks", async () => {
   assert.deepEqual(await judge.readiness("make it better"), { ready: false, missing: ["acceptance", "decided"] });
 });
 
-test("egress decisions are banded and cached per method and host", async () => {
+test("egress decisions are banded and cached per method, host and path", async () => {
   const calls: unknown[] = [];
   const judge = createJudge({ ask: fakeAsk({ needed: { noul: 0.95 } }, calls), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
-  assert.equal(await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/a" }), "allow");
-  assert.equal(await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/b" }), "allow");
+  assert.equal(await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/a?x=1" }), "allow");
+  assert.equal(await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/a?x=2" }), "allow");
   assert.equal(calls.length, 1);
+  await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/b" });
+  assert.equal(calls.length, 2, "one judged URL does not vouch for the rest of the host");
 
   const unsure = createJudge({ ask: fakeAsk({ needed: { noul: 0.5 } }), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
   assert.equal(await unsure.egress({ task: "t", method: "POST", url: "https://paste.example/x" }), "ask");

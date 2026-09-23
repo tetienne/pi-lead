@@ -41,7 +41,7 @@ confidence or no key ⇒ the listed fallback.
 | worker egress | is this request needed for the ticket? | allow / deny / ask the human in the worker tab | ask the human; deny without UI |
 | after finish | real state of the work | the more pessimistic of worker and Jev wins | worker's status |
 | after review | severity 0–4 | none / auto-fix follow-up / escalate to user | findings only |
-| after failure | transient / environment / task bug / needs info | one automatic retry when transient | report |
+| launch failure | transient / environment / task bug / needs info | one automatic retry when transient | report |
 | concurrent tickets | would they edit the same things? | serialize | serialize code-writing tickets |
 
 Budget: one `jev.dailyBudgetUsd` (default 1 USD) shared by the Lead and its
@@ -59,7 +59,13 @@ workers through `~/.pi/agent/pi-lead/jev-usage.json`.
   `/opt/mise`, and HTTP(S) egress filtered per request; internal ranges and
   WebSockets are blocked.
 - The host only `git fetch`es the worker branch from the clone; it never runs
-  git inside the guest-writable directory.
+  git inside the guest-writable directory. The worker's Pi and its tab shell
+  run in a task directory outside the clone and read host copies of the
+  repository's context files, skills and prompts (no symlinks followed).
+- Egress: allowlisted hosts are trusted for downloads only (GET/HEAD and git
+  fetch); uploads are judged by Jev per path, then by the human per host.
+- Lead → worker messages go only through `herdr agent prompt` to a live
+  agent; nothing is ever typed into a pane shell.
 
 ## Toolchains
 
@@ -81,5 +87,9 @@ dailyBudgetUsd,minConfidence}`, `keepFailedWorkers`.
 2. Lead → worker messages use `herdr agent prompt`; not yet exercised
    against a live Herdr.
 3. The Lead itself still runs Pi's tools on the host (it writes specs and
-   tickets); optionally sandbox it with the same tools.
+   tickets), and worker reports reach it as text written by a sandboxed model.
+   Reports are fenced as untrusted and the guidance forbids following them,
+   but that is prompt-level only: sandboxing the Lead's own tools, or
+   confirming its bash/write calls while a report is in context, would close
+   this channel.
 4. Jev thresholds are defaults, not calibrated; collect real judgments and tune.

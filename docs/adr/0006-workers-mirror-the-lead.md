@@ -17,7 +17,10 @@ Decided 2026-09-22.
 2. **A worker is a Pi like the Lead.** Same package skills, same global skills
    and prompts, the repository's `AGENTS.md`, and, when the Lead trusts the
    project, the repository's `.agents/skills`, `.pi/skills`, `.pi/prompts` and
-   `.pi/APPEND_SYSTEM.md` (read from the worker's clone). Code is the
+   `.pi/APPEND_SYSTEM.md`. These are copied out of the clone right after
+   cloning, before any guest runs (regular files only, no symlinks), and Pi's
+   cwd and the tab's shell sit outside the clone: host processes never read
+   guest-writable files or run git in the clone. Code is the
    exception: project and global extensions would run on the host, outside the
    VM, so workers load only the PI Lead worker extension and Herdr's own Pi
    integration.

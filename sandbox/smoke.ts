@@ -29,14 +29,14 @@ const allowRequest = createEgressPolicy({
   judge: { egress: async () => "deny" },
   log: (line) => decisions.push(line),
 });
-let started: Promise<{ vm: VM; shellPath: string; env: Record<string, string> }> | undefined;
+let started: Promise<{ vm: VM; shellPath: string; env: Record<string, string>; root: string }> | undefined;
 const ensureVm = () =>
   (started ??= createSandboxVm({
     label: "pi-lead smoke",
     sandbox: { ...DEFAULT_CONFIG.sandbox, ...(process.env.PI_LEAD_IMAGE ? { image: process.env.PI_LEAD_IMAGE } : {}) },
     mounts: { [GUEST_WORKSPACE]: { host: clone }, [GUEST_MISE_DIR]: { host: cache, readonly: true } },
     allowRequest,
-  }).then((vm) => ({ vm, shellPath: "/bin/bash", env: guestEnv(true) })));
+  }).then((vm) => ({ vm, shellPath: "/bin/bash", env: guestEnv(true), root: clone })));
 registerSandboxTools(pi, clone, ensureVm);
 
 const run = async (name: string, params: unknown) => {

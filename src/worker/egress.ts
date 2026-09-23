@@ -1,5 +1,16 @@
 import type { Judge } from "../jev.ts";
 
+/**
+ * Allowlisted hosts are trusted for downloads only: GET/HEAD, plus the POST
+ * git uses to fetch over smart HTTP. Anything that can upload (a push, a
+ * publish, a paste) goes to Jev and the human even on an allowlisted host.
+ */
+export function isDownload(method: string, url: URL): boolean {
+  const verb = method.toUpperCase();
+  if (verb === "GET" || verb === "HEAD") return true;
+  return verb === "POST" && url.pathname.endsWith("/git-upload-pack");
+}
+
 export function hostMatches(host: string, patterns: readonly string[]): boolean {
   const hostname = host.toLowerCase().replace(/:\d+$/, "");
   return patterns.some((pattern) => {
@@ -22,15 +33,15 @@ export function createEgressPolicy(options: {
 }): (request: { method: string; url: string }) => Promise<boolean> {
   const remembered = new Map<string, boolean>();
   return async ({ method, url }) => {
-    let host: string;
+    let parsed: URL;
     try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
-      host = parsed.host;
+      parsed = new URL(url);
     } catch {
       return false;
     }
-    if (hostMatches(host, options.allowedHosts)) return true;
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    const host = parsed.host;
+    if (hostMatches(host, options.allowedHosts) && isDownload(method, parsed)) return true;
     const key = `${method} ${host}`;
     const known = remembered.get(key);
     if (known !== undefined) return known;
@@ -40,11 +51,12 @@ export function createEgressPolicy(options: {
     if (decision === "ask") {
       allowed = options.askHuman ? await options.askHuman(`Allow the sandbox to ${method} ${host}?`) : false;
       options.log?.(`egress ${key}: ${allowed ? "allowed" : "denied"} by human`);
+      // Only a human answer covers the whole host; Jev caches per path itself.
+      if (options.askHuman) remembered.set(key, allowed);
     } else {
       allowed = decision === "allow";
-      options.log?.(`egress ${key}: ${decision} by Jev`);
+      options.log?.(`egress ${key}${parsed.pathname}: ${decision} by Jev`);
     }
-    remembered.set(key, allowed);
     return allowed;
   };
 }

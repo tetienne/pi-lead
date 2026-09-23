@@ -339,15 +339,19 @@ function createGondolinBashOps(vm: VM, localCwd: string, shellPath: string, gues
 	};
 }
 
+/** A running sandbox; `root` is the host directory mounted at /workspace. */
+export type SandboxHandle = { vm: VM; shellPath: string; env: Record<string, string>; root: string };
+
 /**
  * Re-register Pi's file and shell tools so every model-driven action runs in
  * the VM. The worker is started with `--no-builtin-tools`, so these are the
- * only tools of those names.
+ * only tools of those names. `localCwd` (Pi's own cwd) only shapes the tool
+ * definitions; paths are mapped against the sandbox's `root`.
  */
 export function registerSandboxTools(
   pi: ExtensionAPI,
   localCwd: string,
-  ensureVm: (ctx?: ExtensionContext) => Promise<{ vm: VM; shellPath: string; env: Record<string, string> }>,
+  ensureVm: (ctx?: ExtensionContext) => Promise<SandboxHandle>,
 ): void {
   const templates = {
     read: createReadTool(localCwd),
@@ -362,55 +366,55 @@ export function registerSandboxTools(
   pi.registerTool({
     ...templates.read,
     async execute(id, params, signal, onUpdate, ctx) {
-      const { vm } = await ensureVm(ctx);
-      return createReadTool(GUEST_WORKSPACE, { operations: createGondolinReadOps(vm, localCwd) }).execute(id, params, signal, onUpdate);
+      const { vm, root } = await ensureVm(ctx);
+      return createReadTool(GUEST_WORKSPACE, { operations: createGondolinReadOps(vm, root) }).execute(id, params, signal, onUpdate);
     },
   });
   pi.registerTool({
     ...templates.write,
     async execute(id, params, signal, onUpdate, ctx) {
-      const { vm } = await ensureVm(ctx);
-      return createWriteTool(GUEST_WORKSPACE, { operations: createGondolinWriteOps(vm, localCwd) }).execute(id, params, signal, onUpdate);
+      const { vm, root } = await ensureVm(ctx);
+      return createWriteTool(GUEST_WORKSPACE, { operations: createGondolinWriteOps(vm, root) }).execute(id, params, signal, onUpdate);
     },
   });
   pi.registerTool({
     ...templates.edit,
     async execute(id, params, signal, onUpdate, ctx) {
-      const { vm } = await ensureVm(ctx);
-      return createEditTool(GUEST_WORKSPACE, { operations: createGondolinEditOps(vm, localCwd) }).execute(id, params, signal, onUpdate);
+      const { vm, root } = await ensureVm(ctx);
+      return createEditTool(GUEST_WORKSPACE, { operations: createGondolinEditOps(vm, root) }).execute(id, params, signal, onUpdate);
     },
   });
   pi.registerTool({
     ...templates.bash,
     async execute(id, params, signal, onUpdate, ctx) {
-      const { vm, shellPath, env } = await ensureVm(ctx);
-      return createBashTool(GUEST_WORKSPACE, { operations: createGondolinBashOps(vm, localCwd, shellPath, env) }).execute(id, params, signal, onUpdate);
+      const { vm, shellPath, env, root } = await ensureVm(ctx);
+      return createBashTool(GUEST_WORKSPACE, { operations: createGondolinBashOps(vm, root, shellPath, env) }).execute(id, params, signal, onUpdate);
     },
   });
   pi.registerTool({
     ...templates.ls,
     async execute(id, params, signal, onUpdate, ctx) {
-      const { vm } = await ensureVm(ctx);
-      return createLsTool(GUEST_WORKSPACE, { operations: createGondolinLsOps(vm, localCwd) }).execute(id, params, signal, onUpdate);
+      const { vm, root } = await ensureVm(ctx);
+      return createLsTool(GUEST_WORKSPACE, { operations: createGondolinLsOps(vm, root) }).execute(id, params, signal, onUpdate);
     },
   });
   pi.registerTool({
     ...templates.find,
     async execute(id, params, signal, onUpdate, ctx) {
-      const { vm } = await ensureVm(ctx);
-      return createFindTool(GUEST_WORKSPACE, { operations: createGondolinFindOps(vm, localCwd) }).execute(id, params, signal, onUpdate);
+      const { vm, root } = await ensureVm(ctx);
+      return createFindTool(GUEST_WORKSPACE, { operations: createGondolinFindOps(vm, root) }).execute(id, params, signal, onUpdate);
     },
   });
   pi.registerTool({
     ...templates.grep,
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { vm } = await ensureVm(ctx);
-      return executeGondolinGrep(vm, localCwd, params, signal);
+      const { vm, root } = await ensureVm(ctx);
+      return executeGondolinGrep(vm, root, params, signal);
     },
   });
 
   pi.on("user_bash", async (_event, ctx) => {
-    const { vm, shellPath, env } = await ensureVm(ctx);
-    return { operations: createGondolinBashOps(vm, localCwd, shellPath, env) };
+    const { vm, shellPath, env, root } = await ensureVm(ctx);
+    return { operations: createGondolinBashOps(vm, root, shellPath, env) };
   });
 }

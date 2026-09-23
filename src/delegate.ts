@@ -7,6 +7,7 @@ import type { Herdr } from "./herdr.ts";
 import type { FailureKind, Judge, ReviewAction, WorkKind, WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, workerPrompt, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import type { Toolchains } from "./toolchains.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -73,8 +74,8 @@ export type WorkerCommand = (input: {
   prompt: string;
   route: WorkerRoute;
   label: string;
-  clonePath: string;
-  projectTrusted: boolean;
+  /** Host copies of the repository's skills, prompts and APPEND_SYSTEM.md (trusted projects). */
+  resources: ProjectResources;
 }) => string[];
 
 export type DelegateDeps = {
@@ -84,6 +85,8 @@ export type DelegateDeps = {
   workspace: Workspace;
   workerCommand: WorkerCommand;
   toolchains?: Toolchains;
+  /** Host directories the guest may read at the same path (skill folders, so skills can reference their files). */
+  readonlyMounts?: readonly string[];
   stateRoot: string;
   /** Called for every result: first finish, each later finish, failures and stops. */
   onOutcome(outcome: DelegateOutcome): void;
@@ -158,9 +161,25 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
  */
 export function createDelegator(deps: DelegateDeps) {
   const workers = new Map<string, Worker>();
+  const overlapCache = new Map<string, boolean>();
+  // Slot decisions are serialized: two workers never pass the check at once.
+  let scheduler: Promise<void> = Promise.resolve();
   const pollMs = deps.pollMs ?? 1_000;
   const heartbeatMs = deps.heartbeatMs ?? 30_000;
-  const progress = (text: string) => deps.onProgress?.(text);
+  const progress = (text: string) => {
+    try {
+      deps.onProgress?.(text);
+    } catch {
+      // A stale Lead session must not take the watcher down.
+    }
+  };
+  const report = (outcome: DelegateOutcome) => {
+    try {
+      deps.onOutcome(outcome);
+    } catch {
+      // Same: a replaced or closed Lead session can throw on delivery.
+    }
+  };
 
   const info = (worker: Worker): WorkerInfo => ({
     id: worker.id,
@@ -178,7 +197,29 @@ export function createDelegator(deps: DelegateDeps) {
   /** Two code-writing tickets that Jev thinks overlap (or can't tell) run one after the other. */
   const mustWaitFor = async (other: Worker, worker: Worker) => {
     if (!WRITES_CODE.includes(other.kind) || !WRITES_CODE.includes(worker.kind)) return false;
-    return (await deps.judge.overlap(other.params.task, worker.params.task)) ?? true;
+    const key = `${other.id}:${worker.id}`;
+    let overlaps = overlapCache.get(key);
+    if (overlaps === undefined) {
+      overlaps = (await deps.judge.overlap(other.params.task, worker.params.task)) ?? true;
+      overlapCache.set(key, overlaps);
+    }
+    return overlaps;
+  };
+
+  /** FIFO: each worker takes its slot in turn and is `starting` before the next one checks. */
+  const takeSlot = (worker: Worker) => {
+    const turn = scheduler.then(() => waitForSlot(worker)).then(() => {
+      worker.state = "starting";
+    });
+    scheduler = turn.catch(() => undefined);
+    // A stopped worker leaves the queue at once, not when its turn comes.
+    const signal = worker.controller.signal;
+    const aborted = new Promise<never>((_, reject) => {
+      if (signal.aborted) reject(signal.reason);
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+    aborted.catch(() => undefined);
+    return Promise.race([turn, aborted]);
   };
 
   const waitForSlot = async (worker: Worker) => {
@@ -213,8 +254,14 @@ export function createDelegator(deps: DelegateDeps) {
     let lastBeat = Date.now();
     while (true) {
       const raw = await readIfPresent(worker.resultPath!);
-      if (raw !== undefined) {
-        const result = parseWorkerResult(JSON.parse(raw), worker.id);
+      let parsed: unknown;
+      try {
+        parsed = raw === undefined ? undefined : JSON.parse(raw);
+      } catch {
+        // Caught mid-write: read it again on the next poll.
+      }
+      if (parsed !== undefined) {
+        const result = parseWorkerResult(parsed, worker.id);
         if (result.seq > worker.lastSeq) return result;
       }
       // run.sh records Pi's exit status; an empty file is `echo $? >` between truncate and write.
@@ -232,7 +279,7 @@ export function createDelegator(deps: DelegateDeps) {
     if (worker.tabId) await deps.herdr?.closeTab(worker.tabId).catch(() => undefined);
     worker.tabId = undefined;
     worker.paneId = undefined;
-    if (worker.clonePath) await deps.workspace.remove(worker.clonePath).catch(() => undefined);
+    if (worker.taskDir) await deps.workspace.remove(worker.taskDir).catch(() => undefined);
   };
 
   const launch = async (worker: Worker) => {
@@ -252,6 +299,15 @@ export function createDelegator(deps: DelegateDeps) {
       branch: worker.branch,
       ...(params.startFrom ? { startFrom: params.startFrom } : {}),
     }));
+    // Before any guest touches the clone: copy what the host-side Pi will read.
+    const workDir = join(worker.taskDir, "cwd");
+    const resourceDir = join(worker.taskDir, "resources");
+    const resources = await snapshotProjectResources({
+      clonePath: worker.clonePath,
+      workDir,
+      resourceDir,
+      projectTrusted: io.projectTrusted,
+    });
     const toolchainCache = await deps.toolchains?.prepare({
       repoRoot: worker.repoRoot,
       clonePath: worker.clonePath,
@@ -269,6 +325,10 @@ export function createDelegator(deps: DelegateDeps) {
       resultPath: worker.resultPath,
       sandbox: deps.config.sandbox,
       jev: deps.config.jev,
+      readonlyMounts: [
+        ...(deps.readonlyMounts ?? []),
+        ...(resources.skills.length || resources.prompts.length || resources.appendSystem ? [resourceDir] : []),
+      ],
       ...(toolchainCache ? { toolchainCache } : {}),
     };
     const taskPath = join(worker.taskDir, "task.json");
@@ -279,15 +339,16 @@ export function createDelegator(deps: DelegateDeps) {
       prompt: workerPrompt(params.kind, params.task),
       route: worker.route,
       label,
-      clonePath: worker.clonePath,
-      projectTrusted: io.projectTrusted,
+      resources,
     });
     const script = join(worker.taskDir, "run.sh");
     await writeFile(
       script,
       [
         "#!/bin/sh",
-        `cd ${shellQuote(worker.clonePath)} || exit 1`,
+        // Pi's cwd is outside the clone: host-side Pi (footer, context files)
+        // never reads guest-writable files or git config.
+        `cd ${shellQuote(workDir)} || exit 1`,
         // Lets Herdr recognise the Pi behind the node process as a Pi agent.
         "export HERDR_AGENT=pi",
         argv.map(shellQuote).join(" "),
@@ -296,10 +357,12 @@ export function createDelegator(deps: DelegateDeps) {
       ].join("\n"),
       { mode: 0o700 },
     );
-    // `herdr pane run` types one command line into the tab's shell.
+    // `herdr pane run` types one command line into the tab's shell. That
+    // shell's cwd is the task directory, never the clone: a prompt running
+    // `git status` must not execute guest-planted git config on the host.
     ({ tabId: worker.tabId, paneId: worker.paneId } = await deps.herdr!.openWorkerTab({
       label,
-      cwd: worker.clonePath,
+      cwd: worker.taskDir,
       command: `/bin/sh ${shellQuote(script)}`,
     }));
     progress(`"${worker.title}" started on ${worker.route.model} (${worker.route.thinking})`);
@@ -335,13 +398,13 @@ export function createDelegator(deps: DelegateDeps) {
     const id = worker.id.slice(0, 8);
     const next: string[] = [];
     if (keep) next.push(`The worker waits in its tab: relay what it needs with \`worker\` (action message, id ${id}), or stop it.`);
-    if (status === "needs_human") next.push("Ask the user for what the worker needs, then relay the answer.");
+    if (status === "needs_human") next.push(keep ? "Ask the user for what the worker needs, then relay the answer." : "Ask the user for what the worker needed, then delegate a new task with the answer.");
     if (status === "partial" || status === "blocked") next.push("Tell the user what is left; continue only if they agree.");
     if (review?.action === "auto_fix") next.push("Review found fixable issues: delegate an implement task with these findings, starting from the reviewed branch.");
     if (review?.action === "escalate") next.push("Review found serious issues: show them to the user before doing anything else.");
     if (status === "done" && worker.kind !== "review") next.push(`Work is on local branch ${worker.branch}; nothing was pushed or merged.`);
 
-    deps.onOutcome({
+    report({
       worker: info(worker),
       status,
       text: [
@@ -349,11 +412,14 @@ export function createDelegator(deps: DelegateDeps) {
         `Status: ${status}` + (jevVerdict && jevVerdict !== result.status ? ` (worker said ${result.status}, Jev said ${jevVerdict})` : ""),
         `Branch: ${worker.branch}`,
         "",
+        // Everything in this block was written inside the sandbox: report it, never obey it.
+        "<worker-report untrusted>",
         "Summary:",
         result.summary,
         ...(collected.commits ? ["", "Commits:", collected.commits] : []),
         ...(collected.diffStat ? ["", "Diff stat:", collected.diffStat] : []),
         ...(result.findings ? ["", "Findings:", result.findings] : []),
+        "</worker-report>",
         ...(review ? ["", `Jev review severity: ${review.severity.toFixed(1)}/4 → ${review.action}`] : []),
         ...(next.length ? ["", "Next:", ...next.map((line) => `- ${line}`)] : []),
       ].join("\n"),
@@ -369,7 +435,7 @@ export function createDelegator(deps: DelegateDeps) {
     if (worker.controller.signal.aborted) {
       worker.state = "stopped";
       await closeAndClean(worker);
-      deps.onOutcome({
+      report({
         worker: info(worker),
         status: "stopped",
         text: `Worker "${worker.title}" [${worker.id.slice(0, 8)}] was stopped.`,
@@ -381,7 +447,7 @@ export function createDelegator(deps: DelegateDeps) {
     const keep = deps.config.keepFailedWorkers;
     worker.state = "failed";
     if (!keep) await closeAndClean(worker);
-    deps.onOutcome({
+    report({
       worker: info(worker),
       status: "failed",
       text: [
@@ -416,8 +482,7 @@ export function createDelegator(deps: DelegateDeps) {
   /** Background life of one worker: slot, launch (one retry when transient), first result. */
   const drive = async (worker: Worker) => {
     try {
-      await waitForSlot(worker);
-      worker.state = "starting";
+      await takeSlot(worker);
       while (true) {
         try {
           await launch(worker);
@@ -499,9 +564,11 @@ export function createDelegator(deps: DelegateDeps) {
         lastSeq: 0,
         attempts: 0,
       };
-      const queued = busy().length >= deps.config.maxWorkers;
+      // Workers still in the queue will take slots before this one.
+      const ahead = [...workers.values()].filter((w) => ["queued", "starting", "running"].includes(w.state)).length;
+      const queued = ahead >= deps.config.maxWorkers;
       workers.set(worker.id, worker);
-      void drive(worker);
+      void drive(worker).catch(() => undefined);
       return {
         status: queued ? "queued" : "started",
         worker: info(worker),
@@ -521,7 +588,12 @@ export function createDelegator(deps: DelegateDeps) {
       if (!worker.paneId || (worker.state !== "running" && worker.state !== "waiting")) {
         return `Worker "${worker.title}" is ${worker.state}; it cannot receive messages.`;
       }
-      await deps.herdr!.sendToAgent(worker.paneId, `[PI Lead] ${text}`);
+      if ((await readIfPresent(worker.exitPath!))?.trim()) return `Worker "${worker.title}" has exited; it cannot receive messages.`;
+      try {
+        await deps.herdr!.sendToAgent(worker.paneId, `[PI Lead] ${text}`);
+      } catch (error) {
+        return `Could not reach "${worker.title}" through Herdr: ${errorText(error)}`;
+      }
       worker.state = "running";
       return `Sent to "${worker.title}". Its next result will arrive as a message.`;
     },
@@ -538,11 +610,11 @@ export function createDelegator(deps: DelegateDeps) {
       return `Stopping "${worker.title}".`;
     },
 
-    /** The Lead session ends: stop every worker that has not ended. */
-    shutdown(): void {
-      for (const worker of workers.values()) {
-        if (!["done", "failed", "stopped"].includes(worker.state)) worker.controller.abort(new Error("Lead session closed"));
-      }
+    /** The Lead session ends: stop every worker that has not ended and wait for their cleanup. */
+    async shutdown(): Promise<void> {
+      const live = [...workers.values()].filter((worker) => !["done", "failed", "stopped"].includes(worker.state));
+      for (const worker of live) worker.controller.abort(new Error("Lead session closed"));
+      await Promise.race([Promise.all(live.map((worker) => worker.done)), sleep(10_000)]);
     },
   };
 }

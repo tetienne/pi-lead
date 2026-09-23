@@ -77,7 +77,9 @@ pi install -l git:github.com/tetienne/pi-lead@v0.2.0
 ## Configure
 
 `~/.pi/agent/pi-lead.json` (a trusted project can override it in
-`.pi/pi-lead.json`). Everything is optional:
+`.pi/pi-lead.json`). Only `sandbox.image` is required in practice: Gondolin's
+default image has no git, so workers refuse to start without the image built
+above. Everything else is optional:
 
 ```json
 {
@@ -94,8 +96,9 @@ pi install -l git:github.com/tetienne/pi-lead@v0.2.0
 ```
 
 A tier without `model` uses the Lead's current model with that tier's
-thinking level. Hosts outside `allowedHosts` are judged by Jev per request;
-when Jev is unsure the worker tab asks you.
+thinking level. `allowedHosts` are trusted for downloads only (GET/HEAD and
+git fetch); any other request, including uploads to an allowlisted host, is
+judged by Jev per path, and when Jev is unsure the worker tab asks you.
 
 ## Develop
 

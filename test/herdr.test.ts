@@ -30,7 +30,7 @@ test("the Lead's workspace comes from its own pane id", () => {
   assert.equal(createHerdrCli({}), undefined, "outside Herdr there is no client");
 });
 
-test("tabs open without focus, and messages fall back to typing when no agent is detected", async () => {
+test("tabs open without focus, and messages never fall back to typing into the pane", async () => {
   const { dir, calls } = await fakeHerdrBinary();
   const previous = process.env.PATH;
   process.env.PATH = `${dir}:${previous}`;
@@ -40,15 +40,15 @@ test("tabs open without focus, and messages fall back to typing when no agent is
       tabId: "w1:t2",
       paneId: "w1:p3",
     });
-    await herdr.sendToAgent("w1:p3", "[PI Lead] use ISO 8601\nthanks");
+    // Not detected as an agent (e.g. Pi exited, the pane is a shell): refuse rather than type.
+    await assert.rejects(herdr.sendToAgent("w1:p3", "[PI Lead] $(rm -rf ~)"));
     await herdr.closeTab("w1:t2");
     assert.deepEqual(await calls(), [
       "tab create --workspace w1 --cwd /tmp --label lead: x --no-focus",
       "pane run w1:p3 /bin/sh '/tmp/run.sh'",
-      "agent prompt w1:p3 [PI Lead] use ISO 8601\nthanks",
-      "pane run w1:p3 [PI Lead] use ISO 8601 thanks",
+      "agent prompt w1:p3 [PI Lead] $(rm -rf ~)",
       "tab close w1:t2",
-    ].flatMap((line) => line.split("\n")));
+    ]);
   } finally {
     process.env.PATH = previous;
   }

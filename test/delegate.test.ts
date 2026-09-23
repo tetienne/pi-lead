@@ -280,3 +280,68 @@ test("the launch script and the task carry the toolchain cache and Herdr hint", 
   assert.equal(seen.task?.toolchainCache, "/cache/project");
   assert.match(seen.script!, /export HERDR_AGENT=pi/);
 });
+
+test("a Lead that throws on delivery does not take the watcher down", async (t) => {
+  const log: string[] = [];
+  const delegator = createDelegator({
+    config: DEFAULT_CONFIG,
+    judge: noJudge,
+    herdr: fakeHerdr(log, [{ status: "done" }]),
+    workspace: fakeWorkspace(log),
+    workerCommand: ({ taskPath }) => ["pi", "--pi-lead-task", taskPath],
+    stateRoot: await mkdtemp(join(tmpdir(), "pi-lead-state-")),
+    onOutcome: () => {
+      throw new Error("stale session");
+    },
+    pollMs: 2,
+    heartbeatMs: 20,
+  });
+  t.after(() => delegator.shutdown());
+  await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
+  for (let i = 0; i < 100 && delegator.list()[0]!.state !== "done"; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(delegator.list()[0]!.state, "done");
+  assert.ok(log.includes("close tab-1"), "cleanup still ran");
+});
+
+test("messages are refused once the worker's Pi has exited", async (t) => {
+  const seen: { task?: WorkerTask; script?: string } = {};
+  const { delegator, log, nextOutcome } = await setup(t, { seen, replies: [{ status: "needs_human" }] });
+  const first = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Q", task: "y" }, io);
+  assert.ok(started.status === "started");
+  await first;
+  const exitPath = /echo \$\? > '([^']+)'/.exec(seen.script!)![1]!;
+  await writeFile(exitPath, "0\n");
+  assert.match(await delegator.message("q", "go on"), /has exited/);
+  assert.ok(!log.some((line) => line.startsWith("send")), "nothing is typed anywhere");
+});
+
+test("shutdown stops live workers and waits for their cleanup", async (t) => {
+  const { delegator, log, outcomes } = await setup(t, { replies: ["silent"] });
+  await delegator.start({ kind: "research", title: "Long", task: "q" }, io);
+  for (let i = 0; i < 100 && !log.some((line) => line.startsWith("open")); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  await delegator.shutdown();
+  assert.ok(log.includes("close tab-1"));
+  assert.equal(outcomes.at(-1)?.status, "stopped");
+});
+
+test("queued overlapping tickets start one at a time, in order", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", delayMs: 20 }], judge: { overlap: async () => true } });
+  const all = [nextOutcome(), nextOutcome(), nextOutcome()];
+  for (const title of ["A", "B", "C"]) await delegator.start({ kind: "implement", title, task: title }, io);
+  await Promise.all(all);
+  const opens = log.filter((line) => line.startsWith("open") || line.startsWith("close"));
+  assert.deepEqual(opens, ["open lead: A", "close tab-1", "open lead: B", "close tab-2", "open lead: C", "close tab-3"]);
+});
+
+test("a queued worker can be stopped before its turn", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, { replies: ["silent"], maxWorkers: 1 });
+  await delegator.start({ kind: "research", title: "First", task: "a" }, io);
+  const queued = await delegator.start({ kind: "research", title: "Second", task: "b" }, io);
+  assert.equal(queued.status, "queued");
+  const stopped = nextOutcome();
+  await delegator.stop("second");
+  const outcome = await stopped;
+  assert.equal(outcome.worker.title, "Second");
+  assert.equal(outcome.status, "stopped");
+});

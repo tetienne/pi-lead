@@ -19,6 +19,8 @@ export type WorkerTask = {
   jev: LeadConfig["jev"];
   /** Host directory with the project's mise toolchains, mounted read-only at /opt/mise. */
   toolchainCache?: string;
+  /** Host directories mounted read-only at the same path in the guest (skill folders). */
+  readonlyMounts: string[];
 };
 
 /** Written by the worker's `finish` tool. */
