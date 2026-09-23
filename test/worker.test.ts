@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
 import worker from "../src/worker/extension.ts";
-import { isTestCommand, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
+import { isTestCommand, OUTPUT_TAIL, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
 
 test("test-like commands are recognised by a heuristic", () => {
   for (const command of ["npm test", "npm run check", "pnpm typecheck", "npx vitest run", "cd api && pytest -q", "cargo test -p core", "go test ./...", "mix test", "bundle exec rspec", "node --test test/*.test.ts", "python -m unittest"]) {
@@ -44,6 +44,29 @@ test("the host-side bash wrapper reports each command's exit code, -1 when it di
   await assert.rejects(bash.execute("2", { command: "npm test -- fail" }, undefined, undefined, {}));
   await assert.rejects(bash.execute("3", { command: "npm test -- hang" }, undefined, undefined, {}));
   assert.deepEqual(seen, [["npm test", 0], ["npm test -- fail", 1], ["npm test -- hang", -1]]);
+});
+
+test("the bash wrapper hands the listener a clipped tail of the output", async () => {
+  const vm: any = {
+    exec: () =>
+      Object.assign(Promise.resolve({ exitCode: 2 }), {
+        output: async function* () {
+          yield { data: Buffer.from("x".repeat(1_500)) };
+          yield { data: Buffer.from("\nError: the end") };
+        },
+      }),
+  };
+  const tools = new Map<string, any>();
+  const tails: string[] = [];
+  registerSandboxTools(
+    { registerTool: (tool: any) => tools.set(tool.name, tool), on: () => undefined } as any,
+    "/host/clone",
+    async () => ({ vm, shellPath: "/bin/sh", env: {}, root: "/host/clone" }),
+    (_command, _exitCode, tail) => void tails.push(tail),
+  );
+  await assert.rejects(tools.get("bash").execute("1", { command: "make" }, undefined, undefined, {}));
+  assert.equal(tails[0]!.length, OUTPUT_TAIL);
+  assert.ok(tails[0]!.endsWith("\nError: the end"));
 });
 
 test("a worker result may carry the last test run", () => {

@@ -247,6 +247,30 @@ test("egress decisions are banded and cached per method, host and path", async (
   assert.equal(await deny.egress({ task: "t", method: "POST", url: "https://paste.example/x" }), "deny");
 });
 
+test("the stuck judgment is banded at 0.2/0.8 and sees the ticket, commands, exit codes and output tails", async () => {
+  const calls: any[] = [];
+  const runs = [
+    { command: "npm test", exitCode: 1, output: "FAIL\n" + "y".repeat(2_000) },
+    { command: "npm test", exitCode: -1 },
+  ];
+  const yes = createJudge({ ask: fakeAsk({ stuck: { noul: 0.9 } }, calls), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
+  assert.equal(await yes.stuck({ task: "t".repeat(5_000), runs }), true);
+  const { state, questions } = calls[0];
+  assert.ok(state.ticket.length < 3_100);
+  assert.equal(state.recentCommands.length, 2);
+  assert.equal(state.recentCommands[1].exitCode, -1);
+  assert.equal(state.recentCommands[1].outputTail, undefined);
+  assert.ok(state.recentCommands[0].outputTail.length < 1_100);
+  assert.match(JSON.stringify(questions.stuck), /repeating the same failed approach/);
+
+  for (const [probability, expected] of [[0.1, false], [0.5, undefined], [0.85, true]] as const) {
+    const judge = createJudge({ ask: fakeAsk({ stuck: { noul: probability } }), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
+    assert.equal(await judge.stuck({ task: "t", runs }), expected, String(probability));
+  }
+  const noKey = createJudge({ config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
+  assert.equal(await noKey.stuck({ task: "t", runs }), undefined);
+});
+
 test("the daily budget stops calls once spent, and failures fall back", async () => {
   const ledger = await ledgerIn();
   await ledger.charge(1);

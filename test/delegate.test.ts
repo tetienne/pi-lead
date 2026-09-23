@@ -29,6 +29,7 @@ const noJudge: Judge = {
   reviewSeverity: async () => undefined,
   failureKind: async () => undefined,
   overlap: async () => undefined,
+  stuck: async () => undefined,
 };
 
 type Log = string[];
@@ -421,6 +422,7 @@ test("the launch script and the task carry the toolchain cache and Herdr hint", 
   await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
   await pending;
   assert.equal(seen.task?.toolchainCache, "/cache/project");
+  assert.equal(seen.task?.stuckDetection, true);
   assert.match(seen.script!, /export HERDR_AGENT=pi/);
 });
 

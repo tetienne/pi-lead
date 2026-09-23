@@ -126,8 +126,13 @@ function createGondolinFindOps(vm: VM, localCwd: string): FindOperations {
 	};
 }
 
-/** Called with each shell command and its exit code, -1 when it did not complete. */
-export type CommandListener = (command: string, exitCode: number) => void;
+/**
+ * Called with each shell command, its exit code (-1 when it did not complete)
+ * and the last `OUTPUT_TAIL` characters of its output.
+ */
+export type CommandListener = (command: string, exitCode: number, outputTail: string) => void;
+
+export const OUTPUT_TAIL = 1_000;
 
 /** Env assignments and wrappers that may precede a test runner in a shell segment. */
 const RUNNER_PREFIX = String.raw`^(?:\w+=\S*\s+)*(?:(?:npx|bunx|uvx|env|time|timeout\s+\S+|(?:pnpm|bundle|poetry|uv|pipenv|yarn)\s+(?:exec|run))\s+)*`;
@@ -178,6 +183,8 @@ function createGondolinBashOps(
 						}, timeout * 1000)
 					: undefined;
 
+			let tail = "";
+			const decoder = new TextDecoder();
 			try {
 				const proc = vm.exec([shellPath, "-lc", command], {
 					cwd: guestCwd,
@@ -186,12 +193,15 @@ function createGondolinBashOps(
 					stdout: "pipe",
 					stderr: "pipe",
 				});
-				for await (const chunk of proc.output()) onData(chunk.data);
+				for await (const chunk of proc.output()) {
+					onData(chunk.data);
+					if (onCommand) tail = (tail + decoder.decode(chunk.data, { stream: true })).slice(-OUTPUT_TAIL);
+				}
 				const result = await proc;
-				onCommand?.(command, result.exitCode);
+				onCommand?.(command, result.exitCode, tail);
 				return { exitCode: result.exitCode };
 			} catch (error) {
-				onCommand?.(command, -1);
+				onCommand?.(command, -1, tail);
 				if (signal?.aborted) throw new Error("aborted");
 				if (timedOut) throw new Error(`timeout:${timeout}`);
 				throw error;

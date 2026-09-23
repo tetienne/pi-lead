@@ -65,4 +65,6 @@ test("config merging keeps defaults for unspecified fields", () => {
   assert.deepEqual(config.sandbox.allowedHosts, DEFAULT_CONFIG.sandbox.allowedHosts);
   assert.equal(config.jev.dailyBudgetUsd, 0.5);
   assert.equal(config.jev.model, DEFAULT_CONFIG.jev.model);
+  assert.equal(config.stuckDetection, true);
+  assert.equal(mergeConfig(DEFAULT_CONFIG, { stuckDetection: false }).stuckDetection, false);
 });

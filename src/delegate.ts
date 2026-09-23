@@ -496,6 +496,7 @@ export function createDelegator(deps: DelegateDeps) {
       resultPath: worker.resultPath,
       sandbox,
       jev: deps.config.jev,
+      stuckDetection: deps.config.stuckDetection,
       readonlyMounts: [
         ...(deps.readonlyMounts ?? []),
         ...(resources.skills.length || resources.prompts.length || resources.appendSystem ? [resourceDir] : []),
