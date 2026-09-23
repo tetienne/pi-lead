@@ -2,6 +2,8 @@
   "name": "pi-lead",
   "version": "0.2.0",
   "description": "A Pi package that turns one Pi session into an engineering lead delegating to sandboxed workers.",
+  "license": "MIT",
+  "author": "Thibaut Etienne",
   "type": "module",
   "repository": {
     "type": "git",
@@ -15,7 +17,8 @@
     ".agents/skills/",
     "README.md",
     "src/",
-    "sandbox/"
+    "sandbox/",
+    "LICENSE"
   ],
   "keywords": [
     "pi-package",

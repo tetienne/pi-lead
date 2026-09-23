@@ -143,3 +143,7 @@ Squash-merged pull requests need a conventional title.
 The previous implementation (Gondolin-hosted Pi, ChatGPT-only workers, task
 journals) is in git history before ADR 0005; its research notes under
 `docs/research/` remain valid references.
+
+## License
+
+[MIT](LICENSE) © Thibaut Etienne
