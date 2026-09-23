@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import { DELEGATED_SKILLS } from "../src/guidance.ts";
-import lead, { findHerdrPiExtension, workerCommand } from "../src/lead.ts";
+import lead, { findHerdrPiExtension, skillMounts, workerCommand } from "../src/lead.ts";
 import { parseWorkerResult, workerPrompt } from "../src/protocol.ts";
 
 type Handler = (event: any, ctx?: any) => any;
@@ -68,6 +68,20 @@ test("the Matt skills ship with the package and are discovered", async () => {
   }
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.ok(manifest.files.includes(".agents/skills/"));
+});
+
+test("every non-project skill the Lead loaded is mounted in the guest, once", () => {
+  const skill = (path: string, scope = "user") => ({ name: "x", source: "skill", sourceInfo: { path, scope } }) as any;
+  const [packaged, ...rest] = skillMounts([
+    skill("/home/.pi/agent/vendor/go-skills/go/SKILL.md"),
+    skill("/home/.pi/agent/git/github.com/a/ponytail/skills/ponytail/SKILL.md"),
+    skill("/home/.pi/agent/vendor/go-skills/go/SKILL.md"),
+    skill("/repo/.agents/skills/local/SKILL.md", "project"),
+    { name: "p", source: "prompt", sourceInfo: { path: "/home/prompts/p.md", scope: "user" } } as any,
+  ]);
+  assert.ok(existsSync(join(packaged!, "ask-matt", "SKILL.md")), "the package's own skills come first");
+  assert.deepEqual(rest, ["/home/.pi/agent/vendor/go-skills/go", "/home/.pi/agent/git/github.com/a/ponytail/skills/ponytail"]);
+  assert.deepEqual(skillMounts([skill(join(packaged!, "ask-matt", "SKILL.md"), "temporary")]), [packaged]);
 });
 
 test("workers get the Lead's skills plus host copies of the repo's resources, and no extensions", () => {

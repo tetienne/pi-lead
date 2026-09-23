@@ -1,10 +1,9 @@
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { loadConfig, type LeadConfig } from "./config.ts";
@@ -39,9 +38,19 @@ export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefin
   return existsSync(path) ? path : undefined;
 }
 
-/** Global skill folders, as Pi discovers them for the Lead. */
-export function globalSkillDirs(agentDir = getAgentDir(), home = homedir()): string[] {
-  return [join(agentDir, "skills"), join(home, ".agents", "skills")].filter((dir) => existsSync(dir));
+/**
+ * Folders of every skill Pi loaded for the Lead (settings, packages, global
+ * dirs): the worker's host-side Pi loads the same ones, and its reads run in
+ * the guest. Project skills are left out, workers get host copies of those.
+ */
+export function skillMounts(commands: SlashCommandInfo[]): string[] {
+  const mounts = [SKILLS_DIR];
+  for (const command of commands) {
+    if (command.source !== "skill" || command.sourceInfo.scope === "project") continue;
+    const dir = dirname(command.sourceInfo.path);
+    if (!mounts.some((mount) => dir === mount || dir.startsWith(mount + sep))) mounts.push(dir);
+  }
+  return mounts;
 }
 
 /**
@@ -119,7 +128,7 @@ export default function lead(pi: ExtensionAPI) {
       toolchains: createToolchains({ root: join(agentDir, "pi-lead", "toolchains"), judge }),
       image: workerImage,
       // So a skill's own files (templates, scripts) resolve inside the VM too.
-      readonlyMounts: [SKILLS_DIR, ...globalSkillDirs(agentDir)],
+      readonlyMounts: skillMounts(pi.getCommands()),
       stateRoot: join(agentDir, "pi-lead", "workers"),
       // Each result wakes the Lead, which tells the user and follows "Next".
       onOutcome(outcome) {
