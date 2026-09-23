@@ -36,7 +36,16 @@ export type LeadConfig = {
   };
   /** Keep the Herdr tab and clone of a worker that did not finish cleanly. */
   keepFailedWorkers: boolean;
+  /**
+   * `confirm`: once a worker report is in the conversation, every host tool
+   * call of the Lead that can execute or write (bash, write, edit…) needs your
+   * confirmation until you send a message yourself (see report-guard.ts).
+   * Only the global config can turn it `off`.
+   */
+  leadGuard: LeadGuardMode;
 };
+
+export type LeadGuardMode = "confirm" | "off";
 
 export const DEFAULT_CONFIG: LeadConfig = {
   tiers: {
@@ -64,6 +73,7 @@ export const DEFAULT_CONFIG: LeadConfig = {
     minConfidence: 0.7,
   },
   keepFailedWorkers: true,
+  leadGuard: "confirm",
 };
 
 type PartialConfig = {
@@ -72,6 +82,7 @@ type PartialConfig = {
   sandbox?: Partial<LeadConfig["sandbox"]>;
   jev?: Partial<LeadConfig["jev"]>;
   keepFailedWorkers?: boolean;
+  leadGuard?: LeadGuardMode;
 };
 
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
@@ -85,6 +96,7 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     sandbox: { ...base.sandbox, ...override.sandbox },
     jev: { ...base.jev, ...override.jev },
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
+    leadGuard: override.leadGuard === "off" || override.leadGuard === "confirm" ? override.leadGuard : base.leadGuard,
   };
 }
 
@@ -100,18 +112,23 @@ async function readJson(path: string): Promise<PartialConfig | undefined> {
 /**
  * Global `<agent dir>/pi-lead.json` (`~/.pi/agent` unless PI_CODING_AGENT_DIR
  * moves it), then project `.pi/pi-lead.json`. The project file can widen
- * egress, so it is read only for trusted projects.
+ * egress, so it is read only for trusted projects, and it can never turn the
+ * Lead guard off: a repository (or a worker's branch merged into it) must not
+ * be able to disable the check that protects the host from worker reports.
  */
 export async function loadConfig(
   cwd: string,
   options: { projectTrusted: boolean; agentDir?: string },
 ): Promise<LeadConfig> {
   let config = DEFAULT_CONFIG;
-  const paths = [join(options.agentDir ?? join(homedir(), ".pi", "agent"), "pi-lead.json")];
+  const globalPath = join(options.agentDir ?? join(homedir(), ".pi", "agent"), "pi-lead.json");
+  const paths = [globalPath];
   if (options.projectTrusted) paths.push(join(cwd, ".pi", "pi-lead.json"));
   for (const path of paths) {
     const override = await readJson(path);
-    if (override) config = mergeConfig(config, override);
+    if (!override) continue;
+    if (path !== globalPath) delete override.leadGuard;
+    config = mergeConfig(config, override);
   }
   return config;
 }

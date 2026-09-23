@@ -88,10 +88,17 @@ dailyBudgetUsd,minConfidence}`, `keepFailedWorkers`.
    against a live Herdr.
 3. The Lead itself still runs Pi's tools on the host (it writes specs and
    tickets), and worker reports reach it as text written by a sandboxed model.
-   Reports are fenced as untrusted and the guidance forbids following them,
-   but that is prompt-level only: sandboxing the Lead's own tools, or
-   confirming its bash/write calls while a report is in context, would close
-   this channel.
+   Mitigated deterministically by `src/report-guard.ts` (config `leadGuard`,
+   default `confirm`; only the global config can set `off`): from the moment a
+   `pi-lead-worker` message is in the conversation (seen on `message_end` or
+   in `context`) until the human types a message that reaches the model, every
+   Lead `tool_call` outside `read/ls/find/grep/delegate/worker` — bash,
+   powershell, write, edit, other extensions' tools — needs `ui.confirm`
+   (sanitized preview), and is blocked without a UI. Remaining gaps: an
+   approved call runs unsandboxed; the human can approve a harmful command;
+   read-only tools still let a report steer what the Lead reads into its
+   context; RPC input never counts as the human, so RPC front ends confirm
+   until the session restarts.
 4. Jev thresholds are defaults, not calibrated; collect real judgments and tune.
 5. The worker's `grep` (from Pi's Gondolin example) walks the guest tree from
    the host process: bound the pattern (ReDoS), file sizes and symlink loops,

@@ -12,6 +12,7 @@ import { createDelegator, type Delegator, type WorkerCommand } from "./delegate.
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
 import { createAskJev, createJudge, createLedger } from "./jev.ts";
+import { registerReportGuard } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
 import { gitWorkspace } from "./workspace.ts";
 
@@ -83,6 +84,7 @@ export default function lead(pi: ExtensionAPI) {
   let ui: ExtensionContext["ui"] | undefined;
   let lastProgress = "";
   let closed = false;
+  registerReportGuard(pi);
 
   const status = () => {
     const workers = delegator?.list() ?? [];

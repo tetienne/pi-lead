@@ -32,6 +32,10 @@ you ─► Lead (Pi, your tab)
 - The **Lead** is ordinary Pi plus a short workflow section in its system
   prompt (questions: answer; otherwise follow `ask-matt`) and one tool,
   `delegate`. It never intercepts your messages.
+- **Worker reports are untrusted.** From the moment one reaches the Lead until
+  you reply, every Lead tool call that can execute or write on your machine
+  (bash, write, edit…) asks you first, and is blocked without a UI. Set
+  `"leadGuard": "off"` in the global config to disable it.
 - A **worker** is an interactive Pi session in its own Herdr tab. Its
   `read/write/edit/bash/ls/find/grep` tools run inside a Gondolin micro-VM that
   mounts only a throw-away clone of the repository. The guest never sees your
@@ -91,7 +95,8 @@ above. Everything else is optional:
   "maxWorkers": 2,
   "sandbox": { "image": "pi-lead:latest", "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
   "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
-  "keepFailedWorkers": true
+  "keepFailedWorkers": true,
+  "leadGuard": "confirm"
 }
 ```
 
