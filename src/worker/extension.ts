@@ -6,12 +6,25 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createAskJev, createJudge, createLedger, describeJevProblem } from "../jev.ts";
+import { createAskJev, createJudge, createLedger, describeJevProblem, type WorkerVerdict } from "../jev.ts";
 import { quotaError } from "../quota.ts";
-import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type LastTest, type WorkerResult, type WorkerTask } from "../protocol.ts";
+import { readJsonFile, WORKER_RULES, WORKER_STATUSES, WRITES_CODE, type LastTest, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
 import { isTestCommand, registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
+
+/**
+ * Why a `done` finish is not backed by a passing test run, or undefined when
+ * it is (or needs none). Deterministic: the Lead's Jev verdict comes later.
+ */
+export function unverifiedDone(task: Pick<WorkerTask, "kind" | "steerUnverifiedDone">, status: WorkerVerdict, lastTest: LastTest | undefined): string | undefined {
+  if (status !== "done" || task.steerUnverifiedDone === false || !WRITES_CODE.includes(task.kind)) return undefined;
+  if (lastTest && lastTest.exitCode === 0) return undefined;
+  const why = lastTest
+    ? `the last test run \`${lastTest.command}\` ${lastTest.exitCode === -1 ? "did not complete" : `exited ${lastTest.exitCode}`}`
+    : "no test run was recorded";
+  return `Not finished: you report done but ${why}. Run the project's tests (or the command that verifies the acceptance criteria) and finish again, or finish with status partial and say what is unverified.`;
+}
 
 /**
  * Loaded only into worker Pi processes (`--no-extensions -e`). Pi and this
@@ -29,6 +42,8 @@ export default function worker(pi: ExtensionAPI) {
   let runError: string | undefined;
   /** Evidence for the Lead's verdict, recorded here rather than reported by the model. */
   let lastTest: LastTest | undefined;
+  /** An unverified `done` was already sent back since the last result: the next one goes through. */
+  let steered = false;
 
   const loadTask = async () => {
     if (task) return task;
@@ -109,6 +124,8 @@ export default function worker(pi: ExtensionAPI) {
     const temporary = `${current.resultPath}.tmp`;
     await writeFile(temporary, JSON.stringify(result));
     await rename(temporary, current.resultPath);
+    // A new cycle starts: the Lead's next message may lead to another unverified done.
+    steered = false;
   };
 
   pi.registerTool({
@@ -123,6 +140,12 @@ export default function worker(pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = await loadTask();
+      // Once per cycle, so a project without tests cannot deadlock the worker.
+      const unverified = steered ? undefined : unverifiedDone(current, params.status, lastTest);
+      if (unverified) {
+        steered = true;
+        return { content: [{ type: "text", text: unverified }], details: undefined };
+      }
       const { vm } = await ensureVm(ctx);
       // A failed commit (hook, identity) must not lose work: report it to the
       // model instead of finishing.

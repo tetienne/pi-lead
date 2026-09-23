@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
-import worker from "../src/worker/extension.ts";
+import worker, { unverifiedDone } from "../src/worker/extension.ts";
 import { isTestCommand, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
 
 test("test-like commands are recognised by a heuristic", () => {
@@ -119,4 +119,50 @@ test("a run that ends on a provider error reports it to the Lead instead of idli
   assert.equal(second.seq, 2);
   assert.equal(second.quota, undefined);
   assert.equal(second.modelError, "401 unauthorized");
+});
+
+test("a done without a passing test run is unverified, only for work that writes code", () => {
+  const implement = { kind: "implement" as const };
+  assert.match(unverifiedDone(implement, "done", undefined)!, /you report done but no test run was recorded\. Run the project's tests/);
+  assert.match(unverifiedDone({ kind: "debug" }, "done", { command: "npm test", exitCode: 1 })!, /the last test run `npm test` exited 1/);
+  assert.match(unverifiedDone({ kind: "prototype" }, "done", { command: "npm test", exitCode: -1 })!, /`npm test` did not complete/);
+  assert.equal(unverifiedDone(implement, "done", { command: "npm test", exitCode: 0 }), undefined);
+  assert.equal(unverifiedDone(implement, "partial", undefined), undefined);
+  for (const kind of ["review", "research"] as const) assert.equal(unverifiedDone({ kind }, "done", undefined), undefined, kind);
+  assert.equal(unverifiedDone({ ...implement, steerUnverifiedDone: false }, "done", undefined), undefined);
+});
+
+test("finish sends an unverified done back once per cycle, without reporting it", async () => {
+  const run = async (task: Record<string, unknown>) => {
+    const tools = new Map<string, any>();
+    const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
+    const taskPath = join(dir, "task.json");
+    const resultPath = join(dir, "result.json");
+    // No sandbox config: past the check, finish fails on starting the VM.
+    await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", branch: "pi-lead/x-1", title: "x", resultPath, ...task }));
+    worker({
+      registerFlag: () => undefined,
+      getFlag: () => taskPath,
+      registerTool: (tool: any) => tools.set(tool.name, tool),
+      on: () => undefined,
+    } as any);
+    const finish = (status: string) => tools.get("finish").execute("1", { status, summary: "s" }, undefined, undefined, undefined);
+    return { finish, resultPath };
+  };
+  const passes = async (attempt: Promise<unknown>) => {
+    const outcome = await attempt.then((value: any) => value.content[0].text, (error: Error) => error.message);
+    assert.doesNotMatch(outcome, /Not finished/);
+  };
+
+  const implement = await run({ kind: "implement" });
+  const first = await implement.finish("done");
+  assert.match(first.content[0].text, /^Not finished: you report done but no test run was recorded/);
+  assert.equal(first.terminate, undefined, "the worker keeps going");
+  await assert.rejects(readFile(implement.resultPath, "utf8"), "nothing is reported to the Lead");
+  await passes(implement.finish("done"));
+
+  await passes((await run({ kind: "implement" })).finish("partial"));
+  await passes((await run({ kind: "review" })).finish("done"));
+  await passes((await run({ kind: "research" })).finish("done"));
+  await passes((await run({ kind: "debug", steerUnverifiedDone: false })).finish("done"));
 });
