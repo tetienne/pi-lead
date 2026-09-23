@@ -71,6 +71,8 @@ Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
 
 - Optional: a TypeSafe or OpenRouter key for Jev in `PI_LEAD_JEV_API_KEY`
   (exported in the shell Herdr starts panes with, so workers get it too).
+  If the key is set but Jev fails (bad key, wrong model, network) or its daily
+  budget is spent, PI Lead warns you once and falls back to its defaults.
 
 ## Install
 

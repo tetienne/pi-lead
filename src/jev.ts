@@ -18,11 +18,20 @@ export type WorkerVerdict = "done" | "partial" | "blocked" | "needs_human";
 export type FailureKind = "transient" | "environment" | "task_bug" | "needs_info";
 export type ReviewAction = "none" | "auto_fix" | "escalate";
 export type EgressDecision = "allow" | "deny" | "ask";
+export type TierJudgment = { tier: Tier; difficulty: number };
+export type ReadinessJudgment = { ready: boolean; missing: string[] };
 
 export type Judge = {
   readonly available: boolean;
-  modelTier(input: { task: string; kind: WorkKind }): Promise<{ tier: Tier; difficulty: number } | undefined>;
-  readiness(task: string): Promise<{ ready: boolean; missing: string[] } | undefined>;
+  modelTier(input: { task: string; kind: WorkKind }): Promise<TierJudgment | undefined>;
+  /**
+   * Readiness (when asked) and difficulty in one Jev call. Each part is parsed
+   * on its own: a malformed readiness answer leaves the tier intact, and vice versa.
+   */
+  intake(input: { task: string; kind: WorkKind; checkReadiness: boolean }): Promise<{
+    readiness?: ReadinessJudgment;
+    tier?: TierJudgment;
+  }>;
   egress(input: { task: string; method: string; url: string }): Promise<EgressDecision>;
   verdict(input: {
     task: string;
@@ -137,26 +146,76 @@ function scoreOf(answer: unknown, levels: number, minConfidence: number): number
   return value;
 }
 
+const READINESS_CHECKS = {
+  acceptance: "Does the ticket state acceptance criteria that a test or command can verify?",
+  bounded: "Is the scope one thin, bounded slice rather than several features or an open-ended goal?",
+  decided: "Are all product and design decisions needed to start already made in the ticket?",
+} as const;
+
+const DIFFICULTY_QUESTION = "How hard is this engineering task for a coding agent?";
+
+function readinessOf(answers: Record<string, unknown> | undefined): ReadinessJudgment | undefined {
+  if (!answers) return undefined;
+  const missing: string[] = [];
+  for (const key of Object.keys(READINESS_CHECKS) as (keyof typeof READINESS_CHECKS)[]) {
+    const probability = noulOf(answers[key]);
+    if (probability === undefined) return undefined;
+    if (band(probability, 0.35, 0.65) === "no") missing.push(key);
+  }
+  return { ready: missing.length === 0, missing };
+}
+
+function tierOf(answer: unknown, kind: WorkKind, minConfidence: number): TierJudgment | undefined {
+  const difficulty = scoreOf(answer, DIFFICULTY_RUBRIC.length, minConfidence);
+  return difficulty === undefined ? undefined : { tier: tierForDifficulty(difficulty, kind), difficulty };
+}
+
 // ---- judge ----------------------------------------------------------------
 
 const clip = (text: string, max = 12_000) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text);
+
+export type JevProblem = { kind: "error" | "budget"; message: string };
+
+/** One line for the user; `message` is already clipped and free of the key. */
+export function describeJevProblem(problem: JevProblem): string {
+  return problem.kind === "budget"
+    ? `${problem.message}; PI Lead falls back to its defaults until tomorrow.`
+    : `Jev is configured but failing (${problem.message}); PI Lead falls back to its defaults.`;
+}
 
 export function createJudge(options: {
   ask?: AskJev;
   config: LeadConfig["jev"];
   ledger: Ledgerish;
+  /** Called at most once per kind per judge: the first failure, the first time the budget is spent. */
+  onProblem?: (problem: JevProblem) => void;
 }): Judge {
-  const { ask, config, ledger } = options;
+  const { ask, config, ledger, onProblem } = options;
   const egressCache = new Map<string, EgressDecision>();
+  const problemsSeen = new Set<JevProblem["kind"]>();
+  const report = (kind: JevProblem["kind"], message: string) => {
+    if (problemsSeen.has(kind)) return;
+    problemsSeen.add(kind);
+    try {
+      onProblem?.({ kind, message });
+    } catch {
+      // A broken notifier must not turn a fallback into a crash.
+    }
+  };
 
   const run = async (state: unknown, questions: Record<string, unknown>) => {
     if (!ask) return undefined;
     try {
-      if ((await ledger.spent()) >= config.dailyBudgetUsd) return undefined;
+      if ((await ledger.spent()) >= config.dailyBudgetUsd) {
+        report("budget", `Jev's daily budget ($${config.dailyBudgetUsd}) is spent`);
+        return undefined;
+      }
       const result = await ask(state, questions, AbortSignal.timeout(15_000));
       await ledger.charge((result.inputTokens / 1_000_000) * config.inputUsdPerMillion);
       return result.answers;
-    } catch {
+    } catch (error) {
+      const text = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim() || "unknown error";
+      report("error", text.length > 200 ? `${text.slice(0, 200)}…` : text);
       return undefined;
     }
   };
@@ -165,32 +224,23 @@ export function createJudge(options: {
     available: ask !== undefined,
 
     async modelTier({ task, kind }) {
-      const answers = await run(
-        { kind, task: clip(task) },
-        { difficulty: score("How hard is this engineering task for a coding agent?", DIFFICULTY_RUBRIC) },
-      );
-      const difficulty = scoreOf(answers?.difficulty, DIFFICULTY_RUBRIC.length, config.minConfidence);
-      return difficulty === undefined ? undefined : { tier: tierForDifficulty(difficulty, kind), difficulty };
+      const answers = await run({ kind, task: clip(task) }, { difficulty: score(DIFFICULTY_QUESTION, DIFFICULTY_RUBRIC) });
+      return tierOf(answers?.difficulty, kind, config.minConfidence);
     },
 
-    async readiness(task) {
-      const checks = {
-        acceptance: "Does the ticket state acceptance criteria that a test or command can verify?",
-        bounded: "Is the scope one thin, bounded slice rather than several features or an open-ended goal?",
-        decided: "Are all product and design decisions needed to start already made in the ticket?",
-      } as const;
+    async intake({ task, kind, checkReadiness }) {
       const answers = await run(
-        { ticket: clip(task) },
-        Object.fromEntries(Object.entries(checks).map(([key, question]) => [key, noul(question)])),
+        { kind, ticket: clip(task) },
+        {
+          ...(checkReadiness
+            ? Object.fromEntries(Object.entries(READINESS_CHECKS).map(([key, question]) => [key, noul(question)]))
+            : {}),
+          difficulty: score(DIFFICULTY_QUESTION, DIFFICULTY_RUBRIC),
+        },
       );
-      if (!answers) return undefined;
-      const missing: string[] = [];
-      for (const key of Object.keys(checks) as (keyof typeof checks)[]) {
-        const probability = noulOf(answers[key]);
-        if (probability === undefined) return undefined;
-        if (band(probability, 0.35, 0.65) === "no") missing.push(key);
-      }
-      return { ready: missing.length === 0, missing };
+      const readiness = checkReadiness ? readinessOf(answers) : undefined;
+      const tier = tierOf(answers?.difficulty, kind, config.minConfidence);
+      return { ...(readiness ? { readiness } : {}), ...(tier ? { tier } : {}) };
     },
 
     async egress({ task, method, url }) {
@@ -290,10 +340,12 @@ export function createAskJev(
     ...(fetch ? { fetch } : {}),
   });
   return async (state, questions, signal) => {
-    const result = await client.systemOne(
-      { state: state as never, questions: questions as never },
-      { ...(signal ? { signal } : {}) },
-    );
+    const result = await client
+      .systemOne({ state: state as never, questions: questions as never }, { ...(signal ? { signal } : {}) })
+      .catch((error: unknown) => {
+        // Errors reach the user's screen: never let one carry the key.
+        throw new Error((error instanceof Error ? error.message : String(error)).split(apiKey).join("[redacted]"));
+      });
     return { answers: result.answers as Record<string, unknown>, inputTokens: result.usage.input_tokens };
   };
 }
