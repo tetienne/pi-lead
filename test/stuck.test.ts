@@ -66,15 +66,39 @@ test("six failures in a row trigger the broader check", async () => {
   assert.match(steered[0]!, /^PI Lead: your last 6 shell commands all failed\. Step back/);
 });
 
-test("after a check, the next one waits for three more shell commands", async () => {
+test("after a check, the next one waits for three more shell commands, twice as many after each \"not stuck\"", async () => {
   const { run, asked } = detector(false);
   for (let index = 0; index < 3; index++) await run("npm test");
   assert.equal(asked.length, 1);
-  await run("npm test");
-  await run("npm test");
+  for (let index = 0; index < 5; index++) await run("npm test");
   assert.equal(asked.length, 1, "cooldown");
   await run("npm test");
   assert.equal(asked.length, 2);
+  for (let index = 0; index < 12; index++) await run("npm test");
+  assert.equal(asked.length, 3);
+  for (let index = 0; index < 72; index++) await run("npm test");
+  assert.equal(asked.length, 5, "logarithmic in the number of failing commands, not linear");
+
+  const steered = detector(true);
+  for (let index = 0; index < 6; index++) await steered.run("npm test");
+  assert.equal(steered.asked.length, 2, "a steer keeps the short cooldown");
+});
+
+test("a reset drops a check in flight and does not block the new cycle", async () => {
+  let release!: (answer: boolean) => void;
+  const first = new Promise<boolean>((resolve) => (release = resolve));
+  let calls = 0;
+  const { stuck, run, asked, steered } = detector(() => (++calls === 1 ? first : Promise.resolve(true)));
+  await run("npm test");
+  await run("npm test");
+  const pending = run("npm test");
+  stuck.reset();
+  for (let index = 0; index < 3; index++) await run("npm test");
+  assert.equal(asked.length, 2, "the new cycle checks without waiting for the stale check");
+  assert.equal(steered.length, 1);
+  release(true);
+  await pending;
+  assert.equal(steered.length, 1, "the stale check steers nothing");
 });
 
 test("Jev decides; without it only the same-command trigger counts", async () => {

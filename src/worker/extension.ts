@@ -144,6 +144,9 @@ export default function worker(pi: ExtensionAPI) {
     await rename(temporary, current.resultPath);
     // A new cycle starts: the Lead's next message may lead to another unverified done.
     steered = false;
+    // A Jev check still in flight must not steer a worker that already reported:
+    // a steer queued now would restart its run after `finish`.
+    stuck.reset();
   };
 
   pi.registerTool({

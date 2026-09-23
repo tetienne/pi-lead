@@ -12,7 +12,7 @@ import type { ShellRun } from "../jev.ts";
 export const SAME_COMMAND_FAILURES = 3;
 /** This many shell commands in a row failing, whatever they are. */
 export const FAILURE_STREAK = 6;
-/** Shell commands to wait after a check before checking again. */
+/** Shell commands to wait after a check before checking again; doubles after each "not stuck", to bound Jev calls. */
 export const CHECK_COOLDOWN = 3;
 
 export type StuckTrigger = { kind: "same_command"; command: string; failures: number } | { kind: "streak"; failures: number };
@@ -64,7 +64,7 @@ export function tabWarning(trigger: StuckTrigger): string {
 export type StuckDetector = {
   /** Record one shell command; resolves once any check it started is over. */
   record(run: ShellRun): Promise<void>;
-  /** A new prompt (from the Lead or the user) starts a new cycle. */
+  /** A new prompt (from the Lead or the user), or a reported result, starts a new cycle; a check in flight is dropped. */
   reset(): void;
 };
 
@@ -77,6 +77,7 @@ export function createStuckDetector(options: {
   let runs: ShellRun[] = [];
   let failures = new Map<string, number>();
   let runsSinceCheck = Number.POSITIVE_INFINITY;
+  let cooldown = CHECK_COOLDOWN;
   /** 0: nothing said yet, 1: steered, 2: told to finish (no more checks this cycle). */
   let level = 0;
   let checking = false;
@@ -99,7 +100,7 @@ export function createStuckDetector(options: {
       if (run.exitCode === 0) failures.delete(key);
       else failures.set(key, (failures.get(key) ?? 0) + 1);
       runsSinceCheck += 1;
-      if (run.exitCode === 0 || level >= 2 || checking || runsSinceCheck < CHECK_COOLDOWN) return;
+      if (run.exitCode === 0 || level >= 2 || checking || runsSinceCheck < cooldown) return;
       const trigger = triggerFor(run);
       if (!trigger) return;
 
@@ -113,9 +114,12 @@ export function createStuckDetector(options: {
         } catch {
           stuck = undefined;
         }
-        // Without Jev only the strict trigger counts: six unrelated failures can be normal exploration.
-        if (!(stuck ?? trigger.kind === "same_command")) return;
         if (started !== cycle) return;
+        // Without Jev only the strict trigger counts: six unrelated failures can be normal exploration.
+        if (!(stuck ?? trigger.kind === "same_command")) {
+          cooldown *= 2;
+          return;
+        }
         if (level === 0) {
           level = 1;
           options.steer(steerMessage(trigger));
@@ -125,7 +129,7 @@ export function createStuckDetector(options: {
           options.steer(finishMessage(trigger));
         }
       } finally {
-        checking = false;
+        if (started === cycle) checking = false;
       }
     },
 
@@ -133,7 +137,9 @@ export function createStuckDetector(options: {
       runs = [];
       failures = new Map();
       runsSinceCheck = Number.POSITIVE_INFINITY;
+      cooldown = CHECK_COOLDOWN;
       level = 0;
+      checking = false;
       cycle += 1;
     },
   };
