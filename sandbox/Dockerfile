@@ -12,3 +12,6 @@ RUN apt-get update \
  && apt-get update \
  && apt-get install -y --no-install-recommends mise \
  && rm -rf /var/lib/apt/lists/*
+
+# /etc/profile resets PATH, and workers run commands in login shells (bash -lc).
+RUN echo '[ -d /opt/mise/shims ] && PATH="/opt/mise/shims:$PATH"' > /etc/profile.d/pi-lead-mise.sh
