@@ -67,6 +67,9 @@ workers through `~/.pi/agent/pi-lead/jev-usage.json`.
   disposable clone at `/workspace`, the project's mise toolchains read-only at
   `/opt/mise`, and HTTP(S) egress filtered per request; internal ranges and
   WebSockets are blocked.
+- `grep` and `find` run inside the guest (its own `grep`/`find`, argv only,
+  no symlink following, time-boxed); the host only reads their bounded output
+  and never reads guest files or runs a regex over guest content.
 - The host only `git fetch`es the worker branch from the clone; it never runs
   git inside the guest-writable directory. The worker's Pi and its tab shell
   run in a task directory outside the clone and read host copies of the
@@ -110,10 +113,7 @@ the Lead; the tab does not), `waitingTimeoutMinutes` (default 120, 0 disables).
    context; RPC input never counts as the human, so RPC front ends confirm
    until the session restarts.
 4. Jev thresholds are defaults, not calibrated; collect real judgments and tune.
-5. The worker's `grep` (from Pi's Gondolin example) walks the guest tree from
-   the host process: bound the pattern (ReDoS), file sizes and symlink loops,
-   or run grep inside the guest.
-6. The waiting timeout counts from the worker's last result or Lead message;
+5. The waiting timeout counts from the worker's last result or Lead message;
    a user answering directly in the worker's tab does not reset it. Herdr
    metadata, `agent rename` and `tab list` have not been exercised against a
    live Herdr yet (the `tab list` JSON shape is read as "any `tab_id`").

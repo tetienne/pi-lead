@@ -2,7 +2,7 @@
  * Boot a real Gondolin VM through the worker's sandboxed tools and check the
  * isolation claims: minimal guest environment (no host secrets), clone
  * write-through, read-only toolchain cache, allowlisted egress allowed and
- * other egress refused.
+ * other egress refused, and grep/find running inside the guest.
  *
  *   npm run sandbox:smoke
  */
@@ -55,6 +55,30 @@ check("no host secret in the guest", !env.includes("sk-live"));
 check("mise environment present", env.includes(`MISE_DATA_DIR=${GUEST_MISE_DIR}`));
 await run("write", { path: "hello.txt", content: "from guest\n" });
 check("clone write-through", readFileSync(join(clone, "hello.txt"), "utf8") === "from guest\n");
+await run("bash", {
+  command: [
+    "mkdir -p src/deep node_modules/x",
+    "printf 'one\\nneedle 1\\ntwo\\n' > src/a.ts",
+    "printf 'needle deep\\n' > src/deep/b.spec.ts",
+    "printf 'needle hidden\\n' > node_modules/x/c.ts",
+    "ln -s .. src/loop",
+    "head -c 300000 /dev/zero | tr '\\0' x > src/min.js; printf 'needle\\n' >> src/min.js",
+  ].join(" && "),
+});
+const grepped = await run("grep", { pattern: "needle", glob: "*.ts", context: 1 });
+check(
+  "grep runs in the guest (context, glob, pruning, symlink loop)",
+  grepped === "src/a.ts-1- one\nsrc/a.ts:2: needle 1\nsrc/a.ts-3- two\nsrc/deep/b.spec.ts:1: needle deep",
+  JSON.stringify(grepped),
+);
+const longLine = await run("grep", { pattern: "x+needle", path: "src" });
+check("grep truncates long guest lines", longLine.startsWith("min.js:1: xxx") && longLine.includes("Some lines truncated"), longLine.slice(-120));
+await run("grep", { pattern: "$(touch /tmp/pwned)", literal: false });
+await run("grep", { pattern: "-e x --include=$(touch /tmp/pwned)" });
+const pwned = await run("bash", { command: "test -e /tmp/pwned && echo pwned || echo clean" });
+check("grep pattern is not shell-interpreted", pwned.trim() === "clean", pwned.trim());
+const found = await run("find", { pattern: "src/**/*.spec.ts" });
+check("find runs in the guest", found === "src/deep/b.spec.ts", JSON.stringify(found));
 const cacheWrite = await run("bash", { command: `touch ${GUEST_MISE_DIR}/poison 2>&1; echo exit=$?` });
 check("toolchain cache is read-only", !cacheWrite.includes("exit=0"), cacheWrite.trim());
 const npm = await run("bash", { command: "curl -s -o /dev/null -w '%{http_code}' https://registry.npmjs.org/" });
