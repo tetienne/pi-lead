@@ -7,6 +7,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { Type } from "typebox";
 
 import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge, type WorkerVerdict } from "../jev.ts";
+import { decisionLine, displayMode, isStuck, shouldShow } from "../jev-display.ts";
 import { quotaError } from "../quota.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, WRITES_CODE, type LastTest, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
@@ -64,11 +65,16 @@ export default function worker(pi: ExtensionAPI) {
   let judge: Judge | undefined;
   const getJudge = async () => {
     const current = await loadTask();
+    const display = displayMode(current.jev.display);
     judge ??= createJudge({
       ask: createAskJev(current.jev),
       config: current.jev,
       ledger: createLedger(join(getAgentDir(), "pi-lead", "jev-usage.json")),
       onProblem: (problem) => latestContext?.ui.notify(describeJevProblem(problem), "warning"),
+      // In the worker's own tab only (egress and stuck checks); allowed egress is just counted unless `jev.display` is verbose.
+      onDecision: (decision) => {
+        if (shouldShow(decision, display)) latestContext?.ui.notify(decisionLine(decision), decision.outcome === "deny" || isStuck(decision) ? "warning" : "info");
+      },
     });
     return judge;
   };

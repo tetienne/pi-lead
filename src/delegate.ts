@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
 import { workspaceFromPaneId, type Herdr } from "./herdr.ts";
-import type { FailureKind, Judge, ReviewAction, WorkKind, WorkerVerdict } from "./jev.ts";
+import { defaultTier, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
@@ -168,8 +168,6 @@ type Worker = WorkerInfo & {
   resumed: boolean;
   reroutes: number;
 };
-
-const VERDICT_ORDER: WorkerVerdict[] = ["done", "partial", "blocked", "needs_human"];
 
 export function slugify(text: string): string {
   return (
@@ -797,7 +795,7 @@ export function createDelegator(deps: DelegateDeps) {
           ].join("\n"),
         };
       }
-      const tier: Tier = judged?.tier ?? (params.kind === "debug" || params.kind === "review" ? "deep" : "standard");
+      const tier: Tier = judged?.tier ?? defaultTier(params.kind);
       const { lead, available } = routable(io);
       const resolved = resolveRoute(tier, deps.config.tiers, lead, available);
       const skipped = exhaustedNote();

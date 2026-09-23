@@ -102,7 +102,7 @@ pi install -l git:github.com/tetienne/pi-lead@v0.4.0
   },
   "maxWorkers": 2,
   "sandbox": { "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
-  "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
+  "jev": { "via": "openrouter", "dailyBudgetUsd": 1, "display": "normal" },
   "keepFailedWorkers": true,
   "leadGuard": "confirm",
   "waitingTimeoutMinutes": 120,
@@ -141,6 +141,31 @@ three times in a row, or its last six commands all fail, Jev is asked whether
 it is repeating a failed approach; if so the worker is told to step back, and
 the second time to finish as `blocked` (with a warning in its tab). It is never
 stopped automatically. Without Jev, only the same-command case counts.
+
+### Seeing Jev
+
+With a Jev key set, the Lead's status line carries `◆ 14 · $0.004/1.00`: Jev
+calls today across the Lead and every worker, and spend against
+`dailyBudgetUsd` (dim, then warning from 80%, error once spent). Each judgment
+the Lead makes gets one dim line in the transcript, which the model never sees:
+
+```
+◆ jev · tier standard (difficulty 2.1/4, conf 0.82)
+◇ jev · overlap unsure → waits
+▲ jev · verdict done → partial (criterion 2 not met)
+```
+
+`◆` Jev decided and its answer applied, `◇` Jev was unsure, failing or over
+budget and the default applied, `▲` Jev overrode the worker. Pi's expanded
+view adds confidence, threshold, latency and cost. Worker tabs show their
+egress and stuck-loop decisions as notifications. `/jev` lists today's calls and spend by kind
+and this session's last 20 decisions.
+
+`jev.display` sets how much shows: `normal` (default) shows every Lead
+judgment, and in worker tabs every stuck-loop check and only denied or
+questioned egress (allowed egress is just counted); `quiet` shows only `◇`,
+`▲`, denied egress and a worker found stuck; `verbose` also shows allowed
+egress.
 
 ## Develop
 
