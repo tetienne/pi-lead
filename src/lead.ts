@@ -46,7 +46,8 @@ export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefin
 export function skillMounts(commands: SlashCommandInfo[]): string[] {
   const mounts = [SKILLS_DIR];
   for (const command of commands) {
-    if (command.source !== "skill" || command.sourceInfo.scope === "project") continue;
+    // A loose `.md` skill has no companion files; mounting its parent could expose all of $HOME.
+    if (command.source !== "skill" || command.sourceInfo.scope === "project" || basename(command.sourceInfo.path) !== "SKILL.md") continue;
     const dir = dirname(command.sourceInfo.path);
     if (!mounts.some((mount) => dir === mount || dir.startsWith(mount + sep))) mounts.push(dir);
   }

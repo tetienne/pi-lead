@@ -77,6 +77,7 @@ test("every non-project skill the Lead loaded is mounted in the guest, once", ()
     skill("/home/.pi/agent/git/github.com/a/ponytail/skills/ponytail/SKILL.md"),
     skill("/home/.pi/agent/vendor/go-skills/go/SKILL.md"),
     skill("/repo/.agents/skills/local/SKILL.md", "project"),
+    skill("/home/notes/review.md"),
     { name: "p", source: "prompt", sourceInfo: { path: "/home/prompts/p.md", scope: "user" } } as any,
   ]);
   assert.ok(existsSync(join(packaged!, "ask-matt", "SKILL.md")), "the package's own skills come first");
