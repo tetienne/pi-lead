@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.0](https://github.com/tetienne/pi-lead/compare/v0.4.0...v0.5.0) (2026-09-23)
+
+
+### Features
+
+* send an unverified done back to the worker once ([#16](https://github.com/tetienne/pi-lead/issues/16)) ([ff638d1](https://github.com/tetienne/pi-lead/commit/ff638d105981b4add42718f65cf39280f707eff2))
+* show Jev decisions and usage in the terminal ([#19](https://github.com/tetienne/pi-lead/issues/19)) ([e3d557f](https://github.com/tetienne/pi-lead/commit/e3d557f1fb9cdaac51f65be4538b47855776b755))
+* steer a worker that keeps repeating a failing approach ([#17](https://github.com/tetienne/pi-lead/issues/17)) ([7b5ed44](https://github.com/tetienne/pi-lead/commit/7b5ed44f524145b122462dbebdedf98c9bc515f4))
+
 ## [0.4.0](https://github.com/tetienne/pi-lead/compare/v0.3.2...v0.4.0) (2026-09-23)
 
 
