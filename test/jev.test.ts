@@ -396,6 +396,14 @@ test("the ledger reads the older { day, usd } file and counts calls per kind", a
   });
 });
 
+test("parallel charges in one process all land", async () => {
+  const ledger = await ledgerIn();
+  await Promise.all(Array.from({ length: 20 }, () => ledger.charge(0.001, "egress")));
+  const usage = await ledger.usage();
+  assert.equal(usage.calls, 20);
+  assert.equal(usage.kinds.egress?.calls, 20);
+});
+
 test("the judge charges each call to its kind", async () => {
   const ledger = await ledgerIn();
   const judge = createJudge({ ask: fakeAsk({ overlap: { noul: 0.9 }, needed: { noul: 0.9 } }), config: DEFAULT_CONFIG.jev, ledger });

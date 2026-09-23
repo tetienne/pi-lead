@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -201,21 +202,30 @@ export function createLedger(path = join(homedir(), ".pi", "agent", "pi-lead", "
       return { day: today(), usd: 0, calls: 0, kinds: {} };
     }
   };
+  const write = async (usd: number, kind?: JevKind) => {
+    const ledger = await read();
+    ledger.usd += usd;
+    if (kind) {
+      ledger.calls += 1;
+      const entry = ledger.kinds[kind] ?? { calls: 0, usd: 0 };
+      ledger.kinds[kind] = { calls: entry.calls + 1, usd: entry.usd + usd };
+    }
+    await mkdir(dirname(path), { recursive: true });
+    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    await writeFile(temporary, JSON.stringify(ledger));
+    await rename(temporary, path);
+  };
+  let queue: Promise<void> = Promise.resolve();
   return {
     spent: async () => (await read()).usd,
     usage: read,
-    async charge(usd: number, kind?: JevKind) {
-      const ledger = await read();
-      ledger.usd += usd;
-      if (kind) {
-        ledger.calls += 1;
-        const entry = ledger.kinds[kind] ?? { calls: 0, usd: 0 };
-        ledger.kinds[kind] = { calls: entry.calls + 1, usd: entry.usd + usd };
-      }
-      await mkdir(dirname(path), { recursive: true });
-      const temporary = `${path}.${process.pid}.tmp`;
-      await writeFile(temporary, JSON.stringify(ledger));
-      await rename(temporary, path);
+    charge(usd: number, kind?: JevKind): Promise<void> {
+      // Parallel judgments (a worker's egress, most often) charge one at a time
+      // within a process, so they neither lose each other's update nor share a
+      // temporary file; other processes can still race, as before.
+      const next = queue.then(() => write(usd, kind));
+      queue = next.catch(() => undefined);
+      return next;
     },
   };
 }
