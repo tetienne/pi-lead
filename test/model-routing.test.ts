@@ -32,6 +32,33 @@ test("an unavailable configured model degrades to the Lead's model and says so",
   assert.ok("error" in resolveRoute("deep", config.tiers, undefined, available));
 });
 
+test("an unavailable configured model falls back to the first available fallback, with its own thinking", () => {
+  const config = mergeConfig(DEFAULT_CONFIG, {
+    tiers: {
+      standard: {
+        model: "openai-codex/gpt-6-sol",
+        thinking: "high",
+        fallbacks: [{ model: "opencode-go/kimi-k3", thinking: "max" }, { model: "opencode-go/glm-5.3" }],
+      },
+    },
+  });
+  const withGo = [lead, { provider: "opencode-go", id: "glm-5.3" }];
+  assert.deepEqual(resolveRoute("standard", config.tiers, lead, withGo), {
+    model: "opencode-go/glm-5.3",
+    thinking: "high",
+    tier: "standard",
+    note: "openai-codex/gpt-6-sol, opencode-go/kimi-k3 are not available; using opencode-go/glm-5.3",
+  });
+  const withCodex = [...withGo, { provider: "openai-codex", id: "gpt-6-sol" }];
+  assert.deepEqual(resolveRoute("standard", config.tiers, lead, withCodex), {
+    model: "openai-codex/gpt-6-sol",
+    thinking: "high",
+    tier: "standard",
+  });
+  const none = resolveRoute("standard", config.tiers, lead, [lead]);
+  assert.ok("note" in none && none.model === "anthropic/claude-sonnet-5" && none.note?.endsWith("using the Lead's model"));
+});
+
 test("config merging keeps defaults for unspecified fields", () => {
   const config = mergeConfig(DEFAULT_CONFIG, { sandbox: { image: "pi-lead:latest" }, jev: { dailyBudgetUsd: 0.5 } });
   assert.equal(config.sandbox.image, "pi-lead:latest");

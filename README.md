@@ -58,7 +58,7 @@ Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
 
 ## Requirements
 
-- Pi 0.86.x, Node ≥ 23.6 (Gondolin), git, QEMU (`brew install qemu`).
+- Pi ≥ 0.87.1 (GPT-6 Sol/Luna), Node ≥ 23.6 (Gondolin), git, QEMU (`brew install qemu`).
 - Herdr: start the Lead's Pi inside a Herdr pane; `herdr integration install pi`
   for worker status badges and reliable Lead → worker messages.
 - A Gondolin image with git and mise, built once (Docker or Podman):
@@ -88,9 +88,12 @@ above. Everything else is optional:
 ```json
 {
   "tiers": {
-    "fast":     { "model": "openai-codex/gpt-5.6-mini", "thinking": "low" },
-    "standard": { "thinking": "medium" },
-    "deep":     { "model": "anthropic/claude-opus-5-5", "thinking": "high" }
+    "fast":     { "model": "openai-codex/gpt-6-luna", "thinking": "medium",
+                  "fallbacks": [{ "model": "opencode-go/deepseek-v4.1-flash", "thinking": "high" }] },
+    "standard": { "model": "openai-codex/gpt-6-sol", "thinking": "high",
+                  "fallbacks": [{ "model": "opencode-go/glm-5.3", "thinking": "high" }] },
+    "deep":     { "model": "openai-codex/gpt-6-astra", "thinking": "xhigh",
+                  "fallbacks": [{ "model": "opencode-go/deepseek-v4-pro", "thinking": "max" }] }
   },
   "maxWorkers": 2,
   "sandbox": { "image": "pi-lead:latest", "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
@@ -101,9 +104,20 @@ above. Everything else is optional:
 }
 ```
 
-A tier without `model` uses the Lead's current model with that tier's
-thinking level. `allowedHosts` are trusted for downloads only (GET/HEAD and
-git fetch); any other request, including uploads to an allowlisted host, is
+Jev's difficulty score picks the tier (below 1.5 `fast`, below 2.8 `standard`,
+otherwise `deep`; debug and review start at `standard`). The first available
+of `model` and its `fallbacks` runs the worker. A model is available when its
+provider has auth. When none is available the Lead's model runs it. A worker
+whose provider runs out of quota continues on the next available model, from
+its branch. That provider is skipped until its quota resets: the time ChatGPT
+gives (at least 5 minutes), 5 minutes for a ChatGPT limit without a time, one
+hour otherwise. A worker whose changes could not be committed stays put. With
+nothing left, the worker reports `blocked`. Pi never retries a quota error, so nothing is charged to a
+paid balance. A tier without `model` uses the Lead's current model with that tier's
+thinking level. The example is the ChatGPT Pro + OpenCode Go mapping from
+[worker-models.md](docs/research/worker-models.md).
+
+`allowedHosts` are trusted for downloads only (GET/HEAD and git fetch); any other request, including uploads to an allowlisted host, is
 judged by Jev per path, and when Jev is unsure the worker tab asks you.
 
 ## Develop

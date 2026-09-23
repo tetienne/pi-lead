@@ -9,6 +9,11 @@ export type TierRoute = {
   /** `provider/model-id`. Omitted means "the model the Lead is using". */
   model?: string;
   thinking: ThinkingLevel;
+  /**
+   * Tried in order when `model` is not available (no auth for its provider, or
+   * missing from the installed Pi catalog). `thinking` defaults to the tier's.
+   */
+  fallbacks?: { model: string; thinking?: ThinkingLevel }[];
 };
 
 export type LeadConfig = {

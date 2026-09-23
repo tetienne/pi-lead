@@ -7,6 +7,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { Type } from "typebox";
 
 import { createAskJev, createJudge, createLedger } from "../jev.ts";
+import { quotaError } from "../quota.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
@@ -24,6 +25,8 @@ export default function worker(pi: ExtensionAPI) {
   let latestContext: ExtensionContext | undefined;
   let running: Promise<SandboxHandle> | undefined;
   let seq = 0;
+  /** Error of the last assistant message of the run, until Pi settles. */
+  let runError: string | undefined;
 
   const loadTask = async () => {
     if (task) return task;
@@ -80,6 +83,25 @@ export default function worker(pi: ExtensionAPI) {
 
   registerSandboxTools(pi, process.cwd(), ensureVm);
 
+  /**
+   * Commit anything left in the tree, inside the guest, so the host only ever
+   * fetches from the clone.
+   */
+  const commitLeftovers = async (ctx?: ExtensionContext) => {
+    const { vm, env } = await ensureVm(ctx);
+    return vm.exec(
+      ["/bin/sh", "-lc", 'git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes") 2>&1'],
+      { cwd: GUEST_WORKSPACE, env },
+    );
+  };
+
+  const writeResult = async (result: WorkerResult) => {
+    const current = await loadTask();
+    const temporary = `${current.resultPath}.tmp`;
+    await writeFile(temporary, JSON.stringify(result));
+    await rename(temporary, current.resultPath);
+  };
+
   pi.registerTool({
     name: "finish",
     label: "Finish",
@@ -92,14 +114,10 @@ export default function worker(pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = await loadTask();
-      const { vm, env } = await ensureVm(ctx);
-      // Commit anything left in the tree, inside the guest, so the host only
-      // ever fetches from the clone. A failed commit (hook, identity) must not
-      // lose work: report it to the model instead of finishing.
-      const commit = await vm.exec(
-        ["/bin/sh", "-lc", 'git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes") 2>&1'],
-        { cwd: GUEST_WORKSPACE, env },
-      );
+      const { vm } = await ensureVm(ctx);
+      // A failed commit (hook, identity) must not lose work: report it to the
+      // model instead of finishing.
+      const commit = await commitLeftovers(ctx);
       if (commit.exitCode !== 0) {
         throw new Error(`Could not commit the remaining changes; fix this, commit, then call finish again:\n${commit.stdout.slice(-2_000)}`);
       }
@@ -118,9 +136,7 @@ export default function worker(pi: ExtensionAPI) {
         running = undefined;
         await vm.close();
       }
-      const temporary = `${current.resultPath}.tmp`;
-      await writeFile(temporary, JSON.stringify(result));
-      await rename(temporary, current.resultPath);
+      await writeResult(result);
       return {
         content: [
           {
@@ -148,6 +164,52 @@ export default function worker(pi: ExtensionAPI) {
       ? event.systemPrompt.replace(localLine, guestLine)
       : `${event.systemPrompt}\n\n${guestLine}`;
     return { systemPrompt: `${prompt}\n${WORKER_RULES}` };
+  });
+
+  // A run that ends on a provider error (exhausted quota, or anything Pi
+  // stopped retrying) never reaches `finish`: report it, or the Lead would
+  // wait forever on an idle tab.
+  pi.on("agent_end", async (event) => {
+    const last = [...event.messages].reverse().find((message) => message.role === "assistant") as
+      | { stopReason?: string; errorMessage?: string }
+      | undefined;
+    runError = last?.stopReason === "error" ? last.errorMessage || "unknown provider error" : undefined;
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    const error = runError;
+    runError = undefined;
+    if (error === undefined) return;
+    const quota = quotaError(error);
+    const summary = `${quota ? "The model's quota is exhausted" : "The model stopped on a provider error"}: ${error.slice(0, 500)}`;
+    try {
+      const current = await loadTask();
+      // Keep the work so far on the branch for whoever continues it, then stop
+      // the VM: the worker now waits, and its next tool call starts a new one.
+      // No VM means no tool ran, so there is nothing to commit.
+      let uncommitted = false;
+      const active = running;
+      if (active) {
+        const handle = await active.catch(() => undefined);
+        const commit = handle ? await commitLeftovers(ctx).catch(() => undefined) : undefined;
+        uncommitted = handle !== undefined && commit?.exitCode !== 0;
+        if (running === active) running = undefined;
+        await handle?.vm.close().catch(() => undefined);
+      }
+      await writeResult({
+        version: 1,
+        id: current.id,
+        seq: ++seq,
+        status: "blocked",
+        summary: uncommitted ? `${summary}\nSome changes could not be committed and stay in the clone.` : summary,
+        modelError: error.slice(0, 2_000),
+        ...(quota ? { quota } : {}),
+        ...(uncommitted ? { uncommitted } : {}),
+      });
+    } catch (failure) {
+      // Without a result the Lead would wait on this idle tab until Pi exits.
+      ctx?.ui.notify(`PI Lead could not report "${summary}": ${failure instanceof Error ? failure.message : String(failure)}`, "error");
+    }
   });
 
   pi.on("session_shutdown", async () => {
