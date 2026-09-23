@@ -9,6 +9,7 @@ import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.t
 import { parseWorkerResult, workerPrompt, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
+import { sensitivePatterns } from "./sensitive-paths.ts";
 import type { Toolchains } from "./toolchains.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -63,6 +64,8 @@ export type DelegateOutcome = {
     review?: { severity: number; action: ReviewAction };
     failure?: FailureKind;
     quota?: QuotaError;
+    /** Sensitive path patterns the branch touches; informative only, never a status change. */
+    sensitive?: string[];
   };
 };
 
@@ -558,13 +561,14 @@ export function createDelegator(deps: DelegateDeps) {
       summary: result.summary,
       diffStat: collected.diffStat,
       commits: collected.commits,
-      files: collected.files,
+      changedFiles: collected.changedFiles,
       ...(result.lastTest ? { lastTest: result.lastTest } : {}),
     });
     // Trust the more pessimistic of the worker and Jev.
     const status =
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
+    const sensitive = sensitivePatterns(collected.changedFiles);
     const keep = status !== "done" && deps.config.keepFailedWorkers;
     setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
     if (keep) worker.waitingSince = Date.now();
@@ -613,6 +617,13 @@ export function createDelegator(deps: DelegateDeps) {
         ...(collected.diffStat ? ["", "Diff stat:", collected.diffStat] : []),
         ...(result.findings ? ["", "Findings:", result.findings] : []),
         "</worker-report>",
+        // Host-generated from the fixed pattern list, so it sits outside the block; guest-chosen file names stay inside.
+        ...(sensitive.length
+          ? [
+              "",
+              `Host check: the branch changes files that can run on your machine or in CI, or widen PI Lead's policy (${sensitive.join(", ")}); review them before merging.`,
+            ]
+          : []),
         ...(review ? ["", `Jev review severity: ${review.severity.toFixed(1)}/4 → ${review.action}`] : []),
         ...(next.length ? ["", "Next:", ...next.map((line) => `- ${line}`)] : []),
       ].join("\n"),
@@ -621,6 +632,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(jevVerdict ? { jevVerdict } : {}),
         ...(review ? { review } : {}),
         ...(result.quota ? { quota: result.quota } : {}),
+        ...(sensitive.length ? { sensitive } : {}),
       },
     });
   };
@@ -763,26 +775,27 @@ export function createDelegator(deps: DelegateDeps) {
       if (params.startFrom !== undefined && !isSafeBranchName(params.startFrom)) {
         return { status: "failed", text: `"${params.startFrom}" is not a valid local branch name.` };
       }
-      if (params.kind === "implement" && !params.confirmedReady) {
-        const readiness = await deps.judge.readiness(params.task);
-        if (readiness && !readiness.ready) {
-          const reasons: Record<string, string> = {
-            acceptance: "no verifiable acceptance criteria",
-            bounded: "scope is not one bounded slice",
-            decided: "open product/design decisions",
-          };
-          return {
-            status: "not_ready",
-            missing: readiness.missing,
-            text: [
-              `Not delegated: Jev judged the ticket not ready (${readiness.missing.map((m) => reasons[m] ?? m).join("; ")}).`,
-              "Clarify with the user (grilling), then to-spec / to-tickets, and delegate the resulting ticket.",
-              "If the user confirms it is ready as is, call delegate again with confirmedReady: true.",
-            ].join("\n"),
-          };
-        }
+      const checkReadiness = params.kind === "implement" && !params.confirmedReady;
+      // One Jev round trip when readiness is checked; the tier alone otherwise.
+      const { readiness, tier: judged } = checkReadiness
+        ? await deps.judge.intake({ task: params.task, kind: params.kind, checkReadiness })
+        : { readiness: undefined, tier: await deps.judge.modelTier({ task: params.task, kind: params.kind }) };
+      if (readiness && !readiness.ready) {
+        const reasons: Record<string, string> = {
+          acceptance: "no verifiable acceptance criteria",
+          bounded: "scope is not one bounded slice",
+          decided: "open product/design decisions",
+        };
+        return {
+          status: "not_ready",
+          missing: readiness.missing,
+          text: [
+            `Not delegated: Jev judged the ticket not ready (${readiness.missing.map((m) => reasons[m] ?? m).join("; ")}).`,
+            "Clarify with the user (grilling), then to-spec / to-tickets, and delegate the resulting ticket.",
+            "If the user confirms it is ready as is, call delegate again with confirmedReady: true.",
+          ].join("\n"),
+        };
       }
-      const judged = await deps.judge.modelTier({ task: params.task, kind: params.kind });
       const tier: Tier = judged?.tier ?? (params.kind === "debug" || params.kind === "review" ? "deep" : "standard");
       const { lead, available } = routable(io);
       const resolved = resolveRoute(tier, deps.config.tiers, lead, available);

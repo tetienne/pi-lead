@@ -6,7 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createAskJev, createJudge, createLedger } from "../jev.ts";
+import { createAskJev, createJudge, createLedger, describeJevProblem } from "../jev.ts";
 import { quotaError } from "../quota.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type LastTest, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
@@ -47,7 +47,12 @@ export default function worker(pi: ExtensionAPI) {
 
   const startVm = async (ctx?: ExtensionContext) => {
     const current = await loadTask();
-    const judge = createJudge({ ask: createAskJev(current.jev), config: current.jev, ledger: createLedger(join(getAgentDir(), "pi-lead", "jev-usage.json")) });
+    const judge = createJudge({
+      ask: createAskJev(current.jev),
+      config: current.jev,
+      ledger: createLedger(join(getAgentDir(), "pi-lead", "jev-usage.json")),
+      onProblem: (problem) => latestContext?.ui.notify(describeJevProblem(problem), "warning"),
+    });
     const allow = createEgressPolicy({
       allowedHosts: current.sandbox.allowedHosts,
       task: current.task,
