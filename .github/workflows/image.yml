@@ -1,0 +1,57 @@
+name: Worker image
+
+# Builds the Gondolin worker image (sandbox/Dockerfile: Debian + git + mise)
+# for both architectures and attaches it to a release, where PI Lead
+# downloads it on first use (src/image.ts). Called by the release workflow;
+# run it by hand to rebuild the image of an existing release.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (vX.Y.Z)
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write # release assets
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.14.1
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node sandbox/build-image.ts --output "$RUNNER_TEMP/image"
+      - name: Archive
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          asset="pi-lead-image-$ARCH.tar.gz"
+          tar -czf "$asset" -C "$RUNNER_TEMP/image" .
+          sha256sum "$asset" > "$asset.sha256"
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          ARCH: ${{ matrix.arch }}
+        run: gh release upload "$TAG" "pi-lead-image-$ARCH.tar.gz" "pi-lead-image-$ARCH.tar.gz.sha256" --clobber --repo "$GITHUB_REPOSITORY"

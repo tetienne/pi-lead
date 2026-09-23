@@ -66,7 +66,7 @@ export default function worker(pi: ExtensionAPI) {
     const [bash, gitPath] = probe.stdout.split("\n").map((line) => line.trim());
     if (!gitPath) {
       await vm.close();
-      throw new Error("the Gondolin image has no git; build one with `npm run sandbox:image`");
+      throw new Error("the Gondolin image has no git; use PI Lead's default image or add git to yours");
     }
     ctx?.ui.setStatus("pi-lead", `Gondolin: ${vm.id.slice(0, 8)} · ${current.branch}`);
     return { vm, shellPath: bash || "/bin/sh", env, root: current.clonePath };

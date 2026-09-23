@@ -32,10 +32,10 @@ test("a warmed-up cache is reused without starting a VM", async () => {
   const cacheDir = join(project, key!);
   await mkdir(cacheDir, { recursive: true });
   await writeFile(join(project, `${key}.ready`), "");
-  const toolchains = createToolchains({ root, sandbox: DEFAULT_CONFIG.sandbox, judge: { egress: async () => "deny" } });
+  const toolchains = createToolchains({ root, judge: { egress: async () => "deny" } });
   const progress: string[] = [];
-  assert.equal(await toolchains.prepare({ repoRoot: "/repo", clonePath: clone, progress: (t) => void progress.push(t) }), cacheDir);
+  assert.equal(await toolchains.prepare({ repoRoot: "/repo", clonePath: clone, sandbox: DEFAULT_CONFIG.sandbox, progress: (t) => void progress.push(t) }), cacheDir);
   assert.deepEqual(progress, []);
   const empty = await mkdtemp(join(tmpdir(), "pi-lead-tc-empty-"));
-  assert.equal(await toolchains.prepare({ repoRoot: "/repo", clonePath: empty, progress: () => {} }), undefined);
+  assert.equal(await toolchains.prepare({ repoRoot: "/repo", clonePath: empty, sandbox: DEFAULT_CONFIG.sandbox, progress: () => {} }), undefined);
 });

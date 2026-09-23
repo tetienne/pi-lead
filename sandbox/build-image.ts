@@ -4,13 +4,16 @@
  *   npm run sandbox:image                 # Debian (glibc) + git + mise, tags pi-lead:latest
  *   npm run sandbox:image -- --alpine     # Gondolin's Alpine (musl) + git + mise, no Docker needed
  *   npm run sandbox:image -- --tag name:tag
+ *   npm run sandbox:image -- --output DIR # also keep the assets (the release workflow archives them)
  *
  * The default needs Docker or Podman: the root filesystem comes from
  * `sandbox/Dockerfile`. Alpine is lighter but many prebuilt mise tools are
  * glibc-only. Project toolchains are not baked in: PI Lead installs them per
  * project with `mise install` in a sandbox and caches them (see src/toolchains.ts).
  *
- * Then set `"sandbox": { "image": "pi-lead:latest" }` in ~/.pi/agent/pi-lead.json.
+ * Users do not run this: each GitHub release carries the image and PI Lead
+ * downloads it on first use (src/image.ts). Build one yourself to change it,
+ * then set `"sandbox": { "image": "pi-lead:latest" }` in ~/.pi/agent/pi-lead.json.
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -25,6 +28,8 @@ const args = process.argv.slice(2);
 const alpine = args.includes("--alpine");
 const tagIndex = args.indexOf("--tag");
 const tag = tagIndex >= 0 && args[tagIndex + 1] ? args[tagIndex + 1]! : "pi-lead:latest";
+const outputIndex = args.indexOf("--output");
+const output = outputIndex >= 0 ? args[outputIndex + 1] : undefined;
 
 const run = (command: string, commandArgs: string[]) => {
   const result = spawnSync(command, commandArgs, { stdio: "inherit" });
@@ -54,4 +59,4 @@ writeFileSync(path, JSON.stringify(config, null, 2));
 const cli = createRequire(import.meta.url)
   .resolve("@earendil-works/gondolin/package.json")
   .replace(/package\.json$/, "dist/bin/gondolin.js");
-run(process.execPath, [cli, "build", "--config", path, "--tag", tag]);
+run(process.execPath, [cli, "build", "--config", path, "--tag", tag, ...(output ? ["--output", output] : [])]);

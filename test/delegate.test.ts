@@ -10,6 +10,7 @@ import {
   isSafeBranchName,
   shellQuote,
   slugify,
+  type DelegateDeps,
   type DelegateIO,
   type DelegateOutcome,
 } from "../src/delegate.ts";
@@ -130,6 +131,7 @@ async function setup(t: TestContext, options: {
   herdr?: Herdr | false;
   maxWorkers?: number;
   toolchains?: Toolchains;
+  image?: DelegateDeps["image"];
   seen?: Seen;
   config?: Parameters<typeof mergeConfig>[1];
   herdrOptions?: Parameters<typeof fakeHerdr>[3];
@@ -151,6 +153,7 @@ async function setup(t: TestContext, options: {
         : options.herdr ?? fakeHerdr(log, options.replies ?? [{ status: "done" }], options.seen, options.herdrOptions),
     workspace: options.workspace ?? fakeWorkspace(log),
     ...(options.toolchains ? { toolchains: options.toolchains } : {}),
+    ...(options.image ? { image: options.image } : {}),
     ...(options.processAlive ? { processAlive: options.processAlive } : {}),
     workerCommand: ({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt],
     stateRoot,
@@ -320,6 +323,28 @@ test("the launch script and the task carry the toolchain cache and Herdr hint", 
   await pending;
   assert.equal(seen.task?.toolchainCache, "/cache/project");
   assert.match(seen.script!, /export HERDR_AGENT=pi/);
+});
+
+test("workers and toolchains use the release image unless the config names one", async (t) => {
+  const prepared: (string | undefined)[] = [];
+  const toolchains: Toolchains = { prepare: async (input) => void prepared.push(input.sandbox.image) };
+  const seen: Seen = {};
+  const released = await setup(t, { seen, toolchains, image: async () => "pi-lead:v1.2.3" });
+  let pending = released.nextOutcome();
+  await released.delegator.start({ kind: "implement", title: "x", task: "y" }, io);
+  await pending;
+  assert.equal(seen.task?.sandbox.image, "pi-lead:v1.2.3");
+  const own = await setup(t, {
+    seen,
+    toolchains,
+    config: { sandbox: { image: "mine:latest" } },
+    image: async () => assert.fail("no download when the config names an image"),
+  });
+  pending = own.nextOutcome();
+  await own.delegator.start({ kind: "implement", title: "x", task: "y" }, io);
+  await pending;
+  assert.equal(seen.task?.sandbox.image, "mine:latest");
+  assert.deepEqual(prepared, ["pi-lead:v1.2.3", "mine:latest"]);
 });
 
 test("a Lead that throws on delivery does not take the watcher down", async (t) => {

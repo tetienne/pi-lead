@@ -11,6 +11,7 @@ import { loadConfig, type LeadConfig } from "./config.ts";
 import { createDelegator, type Delegator, type WorkerCommand } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
+import { createWorkerImage } from "./image.ts";
 import { createAskJev, createJudge, createLedger } from "./jev.ts";
 import { registerReportGuard } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
@@ -82,6 +83,8 @@ const WORKER_ACTIONS = ["list", "message", "stop"] as const;
 export default function lead(pi: ExtensionAPI) {
   let delegator: Delegator | undefined;
   let ui: ExtensionContext["ui"] | undefined;
+  // One per Lead: parallel delegations share a single first-time download.
+  const workerImage = createWorkerImage();
   let lastProgress = "";
   let closed = false;
   registerReportGuard(pi);
@@ -113,7 +116,8 @@ export default function lead(pi: ExtensionAPI) {
       herdr: createHerdrCli(),
       workspace: gitWorkspace,
       workerCommand,
-      toolchains: createToolchains({ root: join(agentDir, "pi-lead", "toolchains"), sandbox: config.sandbox, judge }),
+      toolchains: createToolchains({ root: join(agentDir, "pi-lead", "toolchains"), judge }),
+      image: workerImage,
       // So a skill's own files (templates, scripts) resolve inside the VM too.
       readonlyMounts: [SKILLS_DIR, ...globalSkillDirs(agentDir)],
       stateRoot: join(agentDir, "pi-lead", "workers"),

@@ -20,7 +20,7 @@ export type LeadConfig = {
   tiers: Record<Tier, TierRoute>;
   maxWorkers: number;
   sandbox: {
-    /** Gondolin image selector (for example `pi-lead:latest`, built with git). */
+    /** Gondolin image selector with git and mise. Unset: the image released with this version (src/image.ts). */
     image?: string;
     /** Hosts allowed without asking anyone. */
     allowedHosts: string[];
