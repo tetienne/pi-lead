@@ -61,13 +61,9 @@ Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
 - Pi ≥ 0.87.1 (GPT-6 Sol/Luna), Node ≥ 23.6 (Gondolin), git, QEMU (`brew install qemu`).
 - Herdr: start the Lead's Pi inside a Herdr pane; `herdr integration install pi`
   for worker status badges and reliable Lead → worker messages.
-- A Gondolin image with git and mise, built once (Docker or Podman):
-
-  ```bash
-  npm run sandbox:image              # Debian (glibc) + git + mise → pi-lead:latest
-  npm run sandbox:image -- --alpine  # without Docker; musl, fewer prebuilt mise tools
-  npm run sandbox:smoke              # boots a VM and checks the isolation claims
-  ```
+- Nothing to build: each release carries the worker image (Debian + git +
+  mise, x86_64 and arm64). The first worker downloads the one of the installed
+  version (a few hundred MB, sha256-checked) into Gondolin's image store.
 
 - Optional: a TypeSafe or OpenRouter key for Jev in `PI_LEAD_JEV_API_KEY`
   (exported in the shell Herdr starts panes with, so workers get it too).
@@ -83,9 +79,7 @@ pi install -l git:github.com/tetienne/pi-lead@v0.2.0
 ## Configure
 
 `~/.pi/agent/pi-lead.json` (a trusted project can override it in
-`.pi/pi-lead.json`). Only `sandbox.image` is required in practice: Gondolin's
-default image has no git, so workers refuse to start without the image built
-above. Everything else is optional:
+`.pi/pi-lead.json`). Everything is optional:
 
 ```json
 {
@@ -98,7 +92,7 @@ above. Everything else is optional:
                   "fallbacks": [{ "model": "opencode-go/deepseek-v4-pro", "thinking": "max" }] }
   },
   "maxWorkers": 2,
-  "sandbox": { "image": "pi-lead:latest", "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
+  "sandbox": { "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
   "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
   "keepFailedWorkers": true,
   "leadGuard": "confirm",
@@ -118,6 +112,15 @@ nothing left, the worker reports `blocked`. Pi never retries a quota error, so n
 paid balance. A tier without `model` uses the Lead's current model with that tier's
 thinking level. The example is the ChatGPT Pro + OpenCode Go mapping from
 [worker-models.md](docs/research/worker-models.md).
+
+`sandbox.image` replaces the released image with a Gondolin image of your own;
+it needs git and mise. From a clone of this repository:
+
+```bash
+npm run sandbox:image              # Debian (glibc) + git + mise → pi-lead:latest (Docker or Podman)
+npm run sandbox:image -- --alpine  # without Docker; musl, fewer prebuilt mise tools
+npm run sandbox:smoke              # boots a VM and checks the isolation claims
+```
 
 `allowedHosts` are trusted for downloads only (GET/HEAD and git fetch); any other request, including uploads to an allowlisted host, is
 judged by Jev per path, and when Jev is unsure the worker tab asks you.

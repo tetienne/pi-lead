@@ -31,6 +31,16 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+  # The worker image PI Lead downloads on first use: nothing to build for users.
+  image:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/image.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+
   # Optional npm distribution (pi install npm:pi-lead@X.Y.Z, pi.dev gallery).
   # Off until the repository variable NPM_PUBLISH is "true" and npm Trusted
   # Publishing is configured for this workflow file: no npm token is stored.

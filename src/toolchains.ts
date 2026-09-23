@@ -72,6 +72,8 @@ export type Toolchains = {
   prepare(input: {
     repoRoot: string;
     clonePath: string;
+    /** The sandbox the workers of this task use (its image decides which cache applies). */
+    sandbox: LeadConfig["sandbox"];
     progress(text: string): void;
     confirm?: (question: string) => Promise<boolean>;
   }): Promise<string | undefined>;
@@ -79,7 +81,6 @@ export type Toolchains = {
 
 export function createToolchains(options: {
   root: string;
-  sandbox: LeadConfig["sandbox"];
   judge: Pick<Judge, "egress">;
 }): Toolchains {
   const inFlight = new Map<string, Promise<string>>();
@@ -89,13 +90,13 @@ export function createToolchains(options: {
     input.progress("installing the project's mise toolchains in a sandbox (first time only)");
     const vm = await createSandboxVm({
       label: "pi-lead toolchains",
-      sandbox: options.sandbox,
+      sandbox: input.sandbox,
       mounts: {
         [GUEST_WORKSPACE]: { host: input.clonePath, readonly: true },
         [GUEST_MISE_DIR]: { host: cacheDir },
       },
       allowRequest: createEgressPolicy({
-        allowedHosts: [...MISE_HOSTS, ...options.sandbox.allowedHosts],
+        allowedHosts: [...MISE_HOSTS, ...input.sandbox.allowedHosts],
         task: `Install the toolchains declared in this project's mise configuration (${MISE_CONFIG_FILES.join(", ")}).`,
         judge: options.judge,
         ...(input.confirm ? { askHuman: input.confirm } : {}),
@@ -104,7 +105,7 @@ export function createToolchains(options: {
     try {
       const env = guestEnv(true);
       const probe = await vm.exec(["/bin/sh", "-lc", "command -v mise"], { env });
-      if (probe.exitCode !== 0) throw new Error("the Gondolin image has no mise; rebuild it with `npm run sandbox:image`");
+      if (probe.exitCode !== 0) throw new Error("the Gondolin image has no mise; use PI Lead's default image or add mise to yours");
       const result = await vm.exec(["/bin/sh", "-lc", "mise install 2>&1"], { cwd: GUEST_WORKSPACE, env });
       if (result.exitCode !== 0) {
         throw new Error(`mise install failed:\n${result.stdout.split("\n").slice(-20).join("\n")}`);
@@ -119,7 +120,7 @@ export function createToolchains(options: {
 
   return {
     async prepare(input) {
-      const key = await toolchainKey(input.clonePath, options.sandbox.image);
+      const key = await toolchainKey(input.clonePath, input.sandbox.image);
       if (!key) return undefined;
       const project = createHash("sha256").update(input.repoRoot).digest("hex").slice(0, 16);
       const cacheDir = join(options.root, project, key);

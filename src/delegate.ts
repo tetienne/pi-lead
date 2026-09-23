@@ -87,6 +87,8 @@ export type DelegateDeps = {
   workspace: Workspace;
   workerCommand: WorkerCommand;
   toolchains?: Toolchains;
+  /** The Gondolin image selector for workers when the config names none (downloads it the first time). */
+  image?(progress: (text: string) => void): Promise<string>;
   /** Host directories the guest may read at the same path (skill folders, so skills can reference their files). */
   readonlyMounts?: readonly string[];
   stateRoot: string;
@@ -471,9 +473,12 @@ export function createDelegator(deps: DelegateDeps) {
       resourceDir,
       projectTrusted: io.projectTrusted,
     });
+    const sandbox =
+      deps.config.sandbox.image || !deps.image ? deps.config.sandbox : { ...deps.config.sandbox, image: await deps.image(progress) };
     const toolchainCache = await deps.toolchains?.prepare({
       repoRoot: worker.repoRoot,
       clonePath: worker.clonePath,
+      sandbox,
       progress,
       ...(io.confirm ? { confirm: io.confirm } : {}),
     });
@@ -486,7 +491,7 @@ export function createDelegator(deps: DelegateDeps) {
       branch: worker.branch,
       clonePath: worker.clonePath,
       resultPath: worker.resultPath,
-      sandbox: deps.config.sandbox,
+      sandbox,
       jev: deps.config.jev,
       readonlyMounts: [
         ...(deps.readonlyMounts ?? []),
