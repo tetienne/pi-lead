@@ -15,7 +15,7 @@ import {
   type DelegateOutcome,
 } from "../src/delegate.ts";
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
-import type { Judge, WorkerVerdict } from "../src/jev.ts";
+import { createJudge, createLedger, type Judge, type WorkerVerdict } from "../src/jev.ts";
 import type { WorkerResult, WorkerTask } from "../src/protocol.ts";
 import type { Toolchains } from "../src/toolchains.ts";
 import type { Workspace } from "../src/workspace.ts";
@@ -23,7 +23,7 @@ import type { Workspace } from "../src/workspace.ts";
 const noJudge: Judge = {
   available: false,
   modelTier: async () => undefined,
-  readiness: async () => undefined,
+  intake: async () => ({}),
   egress: async () => "ask",
   verdict: async () => undefined,
   reviewSeverity: async () => undefined,
@@ -230,7 +230,7 @@ test("a worker waiting on a question gets the relayed answer and reports again",
 
 test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
-    judge: { available: true, modelTier: async () => ({ tier: "deep", difficulty: 3.4 }), verdict: async () => "partial" },
+    judge: { available: true, intake: async () => ({ tier: { tier: "deep", difficulty: 3.4 } }), verdict: async () => "partial" },
   });
   const pending = nextOutcome();
   const started = await delegator.start({ kind: "implement", title: "Hard", task: "t" }, io);
@@ -242,7 +242,7 @@ test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t)
 });
 
 test("a ticket Jev judges not ready is not delegated unless the user confirmed it", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, { judge: { readiness: async () => ({ ready: false, missing: ["acceptance"] }) } });
+  const { delegator, log, nextOutcome } = await setup(t, { judge: { intake: async () => ({ readiness: { ready: false, missing: ["acceptance"] } }) } });
   const refused = await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer" }, io);
   assert.equal(refused.status, "not_ready");
   assert.match(refused.text, /no verifiable acceptance criteria/);
@@ -250,6 +250,33 @@ test("a ticket Jev judges not ready is not delegated unless the user confirmed i
   const pending = nextOutcome();
   assert.equal((await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer", confirmedReady: true }, io)).status, "started");
   assert.equal((await pending).status, "done");
+});
+
+test("the implement path asks Jev readiness and difficulty in one call", async (t) => {
+  const calls: Array<Record<string, unknown>> = [];
+  const judge = createJudge({
+    ask: async (_state, questions) => {
+      calls.push(questions);
+      return {
+        answers: {
+          acceptance: { noul: 0.9 },
+          bounded: { noul: 0.9 },
+          decided: { noul: 0.9 },
+          difficulty: { score: 3.4, confidence: 0.9 },
+        },
+        inputTokens: 100,
+      };
+    },
+    config: DEFAULT_CONFIG.jev,
+    ledger: createLedger(join(await mkdtemp(join(tmpdir(), "jev-")), "usage.json")),
+  });
+  const { delegator, nextOutcome } = await setup(t, { judge: { ...judge, verdict: async () => undefined } });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Hard", task: "t" }, io);
+  assert.match(started.text, /tier deep, Jev difficulty 3\.4\/4/);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(Object.keys(calls[0]!).sort(), ["acceptance", "bounded", "decided", "difficulty"]);
+  await pending;
 });
 
 test("reviews start from the reviewed branch and report Jev's severity", async (t) => {
