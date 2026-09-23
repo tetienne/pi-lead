@@ -288,7 +288,7 @@ export function createJudge(options: {
           diffStat: clip(diffStat, 3_000),
           // A signal, not proof: the guest controls the repository and what its tests do.
           lastTestRun: lastTest
-            ? { command: clip(lastTest.command, 500), exitCode: lastTest.exitCode, note: "run in the worker's sandbox; -1 means it did not complete" }
+            ? { command: clip(lastTest.command, 500), exitCode: lastTest.exitCode, note: "run in the worker's sandbox; -1 means it did not complete; a pipeline's exit code is its last stage's" }
             : "none recorded",
         },
         questions,

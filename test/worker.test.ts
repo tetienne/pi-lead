@@ -12,7 +12,11 @@ test("test-like commands are recognised by a heuristic", () => {
   for (const command of ["npm test", "npm run check", "pnpm typecheck", "npx vitest run", "cd api && pytest -q", "cargo test -p core", "go test ./...", "mix test", "bundle exec rspec", "node --test test/*.test.ts", "python -m unittest"]) {
     assert.ok(isTestCommand(command), command);
   }
-  for (const command of ["git checkout -b x", "test -f a && echo y", "grep -rn test src", "ls tests", "npm install"]) {
+  for (const command of ["FORCE_COLOR=0 npx vitest run", "./gradlew test", "git add -A && npm test", "node --experimental-strip-types --test", "bundle exec rspec spec/a_spec.rb"]) {
+    assert.ok(isTestCommand(command), command);
+  }
+  // Named as an argument or in quotes, a runner is not a test run: a green `git commit` must not pass for one.
+  for (const command of ["git checkout -b x", "test -f a && echo y", "grep -rn test src", "ls tests", "npm install", "npm install -D vitest", "grep -rn jest package.json", 'git commit -m "test: cover export with vitest"', "git commit -m 'make test pass'", 'echo "run npm test"']) {
     assert.ok(!isTestCommand(command), command);
   }
 });
