@@ -135,6 +135,7 @@ test("a done without a passing test run is unverified, only for work that writes
 test("finish sends an unverified done back once per cycle, without reporting it", async () => {
   const run = async (task: Record<string, unknown>) => {
     const tools = new Map<string, any>();
+    const handlers = new Map<string, (event: any, ctx?: any) => any>();
     const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
     const taskPath = join(dir, "task.json");
     const resultPath = join(dir, "result.json");
@@ -144,10 +145,14 @@ test("finish sends an unverified done back once per cycle, without reporting it"
       registerFlag: () => undefined,
       getFlag: () => taskPath,
       registerTool: (tool: any) => tools.set(tool.name, tool),
-      on: () => undefined,
+      on: (event: string, handler: any) => handlers.set(event, handler),
     } as any);
     const finish = (status: string) => tools.get("finish").execute("1", { status, summary: "s" }, undefined, undefined, undefined);
-    return { finish, resultPath };
+    const settle = async (errorMessage: string) => {
+      await handlers.get("agent_end")!({ type: "agent_end", messages: [{ role: "assistant", stopReason: "error", errorMessage }] });
+      await handlers.get("agent_settled")!({ type: "agent_settled" });
+    };
+    return { finish, settle, resultPath };
   };
   const passes = async (attempt: Promise<unknown>) => {
     const outcome = await attempt.then((value: any) => value.content[0].text, (error: Error) => error.message);
@@ -160,6 +165,14 @@ test("finish sends an unverified done back once per cycle, without reporting it"
   assert.equal(first.terminate, undefined, "the worker keeps going");
   await assert.rejects(readFile(implement.resultPath, "utf8"), "nothing is reported to the Lead");
   await passes(implement.finish("done"));
+
+  // A result starts a new cycle: the next unverified done is sent back again.
+  const settled = await run({ kind: "implement" });
+  await settled.finish("done");
+  await settled.settle("401 unauthorized");
+  assert.equal(parseWorkerResult(JSON.parse(await readFile(settled.resultPath, "utf8")), "t").status, "blocked");
+  assert.match((await settled.finish("done")).content[0].text, /^Not finished/);
+  await passes(settled.finish("done"));
 
   await passes((await run({ kind: "implement" })).finish("partial"));
   await passes((await run({ kind: "review" })).finish("done"));
