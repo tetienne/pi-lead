@@ -9,6 +9,7 @@ import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.t
 import { parseWorkerResult, workerPrompt, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
+import { sensitivePatterns } from "./sensitive-paths.ts";
 import type { Toolchains } from "./toolchains.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -63,6 +64,8 @@ export type DelegateOutcome = {
     review?: { severity: number; action: ReviewAction };
     failure?: FailureKind;
     quota?: QuotaError;
+    /** Sensitive path patterns the branch touches; informative only, never a status change. */
+    sensitive?: string[];
   };
 };
 
@@ -562,6 +565,7 @@ export function createDelegator(deps: DelegateDeps) {
     const status =
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
+    const sensitive = sensitivePatterns(collected.changedFiles);
     const keep = status !== "done" && deps.config.keepFailedWorkers;
     setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
     if (keep) worker.waitingSince = Date.now();
@@ -610,6 +614,13 @@ export function createDelegator(deps: DelegateDeps) {
         ...(collected.diffStat ? ["", "Diff stat:", collected.diffStat] : []),
         ...(result.findings ? ["", "Findings:", result.findings] : []),
         "</worker-report>",
+        // Host-generated from the fixed pattern list, so it sits outside the block; guest-chosen file names stay inside.
+        ...(sensitive.length
+          ? [
+              "",
+              `Host check: the branch changes files that can run on your machine or in CI, or widen PI Lead's policy (${sensitive.join(", ")}); review them before merging.`,
+            ]
+          : []),
         ...(review ? ["", `Jev review severity: ${review.severity.toFixed(1)}/4 → ${review.action}`] : []),
         ...(next.length ? ["", "Next:", ...next.map((line) => `- ${line}`)] : []),
       ].join("\n"),
@@ -618,6 +629,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(jevVerdict ? { jevVerdict } : {}),
         ...(review ? { review } : {}),
         ...(result.quota ? { quota: result.quota } : {}),
+        ...(sensitive.length ? { sensitive } : {}),
       },
     });
   };

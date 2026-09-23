@@ -18,6 +18,8 @@ export type Workspace = {
   collect(input: { repoRoot: string; path: string; branch: string; base: string }): Promise<{
     commits: string;
     diffStat: string;
+    /** Every path the branch adds, changes, deletes or renames since `base`. */
+    changedFiles: string[];
   }>;
   remove(path: string): Promise<void>;
 };
@@ -50,11 +52,13 @@ export const gitWorkspace: Workspace = {
 
   async collect({ repoRoot, path, branch, base }) {
     await git(["fetch", "--quiet", "--no-tags", path, `+refs/heads/${branch}:refs/heads/${branch}`], repoRoot);
-    const [commits, diffStat] = await Promise.all([
+    const [commits, diffStat, names] = await Promise.all([
       git(["log", "--oneline", `${base}..${branch}`], repoRoot),
       git(["diff", "--stat", `${base}...${branch}`], repoRoot),
+      // -z: names verbatim, unquoted; --no-renames: a rename lists its old name too.
+      git(["diff", "--name-only", "-z", "--no-renames", `${base}...${branch}`], repoRoot),
     ]);
-    return { commits, diffStat };
+    return { commits, diffStat, changedFiles: names.split("\0").filter(Boolean) };
   },
 
   async remove(path) {
