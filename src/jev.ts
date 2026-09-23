@@ -49,7 +49,12 @@ export type Judge = {
   reviewSeverity(findings: string): Promise<{ severity: number; action: ReviewAction } | undefined>;
   failureKind(input: { task: string; log: string }): Promise<FailureKind | undefined>;
   overlap(a: string, b: string): Promise<boolean | undefined>;
+  /** Is a worker repeating the same failed approach? `undefined`: don't know. */
+  stuck(input: { task: string; runs: readonly ShellRun[] }): Promise<boolean | undefined>;
 };
+
+/** A worker shell command as the host-side bash wrapper saw it. */
+export type ShellRun = { command: string; exitCode: number; output?: string };
 
 /** Minimal shape of `TypeSafeClient.systemOne`, injectable for tests. */
 export type AskJev = (
@@ -384,6 +389,31 @@ export function createJudge(options: {
       );
       const probability = noulOf(answers?.overlap);
       return probability === undefined ? undefined : probability >= 0.5;
+    },
+
+    async stuck({ task, runs }) {
+      const answers = await run(
+        {
+          ticket: clip(task, 3_000),
+          // Oldest first; recorded on the host, output is the tail of stdout and stderr.
+          recentCommands: runs.map((entry) => ({
+            command: clip(entry.command, 500),
+            exitCode: entry.exitCode,
+            ...(entry.output ? { outputTail: clip(entry.output, 1_000) } : {}),
+          })),
+          note: "exit code -1 means the command did not complete (timeout, abort)",
+        },
+        {
+          stuck: noul("Is this coding agent repeating the same failed approach without changing strategy?", {
+            true: "It retries the same or trivially varied commands and gets the same failure.",
+            false: "Each attempt changes something meaningful, or the failures are expected steps (e.g. red tests before a fix).",
+          }),
+        },
+      );
+      const probability = noulOf(answers?.stuck);
+      if (probability === undefined) return undefined;
+      const answer = band(probability);
+      return answer === "unsure" ? undefined : answer === "yes";
     },
   };
 }

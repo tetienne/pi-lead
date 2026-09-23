@@ -106,6 +106,7 @@ pi install -l git:github.com/tetienne/pi-lead@v0.4.0
   "keepFailedWorkers": true,
   "leadGuard": "confirm",
   "waitingTimeoutMinutes": 120,
+  "stuckDetection": true,
   "steerUnverifiedDone": true
 }
 ```
@@ -134,6 +135,12 @@ npm run sandbox:smoke              # boots a VM and checks the isolation claims
 
 `allowedHosts` are trusted for downloads only (GET/HEAD and git fetch); any other request, including uploads to an allowlisted host, is
 judged by Jev per path, and when Jev is unsure the worker tab asks you.
+
+`stuckDetection` watches a worker's shell commands: when the same command fails
+three times in a row, or its last six commands all fail, Jev is asked whether
+it is repeating a failed approach; if so the worker is told to step back, and
+the second time to finish as `blocked` (with a warning in its tab). It is never
+stopped automatically. Without Jev, only the same-command case counts.
 
 ## Develop
 

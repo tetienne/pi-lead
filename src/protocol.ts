@@ -22,6 +22,8 @@ export type WorkerTask = {
   toolchainCache?: string;
   /** Host directories mounted read-only at the same path in the guest (skill folders). */
   readonlyMounts: string[];
+  /** Steer the worker when it keeps repeating a failing command. Absent means on. */
+  stuckDetection?: boolean;
   /** Send an unverified `done` back to the worker once (config `steerUnverifiedDone`); unset means true. */
   steerUnverifiedDone?: boolean;
 };

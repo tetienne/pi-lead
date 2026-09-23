@@ -6,12 +6,13 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createAskJev, createJudge, createLedger, describeJevProblem, type WorkerVerdict } from "../jev.ts";
+import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge, type WorkerVerdict } from "../jev.ts";
 import { quotaError } from "../quota.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, WRITES_CODE, type LastTest, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
 import { isTestCommand, registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
+import { createStuckDetector } from "./stuck.ts";
 
 /**
  * Why a `done` finish is not backed by a passing test run, or undefined when
@@ -60,14 +61,21 @@ export default function worker(pi: ExtensionAPI) {
     return task;
   };
 
-  const startVm = async (ctx?: ExtensionContext) => {
+  let judge: Judge | undefined;
+  const getJudge = async () => {
     const current = await loadTask();
-    const judge = createJudge({
+    judge ??= createJudge({
       ask: createAskJev(current.jev),
       config: current.jev,
       ledger: createLedger(join(getAgentDir(), "pi-lead", "jev-usage.json")),
       onProblem: (problem) => latestContext?.ui.notify(describeJevProblem(problem), "warning"),
     });
+    return judge;
+  };
+
+  const startVm = async (ctx?: ExtensionContext) => {
+    const current = await loadTask();
+    const judge = await getJudge();
     const allow = createEgressPolicy({
       allowedHosts: current.sandbox.allowedHosts,
       task: current.task,
@@ -103,8 +111,18 @@ export default function worker(pi: ExtensionAPI) {
     return running;
   };
 
-  registerSandboxTools(pi, process.cwd(), ensureVm, (command, exitCode) => {
+  const stuck = createStuckDetector({
+    judge: async (runs) => (await getJudge()).stuck({ task: (await loadTask()).task, runs }),
+    // Queued into the running turn; skipped when the run is already over.
+    steer: (text) => {
+      if (latestContext && !latestContext.isIdle()) pi.sendMessage({ customType: "pi-lead-stuck", content: text, display: true }, { deliverAs: "steer" });
+    },
+    notify: (text) => latestContext?.ui.notify(text, "warning"),
+  });
+
+  registerSandboxTools(pi, process.cwd(), ensureVm, (command, exitCode, outputTail) => {
     if (isTestCommand(command)) lastTest = { command: command.slice(0, 500), exitCode };
+    if (task && task.stuckDetection !== false) void stuck.record({ command, exitCode, output: outputTail }).catch(() => undefined);
   });
 
   /**
@@ -126,6 +144,9 @@ export default function worker(pi: ExtensionAPI) {
     await rename(temporary, current.resultPath);
     // A new cycle starts: the Lead's next message may lead to another unverified done.
     steered = false;
+    // A Jev check still in flight must not steer a worker that already reported:
+    // a steer queued now would restart its run after `finish`.
+    stuck.reset();
   };
 
   pi.registerTool({
@@ -191,6 +212,8 @@ export default function worker(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event) => {
     const current = await loadTask();
+    // A new prompt from the Lead or the user: a new cycle for stuck detection.
+    stuck.reset();
     const localLine = `Current working directory: ${process.cwd()}`;
     const guestLine = `Current working directory: ${GUEST_WORKSPACE} (Gondolin VM; branch ${current.branch})`;
     const prompt = event.systemPrompt.includes(localLine)
