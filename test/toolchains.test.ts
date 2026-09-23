@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
-import { createToolchains, toolchainKey } from "../src/toolchains.ts";
+import { chmodExecutables, createToolchains, toolchainKey } from "../src/toolchains.ts";
 
 test("the cache key follows the project's mise configuration and the image", async () => {
   const clone = await mkdtemp(join(tmpdir(), "pi-lead-tc-"));
@@ -38,4 +38,25 @@ test("a warmed-up cache is reused without starting a VM", async () => {
   assert.deepEqual(progress, []);
   const empty = await mkdtemp(join(tmpdir(), "pi-lead-tc-empty-"));
   assert.equal(await toolchains.prepare({ repoRoot: "/repo", clonePath: empty, sandbox: DEFAULT_CONFIG.sandbox, progress: () => {} }), undefined);
+});
+
+test("chmodExecutables fixes ELF and shebang files without following symlinks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-lead-tc-chmod-"));
+  await writeFile(join(dir, "elf-tool"), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0, 0, 0]));
+  await chmod(join(dir, "elf-tool"), 0o644);
+  await writeFile(join(dir, "script.sh"), "#!/bin/sh\necho hi\n");
+  await chmod(join(dir, "script.sh"), 0o644);
+  await writeFile(join(dir, "readme.txt"), "not a binary\n");
+  await mkdir(join(dir, "bin"));
+  await writeFile(join(dir, "bin", "nested-elf"), Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
+  await chmod(join(dir, "bin", "nested-elf"), 0o644);
+  await symlink("elf-tool", join(dir, "linked-elf")); // must stay untouched: never followed
+
+  await chmodExecutables(dir);
+
+  assert.equal((await lstat(join(dir, "elf-tool"))).mode & 0o777, 0o755);
+  assert.equal((await lstat(join(dir, "script.sh"))).mode & 0o777, 0o755);
+  assert.equal((await lstat(join(dir, "readme.txt"))).mode & 0o777, 0o644, "plain files are left alone");
+  assert.equal((await lstat(join(dir, "bin", "nested-elf"))).mode & 0o777, 0o755, "recurses into subdirectories");
+  assert.equal((await lstat(join(dir, "linked-elf"))).isSymbolicLink(), true, "symlinks are never followed or chmod'd");
 });
