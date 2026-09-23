@@ -93,3 +93,6 @@ dailyBudgetUsd,minConfidence}`, `keepFailedWorkers`.
    confirming its bash/write calls while a report is in context, would close
    this channel.
 4. Jev thresholds are defaults, not calibrated; collect real judgments and tune.
+5. The worker's `grep` (from Pi's Gondolin example) walks the guest tree from
+   the host process: bound the pattern (ReDoS), file sizes and symlink loops,
+   or run grep inside the guest.
