@@ -18,6 +18,8 @@ export type Workspace = {
   collect(input: { repoRoot: string; path: string; branch: string; base: string }): Promise<{
     commits: string;
     diffStat: string;
+    /** Changed file names, one per line. */
+    files: string;
   }>;
   remove(path: string): Promise<void>;
 };
@@ -50,11 +52,12 @@ export const gitWorkspace: Workspace = {
 
   async collect({ repoRoot, path, branch, base }) {
     await git(["fetch", "--quiet", "--no-tags", path, `+refs/heads/${branch}:refs/heads/${branch}`], repoRoot);
-    const [commits, diffStat] = await Promise.all([
+    const [commits, diffStat, files] = await Promise.all([
       git(["log", "--oneline", `${base}..${branch}`], repoRoot),
       git(["diff", "--stat", `${base}...${branch}`], repoRoot),
+      git(["diff", "--name-only", `${base}...${branch}`], repoRoot),
     ]);
-    return { commits, diffStat };
+    return { commits, diffStat, files };
   },
 
   async remove(path) {

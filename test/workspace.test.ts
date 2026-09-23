@@ -32,6 +32,7 @@ test("a worker clone is disposable and its branch comes back by fetch", async ()
   const collected = await gitWorkspace.collect({ repoRoot: repo, path: clone, branch: "pi-lead/x-1", base });
   assert.match(collected.commits, /change/);
   assert.match(collected.diffStat, /a\.txt/);
+  assert.equal(collected.files, "a.txt");
   assert.equal(git(repo, "rev-parse", "--abbrev-ref", "HEAD"), "main", "the user's checkout is untouched");
   assert.equal(git(repo, "log", "-1", "--format=%s", "pi-lead/x-1"), "change");
 

@@ -557,6 +557,9 @@ export function createDelegator(deps: DelegateDeps) {
       reported: result.status,
       summary: result.summary,
       diffStat: collected.diffStat,
+      commits: collected.commits,
+      files: collected.files,
+      ...(result.lastTest ? { lastTest: result.lastTest } : {}),
     });
     // Trust the more pessimistic of the worker and Jev.
     const status =

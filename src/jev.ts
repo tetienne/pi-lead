@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { choice, noul, score, TypeSafeClient, type Fetch } from "@typesafe-ai/sdk";
 
 import type { LeadConfig, Tier } from "./config.ts";
+import type { LastTest } from "./protocol.ts";
 
 /**
  * Jev answers closed-set questions; this module maps each answer to a
@@ -29,6 +30,12 @@ export type Judge = {
     reported: WorkerVerdict;
     summary: string;
     diffStat: string;
+    /** `git log --oneline base..branch`, collected on the host. */
+    commits: string;
+    /** `git diff --name-only base...branch`, collected on the host. */
+    files: string;
+    /** Recorded outside the guest, but the guest controls what the command ran. */
+    lastTest?: LastTest;
   }): Promise<WorkerVerdict | undefined>;
   reviewSeverity(findings: string): Promise<{ severity: number; action: ReviewAction } | undefined>;
   failureKind(input: { task: string; log: string }): Promise<FailureKind | undefined>;
@@ -43,6 +50,8 @@ export type AskJev = (
 ) => Promise<{ answers: Record<string, unknown>; inputTokens: number }>;
 
 // ---- deterministic mappings (pure, tested) --------------------------------
+
+const clip = (text: string, max = 12_000) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text);
 
 /** Difficulty rubric: 0 trivial … 4 hard. */
 export const DIFFICULTY_RUBRIC = [
@@ -81,6 +90,40 @@ export function band(probability: number, low = 0.2, high = 0.8): "yes" | "no" |
   if (probability >= high) return "yes";
   if (probability <= low) return "no";
   return "unsure";
+}
+
+/** Criteria past this are not asked about: a long checklist is cut, not skipped. */
+export const MAX_CRITERIA = 8;
+
+const CRITERIA_HEADING = /^\s*(?:#{1,6}\s+)?(?:\*\*)?acceptance criteria\b[\s:*]*$/i;
+const LIST_ITEM = /^[-*]\s+(?:\[[ xX]\]\s+)?(\S.*)$/;
+const TASK_ITEM = /^[-*]\s+\[[ xX]\]\s+(\S.*)$/;
+
+/**
+ * The ticket's acceptance criteria, when it has a checklist in the shapes
+ * to-tickets writes: the top-level items under an "Acceptance criteria"
+ * heading, or, without that heading, its top-level `- [ ]` items. Nothing is
+ * extracted by a model: a ticket without such a list gets `[]`.
+ */
+export function acceptanceCriteria(ticket: string): string[] {
+  const lines = ticket.split(/\r?\n/);
+  const heading = lines.findIndex((line) => CRITERIA_HEADING.test(line));
+  const items: string[] = [];
+  if (heading >= 0) {
+    for (const line of lines.slice(heading + 1)) {
+      if (/^\s*#{1,6}\s/.test(line)) break;
+      const item = LIST_ITEM.exec(line);
+      if (item) items.push(item[1]!.trim());
+      // Indented lines continue an item; other text after the list ends it.
+      else if (items.length > 0 && line.trim() && !/^\s/.test(line)) break;
+    }
+  } else {
+    for (const line of lines) {
+      const item = TASK_ITEM.exec(line);
+      if (item) items.push(item[1]!.trim());
+    }
+  }
+  return items.slice(0, MAX_CRITERIA).map((item) => clip(item, 500));
 }
 
 // ---- budget ---------------------------------------------------------------
@@ -138,8 +181,6 @@ function scoreOf(answer: unknown, levels: number, minConfidence: number): number
 }
 
 // ---- judge ----------------------------------------------------------------
-
-const clip = (text: string, max = 12_000) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text);
 
 export function createJudge(options: {
   ask?: AskJev;
@@ -220,20 +261,45 @@ export function createJudge(options: {
       return decision;
     },
 
-    async verdict({ task, reported, summary, diffStat }) {
+    async verdict({ task, reported, summary, diffStat, commits, files, lastTest }) {
       const labels = ["done", "partial", "blocked", "needs_human"] as const;
+      const criteria = acceptanceCriteria(task);
+      const questions: Record<string, unknown> = {
+        verdict: choice("Given the ticket, the worker's report and the evidence (commits, changed files, last test run), what is the real state of the work?", {
+          done: "The ticket's acceptance criteria are met and verified.",
+          partial: "Useful progress, but some acceptance criteria are not met or not verified.",
+          blocked: "The worker could not proceed because of a technical obstacle.",
+          needs_human: "A human decision, credential or manual step is required.",
+        }),
+      };
+      criteria.forEach((criterion, index) => {
+        questions[`criterion${index + 1}`] = noul(`Does the evidence show this criterion met? ${criterion}`, {
+          true: "The commits, changed files or test run show it met.",
+          false: "The evidence shows it unmet, or shows no work towards it.",
+        });
+      });
       const answers = await run(
-        { ticket: clip(task, 6_000), workerSaid: reported, summary: clip(summary, 6_000), diffStat: clip(diffStat, 3_000) },
         {
-          verdict: choice("Given the ticket and the worker's report, what is the real state of the work?", {
-            done: "The ticket's acceptance criteria are met and verified.",
-            partial: "Useful progress, but some acceptance criteria are not met or not verified.",
-            blocked: "The worker could not proceed because of a technical obstacle.",
-            needs_human: "A human decision, credential or manual step is required.",
-          }),
+          ticket: clip(task, 6_000),
+          workerSaid: reported,
+          summary: clip(summary, 6_000),
+          commits: clip(commits, 3_000),
+          changedFiles: clip(files, 3_000),
+          diffStat: clip(diffStat, 3_000),
+          // A signal, not proof: the guest controls the repository and what its tests do.
+          lastTestRun: lastTest
+            ? { command: clip(lastTest.command, 500), exitCode: lastTest.exitCode, note: "run in the worker's sandbox; -1 means it did not complete" }
+            : "none recorded",
         },
+        questions,
       );
-      return choiceOf(answers?.verdict, labels, config.minConfidence);
+      const verdict = choiceOf(answers?.verdict, labels, config.minConfidence);
+      const unmet = criteria.some((_, index) => {
+        const probability = noulOf(answers?.[`criterion${index + 1}`]);
+        return probability !== undefined && band(probability) === "no";
+      });
+      // An unmet criterion makes Jev's verdict at most partial; blocked and needs_human stand.
+      return unmet && (verdict === undefined || verdict === "done") ? "partial" : verdict;
     },
 
     async reviewSeverity(findings) {

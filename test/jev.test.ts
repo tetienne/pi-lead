@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
+  acceptanceCriteria,
   actionForSeverity,
   band,
   createAskJev,
@@ -77,7 +78,80 @@ test("malformed answers are rejected", async () => {
     ledger: await ledgerIn(),
   });
   assert.equal(await judge.modelTier({ task: "x", kind: "implement" }), undefined);
-  assert.equal(await judge.verdict({ task: "x", reported: "done", summary: "", diffStat: "" }), undefined);
+  assert.equal(await judge.verdict({ task: "x", reported: "done", summary: "", diffStat: "", commits: "", files: "" }), undefined);
+});
+
+test("acceptance criteria are read from a checklist, never guessed", () => {
+  const issue = [
+    "## What to build",
+    "",
+    "- not a criterion",
+    "",
+    "## Acceptance criteria",
+    "",
+    "- [ ] Export writes a CSV file",
+    "  with a header row",
+    "- [x] `npm test` passes",
+    "- Plain bullets count too",
+    "",
+    "## Blocked by",
+    "",
+    "- None",
+  ].join("\n");
+  assert.deepEqual(acceptanceCriteria(issue), ["Export writes a CSV file", "`npm test` passes", "Plain bullets count too"]);
+
+  // to-tickets' local template: a task list without the heading.
+  const local = "# 03: Export\n\n**What to build:** export.\n\n- [ ] One\n- [x] Two\n- plain bullet\n";
+  assert.deepEqual(acceptanceCriteria(local), ["One", "Two"]);
+  assert.deepEqual(acceptanceCriteria("**Acceptance criteria:**\n- A\nThanks"), ["A"]);
+
+  assert.deepEqual(acceptanceCriteria("Add CSV export. AC: test passes.\n- a bullet"), []);
+  assert.deepEqual(acceptanceCriteria("Acceptance criteria are in the spec.\n- [ ] x"), ["x"], "prose is not a heading");
+  const many = `## Acceptance criteria\n${Array.from({ length: 12 }, (_, i) => `- [ ] c${i}`).join("\n")}`;
+  assert.equal(acceptanceCriteria(many).length, 8);
+});
+
+test("the verdict sees the evidence; an unmet criterion caps it at partial", async () => {
+  const ticket = "Export.\n\n## Acceptance criteria\n\n- [ ] Writes a CSV\n- [ ] Has tests\n";
+  const evidence = {
+    task: ticket,
+    reported: "done" as const,
+    summary: "done",
+    diffStat: " src/a.ts | 3 ++-",
+    commits: "abc feat: export",
+    files: "src/a.ts",
+    lastTest: { command: "npm test", exitCode: 0 },
+  };
+  const calls: Array<{ state: any; questions: Record<string, any> }> = [];
+  const met = createJudge({
+    ask: fakeAsk({ verdict: { choice: "done", confidence: 0.9 }, criterion1: { noul: 0.9 }, criterion2: { noul: 0.5 } }, calls),
+    config: DEFAULT_CONFIG.jev,
+    ledger: await ledgerIn(),
+  });
+  assert.equal(await met.verdict(evidence), "done", "an unsure criterion does not downgrade");
+  assert.deepEqual(Object.keys(calls[0]!.questions), ["verdict", "criterion1", "criterion2"], "one call for all questions");
+  assert.match(JSON.stringify(calls[0]!.questions.criterion2), /Has tests/);
+  assert.equal(calls[0]!.state.commits, "abc feat: export");
+  assert.equal(calls[0]!.state.changedFiles, "src/a.ts");
+  assert.deepEqual({ ...calls[0]!.state.lastTestRun, note: undefined }, { command: "npm test", exitCode: 0, note: undefined });
+
+  const ledger = await ledgerIn();
+  const unmet = (verdict: string | undefined) =>
+    createJudge({
+      ask: fakeAsk({ ...(verdict ? { verdict: { choice: verdict, confidence: 0.9 } } : {}), criterion1: { noul: 0.9 }, criterion2: { noul: 0.05 } }),
+      config: DEFAULT_CONFIG.jev,
+      ledger,
+    });
+  assert.equal(await unmet("done").verdict(evidence), "partial");
+  assert.equal(await unmet(undefined).verdict(evidence), "partial");
+  assert.equal(await unmet("needs_human").verdict(evidence), "needs_human");
+
+  // No checklist: today's single question, and no test run is stated as such.
+  const plain: typeof calls = [];
+  const single = createJudge({ ask: fakeAsk({ verdict: { choice: "done", confidence: 0.9 }, criterion1: { noul: 0 } }, plain), config: DEFAULT_CONFIG.jev, ledger });
+  assert.equal(await single.verdict({ ...evidence, task: "Add CSV export. AC: test passes.", lastTest: undefined }), "done");
+  assert.deepEqual(Object.keys(plain[0]!.questions), ["verdict"]);
+  assert.equal(plain[0]!.state.lastTestRun, "none recorded");
 });
 
 test("readiness lists the failed checks", async () => {

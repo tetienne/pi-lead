@@ -8,10 +8,10 @@ import { Type } from "typebox";
 
 import { createAskJev, createJudge, createLedger } from "../jev.ts";
 import { quotaError } from "../quota.ts";
-import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
+import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type LastTest, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
-import { registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
+import { isTestCommand, registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
 
 /**
  * Loaded only into worker Pi processes (`--no-extensions -e`). Pi and this
@@ -27,6 +27,8 @@ export default function worker(pi: ExtensionAPI) {
   let seq = 0;
   /** Error of the last assistant message of the run, until Pi settles. */
   let runError: string | undefined;
+  /** Evidence for the Lead's verdict, recorded here rather than reported by the model. */
+  let lastTest: LastTest | undefined;
 
   const loadTask = async () => {
     if (task) return task;
@@ -81,7 +83,9 @@ export default function worker(pi: ExtensionAPI) {
     return running;
   };
 
-  registerSandboxTools(pi, process.cwd(), ensureVm);
+  registerSandboxTools(pi, process.cwd(), ensureVm, (command, exitCode) => {
+    if (isTestCommand(command)) lastTest = { command: command.slice(0, 500), exitCode };
+  });
 
   /**
    * Commit anything left in the tree, inside the guest, so the host only ever
@@ -128,6 +132,7 @@ export default function worker(pi: ExtensionAPI) {
         status: params.status,
         summary: params.summary,
         ...(params.findings ? { findings: params.findings } : {}),
+        ...(lastTest ? { lastTest } : {}),
       };
       if (params.status === "done") {
         // The Lead usually closes a finished worker's tab: stop the VM first
