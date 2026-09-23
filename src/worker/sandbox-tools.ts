@@ -126,7 +126,41 @@ function createGondolinFindOps(vm: VM, localCwd: string): FindOperations {
 	};
 }
 
-function createGondolinBashOps(vm: VM, localCwd: string, shellPath: string, guestEnv: Record<string, string>): BashOperations {
+/** Called with each shell command and its exit code, -1 when it did not complete. */
+export type CommandListener = (command: string, exitCode: number) => void;
+
+/** Env assignments and wrappers that may precede a test runner in a shell segment. */
+const RUNNER_PREFIX = String.raw`^(?:\w+=\S*\s+)*(?:(?:npx|bunx|uvx|env|time|timeout\s+\S+|(?:pnpm|bundle|poetry|uv|pipenv|yarn)\s+(?:exec|run))\s+)*`;
+const TEST_SEGMENTS = [
+	String.raw`(?:\S*/)?(?:vitest|jest|pytest|mocha|rspec|phpunit|ctest|tox|nox)\b`,
+	String.raw`(?:\S*/)?(?:cargo|go|mix|dotnet|deno|bun|swift|zig|gradle|gradlew|mvn|make|just)\s+test\b`,
+	String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|spec|check|typecheck|verify)\b`,
+	String.raw`node\s+(?:--\S+\s+)*--test\b`,
+	String.raw`python3?\s+-m\s+(?:pytest|unittest)\b`,
+	String.raw`mise\s+run\s+(?:test|check)\b`,
+].map((pattern) => new RegExp(RUNNER_PREFIX + pattern));
+
+/**
+ * Heuristic: does this shell command run a test suite or a project check?
+ * It only picks which command's exit code is shown to Jev as evidence. A
+ * runner must start a segment of the command line: named in quotes (a commit
+ * message, an echo) or as an argument (`npm install -D vitest`, `grep jest`)
+ * it does not count, or a later `git commit` would pass for a green run.
+ */
+export function isTestCommand(command: string): boolean {
+	const unquoted = command.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, "''");
+	return unquoted
+		.split(/&&|\|\||[;&|\n()]/)
+		.some((segment) => TEST_SEGMENTS.some((pattern) => pattern.test(segment.trim())));
+}
+
+function createGondolinBashOps(
+	vm: VM,
+	localCwd: string,
+	shellPath: string,
+	guestEnv: Record<string, string>,
+	onCommand?: CommandListener,
+): BashOperations {
 	return {
 		exec: async (command, cwd, { onData, signal, timeout }) => {
 			if (signal?.aborted) throw new Error("aborted");
@@ -154,8 +188,10 @@ function createGondolinBashOps(vm: VM, localCwd: string, shellPath: string, gues
 				});
 				for await (const chunk of proc.output()) onData(chunk.data);
 				const result = await proc;
+				onCommand?.(command, result.exitCode);
 				return { exitCode: result.exitCode };
 			} catch (error) {
+				onCommand?.(command, -1);
 				if (signal?.aborted) throw new Error("aborted");
 				if (timedOut) throw new Error(`timeout:${timeout}`);
 				throw error;
@@ -174,12 +210,14 @@ export type SandboxHandle = { vm: VM; shellPath: string; env: Record<string, str
  * Re-register Pi's file and shell tools so every model-driven action runs in
  * the VM. The worker is started with `--no-builtin-tools`, so these are the
  * only tools of those names. `localCwd` (Pi's own cwd) only shapes the tool
- * definitions; paths are mapped against the sandbox's `root`.
+ * definitions; paths are mapped against the sandbox's `root`. `onCommand`
+ * sees every shell command, from the model or typed with `!` in the tab.
  */
 export function registerSandboxTools(
   pi: ExtensionAPI,
   localCwd: string,
   ensureVm: (ctx?: ExtensionContext) => Promise<SandboxHandle>,
+  onCommand?: CommandListener,
 ): void {
   const templates = {
     read: createReadTool(localCwd),
@@ -216,7 +254,7 @@ export function registerSandboxTools(
     ...templates.bash,
     async execute(id, params, signal, onUpdate, ctx) {
       const { vm, shellPath, env, root } = await ensureVm(ctx);
-      return createBashTool(GUEST_WORKSPACE, { operations: createGondolinBashOps(vm, root, shellPath, env) }).execute(id, params, signal, onUpdate);
+      return createBashTool(GUEST_WORKSPACE, { operations: createGondolinBashOps(vm, root, shellPath, env, onCommand) }).execute(id, params, signal, onUpdate);
     },
   });
   pi.registerTool({
@@ -243,6 +281,6 @@ export function registerSandboxTools(
 
   pi.on("user_bash", async (_event, ctx) => {
     const { vm, shellPath, env, root } = await ensureVm(ctx);
-    return { operations: createGondolinBashOps(vm, root, shellPath, env) };
+    return { operations: createGondolinBashOps(vm, root, shellPath, env, onCommand) };
   });
 }

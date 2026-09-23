@@ -42,7 +42,16 @@ export type WorkerResult = {
   quota?: QuotaError;
   /** Changes left in the clone because committing them failed. */
   uncommitted?: boolean;
+  /** Written by the worker extension: the last test-like shell command and its exit code. */
+  lastTest?: LastTest;
 };
+
+/**
+ * Recorded by the host-side bash wrapper, so the model cannot make it up; but
+ * the guest controls the repository, so it is a signal, not proof. `exitCode`
+ * is -1 when the command did not complete (timeout, abort).
+ */
+export type LastTest = { command: string; exitCode: number };
 
 export const WORKER_STATUSES = ["done", "partial", "blocked", "needs_human"] as const satisfies readonly WorkerVerdict[];
 
@@ -62,6 +71,8 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
     (result.findings !== undefined && typeof result.findings !== "string") ||
     (result.modelError !== undefined && typeof result.modelError !== "string") ||
     (result.uncommitted !== undefined && typeof result.uncommitted !== "boolean") ||
+    (result.lastTest !== undefined &&
+      (typeof result.lastTest?.command !== "string" || !Number.isInteger(result.lastTest.exitCode))) ||
     (result.quota !== undefined &&
       (typeof result.quota?.message !== "string" ||
         (result.quota.retryAfterMinutes !== undefined &&

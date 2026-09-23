@@ -6,6 +6,53 @@ import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
 import worker from "../src/worker/extension.ts";
+import { isTestCommand, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
+
+test("test-like commands are recognised by a heuristic", () => {
+  for (const command of ["npm test", "npm run check", "pnpm typecheck", "npx vitest run", "cd api && pytest -q", "cargo test -p core", "go test ./...", "mix test", "bundle exec rspec", "node --test test/*.test.ts", "python -m unittest"]) {
+    assert.ok(isTestCommand(command), command);
+  }
+  for (const command of ["FORCE_COLOR=0 npx vitest run", "./gradlew test", "git add -A && npm test", "node --experimental-strip-types --test", "bundle exec rspec spec/a_spec.rb"]) {
+    assert.ok(isTestCommand(command), command);
+  }
+  // Named as an argument or in quotes, a runner is not a test run: a green `git commit` must not pass for one.
+  for (const command of ["git checkout -b x", "test -f a && echo y", "grep -rn test src", "ls tests", "npm install", "npm install -D vitest", "grep -rn jest package.json", 'git commit -m "test: cover export with vitest"', "git commit -m 'make test pass'", 'echo "run npm test"']) {
+    assert.ok(!isTestCommand(command), command);
+  }
+});
+
+test("the host-side bash wrapper reports each command's exit code, -1 when it did not complete", async () => {
+  const vm: any = {
+    exec: (argv: string[]) => {
+      const command = argv[2]!;
+      const done = command.includes("hang")
+        ? Promise.reject(new Error("vm gone"))
+        : Promise.resolve({ exitCode: command.includes("fail") ? 1 : 0 });
+      return Object.assign(done, { output: async function* () { yield { data: Buffer.from("out\n") }; } });
+    },
+  };
+  const tools = new Map<string, any>();
+  const seen: Array<[string, number]> = [];
+  registerSandboxTools(
+    { registerTool: (tool: any) => tools.set(tool.name, tool), on: () => undefined } as any,
+    "/host/clone",
+    async () => ({ vm, shellPath: "/bin/sh", env: {}, root: "/host/clone" }),
+    (command, exitCode) => void seen.push([command, exitCode]),
+  );
+  const bash = tools.get("bash");
+  await bash.execute("1", { command: "npm test" }, undefined, undefined, {});
+  await assert.rejects(bash.execute("2", { command: "npm test -- fail" }, undefined, undefined, {}));
+  await assert.rejects(bash.execute("3", { command: "npm test -- hang" }, undefined, undefined, {}));
+  assert.deepEqual(seen, [["npm test", 0], ["npm test -- fail", 1], ["npm test -- hang", -1]]);
+});
+
+test("a worker result may carry the last test run", () => {
+  const base = { version: 1, id: "t", seq: 1, status: "done", summary: "s" };
+  assert.equal(parseWorkerResult(base, "t").lastTest, undefined);
+  assert.deepEqual(parseWorkerResult({ ...base, lastTest: { command: "npm test", exitCode: 0 } }, "t").lastTest, { command: "npm test", exitCode: 0 });
+  assert.throws(() => parseWorkerResult({ ...base, lastTest: { command: "npm test", exitCode: "0" } }, "t"), /malformed/);
+  assert.throws(() => parseWorkerResult({ ...base, lastTest: "npm test" }, "t"), /malformed/);
+});
 
 test("the worker replaces every file/shell tool with a sandboxed one and adds finish", async () => {
   const tools: string[] = [];

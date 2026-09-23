@@ -33,7 +33,7 @@ const noJudge: Judge = {
 
 type Log = string[];
 type Reply =
-  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string; uncommitted?: boolean }
+  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string; uncommitted?: boolean; lastTest?: WorkerResult["lastTest"] }
   | "exit"
   | "silent";
 
@@ -76,7 +76,7 @@ function fakeHerdr(
     setTimeout(() => {
       void writeFile(
         worker.task.resultPath,
-        JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}), ...(next.quota ? { quota: next.quota } : {}), ...(next.modelError ? { modelError: next.modelError } : {}), ...(next.uncommitted ? { uncommitted: true } : {}) }),
+        JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}), ...(next.quota ? { quota: next.quota } : {}), ...(next.modelError ? { modelError: next.modelError } : {}), ...(next.uncommitted ? { uncommitted: true } : {}), ...(next.lastTest ? { lastTest: next.lastTest } : {}) }),
       );
     }, next.delayMs ?? 5);
   };
@@ -239,6 +239,28 @@ test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t)
   assert.equal(outcome.status, "partial");
   assert.match(outcome.text, /worker said done, Jev said partial/);
   assert.ok(!log.some((line) => line.startsWith("close")));
+});
+
+test("Jev's verdict is asked with the commits, changed files and last test run", async (t) => {
+  const asked: Array<Parameters<Judge["verdict"]>[0]> = [];
+  const { delegator, nextOutcome } = await setup(t, {
+    replies: [{ status: "done", summary: "tests pass", lastTest: { command: "npm test", exitCode: 1 } }],
+    judge: { available: true, verdict: async (input) => (asked.push(input), "partial") },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Export", task: "## Acceptance criteria\n- [ ] CSV" }, io);
+  assert.equal((await pending).status, "partial");
+  assert.equal(asked.length, 1);
+  const { commits, ...rest } = asked[0]!;
+  assert.match(commits, /^def456 work on pi-lead\//);
+  assert.deepEqual(rest, {
+    task: "## Acceptance criteria\n- [ ] CSV",
+    reported: "done",
+    summary: "tests pass",
+    diffStat: " src/a.ts | 3 ++-",
+    changedFiles: ["src/a.ts"],
+    lastTest: { command: "npm test", exitCode: 1 },
+  });
 });
 
 test("a ticket Jev judges not ready is not delegated unless the user confirmed it", async (t) => {
