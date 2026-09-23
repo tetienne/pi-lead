@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/tetienne/pi-lead/compare/v0.3.0...v0.3.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* make project mise toolchains usable in workers ([#7](https://github.com/tetienne/pi-lead/issues/7)) ([f490db6](https://github.com/tetienne/pi-lead/commit/f490db696b08acd1af5d9420e9b9d1ac05a311de))
+
 ## [0.3.0](https://github.com/tetienne/pi-lead/compare/v0.2.0...v0.3.0) (2026-09-23)
 
 
