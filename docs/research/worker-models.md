@@ -10,7 +10,8 @@ inspected.
 ## How a Jev answer becomes a model
 
 1. `Judge.modelTier` asks Jev for a 0–4 difficulty score (`DIFFICULTY_RUBRIC` in
-   `src/jev.ts`).
+   `src/jev.ts`). For an unconfirmed `implement` ticket, `Judge.intake` asks it in
+   the same call as the readiness checks.
 2. `tierForDifficulty` maps the score to a tier: below 1.5 → `fast`, below 2.8 →
    `standard`, otherwise → `deep`. `debug` and `review` never go below
    `standard`. When Jev is unavailable or unsure, the default is `standard`, or `deep`
