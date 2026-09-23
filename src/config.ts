@@ -41,9 +41,10 @@ export type LeadConfig = {
     /** Below this confidence a judgment is treated as "don't know". */
     minConfidence: number;
     /**
-     * `normal`: every Lead judgment as a transcript line, and egress denials
-     * and questions in worker tabs. `quiet`: only fallbacks, overrides and
-     * egress denials and questions. `verbose`: also allowed egress.
+     * `normal`: every Lead judgment as a transcript line, and stuck checks
+     * and egress denials and questions in worker tabs. `quiet`: only
+     * fallbacks, overrides, egress denials and a worker found stuck.
+     * `verbose`: also allowed egress.
      */
     display: JevDisplay;
   };
@@ -58,6 +59,11 @@ export type LeadConfig = {
   leadGuard: LeadGuardMode;
   /** A worker waiting on a question this long without an answer is stopped and its tab closed. 0 disables. */
   waitingTimeoutMinutes: number;
+  /**
+   * Steer a worker whose shell commands keep failing the same way (see
+   * worker/stuck.ts): once, then once more telling it to finish as blocked.
+   */
+  stuckDetection: boolean;
   /**
    * A worker that finishes code work as `done` without a passing test run is
    * sent back once to run the tests, or to finish as `partial`.
@@ -96,6 +102,7 @@ export const DEFAULT_CONFIG: LeadConfig = {
   keepFailedWorkers: true,
   leadGuard: "confirm",
   waitingTimeoutMinutes: 120,
+  stuckDetection: true,
   steerUnverifiedDone: true,
 };
 
@@ -107,6 +114,7 @@ type PartialConfig = {
   keepFailedWorkers?: boolean;
   leadGuard?: LeadGuardMode;
   waitingTimeoutMinutes?: number;
+  stuckDetection?: boolean;
   steerUnverifiedDone?: boolean;
 };
 
@@ -123,6 +131,7 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
     leadGuard: override.leadGuard === "off" || override.leadGuard === "confirm" ? override.leadGuard : base.leadGuard,
     waitingTimeoutMinutes: override.waitingTimeoutMinutes ?? base.waitingTimeoutMinutes,
+    stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
     steerUnverifiedDone: override.steerUnverifiedDone ?? base.steerUnverifiedDone,
   };
 }

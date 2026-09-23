@@ -24,7 +24,7 @@ export type TierJudgment = { tier: Tier; difficulty: number };
 export type ReadinessJudgment = { ready: boolean; missing: string[] };
 
 /** What a Jev call was about; `tier` covers both `modelTier` and `intake`. */
-export const JEV_KINDS = ["tier", "overlap", "verdict", "review", "failure", "egress"] as const;
+export const JEV_KINDS = ["tier", "overlap", "verdict", "review", "failure", "egress", "stuck"] as const;
 export type JevKind = (typeof JEV_KINDS)[number];
 
 /**
@@ -77,7 +77,12 @@ export type Judge = {
   reviewSeverity(findings: string): Promise<{ severity: number; action: ReviewAction } | undefined>;
   failureKind(input: { task: string; log: string }): Promise<FailureKind | undefined>;
   overlap(a: string, b: string): Promise<boolean | undefined>;
+  /** Is a worker repeating the same failed approach? `undefined`: don't know. */
+  stuck(input: { task: string; runs: readonly ShellRun[] }): Promise<boolean | undefined>;
 };
+
+/** A worker shell command as the host-side bash wrapper saw it. */
+export type ShellRun = { command: string; exitCode: number; output?: string };
 
 /** Minimal shape of `TypeSafeClient.systemOne`, injectable for tests. */
 export type AskJev = (
@@ -565,6 +570,40 @@ export function createJudge(options: {
         threshold: "overlaps at p ≥ 0.5",
       });
       return overlaps;
+    },
+
+    async stuck({ task, runs }) {
+      const call = await run(
+        "stuck",
+        {
+          ticket: clip(task, 3_000),
+          // Oldest first; recorded on the host, output is the tail of stdout and stderr.
+          recentCommands: runs.map((entry) => ({
+            command: clip(entry.command, 500),
+            exitCode: entry.exitCode,
+            ...(entry.output ? { outputTail: clip(entry.output, 1_000) } : {}),
+          })),
+          note: "exit code -1 means the command did not complete (timeout, abort)",
+        },
+        {
+          stuck: noul("Is this coding agent repeating the same failed approach without changing strategy?", {
+            true: "It retries the same or trivially varied commands and gets the same failure.",
+            false: "Each attempt changes something meaningful, or the failures are expected steps (e.g. red tests before a fix).",
+          }),
+        },
+      );
+      const probability = noulOf(call?.answers?.stuck);
+      const answer = probability === undefined ? "unsure" : band(probability);
+      const stuck = answer === "unsure" ? undefined : answer === "yes";
+      emit(call, {
+        kind: "stuck",
+        // The worker's fallback (stuck.ts): only the same command failing again counts.
+        outcome: stuck === undefined ? "only a repeated command counts" : stuck ? "yes" : "no",
+        applied: stuck === undefined ? "fallback" : "jev",
+        ...(probability !== undefined ? { probability } : {}),
+        threshold: "no ≤ 0.2 < unsure < 0.8 ≤ yes",
+      });
+      return stuck;
     },
   };
 }
