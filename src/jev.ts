@@ -141,22 +141,48 @@ function scoreOf(answer: unknown, levels: number, minConfidence: number): number
 
 const clip = (text: string, max = 12_000) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text);
 
+export type JevProblem = { kind: "error" | "budget"; message: string };
+
+/** One line for the user; `message` is already clipped and free of the key. */
+export function describeJevProblem(problem: JevProblem): string {
+  return problem.kind === "budget"
+    ? `${problem.message}; PI Lead falls back to its defaults until tomorrow.`
+    : `Jev is configured but failing (${problem.message}); PI Lead falls back to its defaults.`;
+}
+
 export function createJudge(options: {
   ask?: AskJev;
   config: LeadConfig["jev"];
   ledger: Ledgerish;
+  /** Called at most once per kind per judge: the first failure, the first time the budget is spent. */
+  onProblem?: (problem: JevProblem) => void;
 }): Judge {
-  const { ask, config, ledger } = options;
+  const { ask, config, ledger, onProblem } = options;
   const egressCache = new Map<string, EgressDecision>();
+  const problemsSeen = new Set<JevProblem["kind"]>();
+  const report = (kind: JevProblem["kind"], message: string) => {
+    if (problemsSeen.has(kind)) return;
+    problemsSeen.add(kind);
+    try {
+      onProblem?.({ kind, message });
+    } catch {
+      // A broken notifier must not turn a fallback into a crash.
+    }
+  };
 
   const run = async (state: unknown, questions: Record<string, unknown>) => {
     if (!ask) return undefined;
     try {
-      if ((await ledger.spent()) >= config.dailyBudgetUsd) return undefined;
+      if ((await ledger.spent()) >= config.dailyBudgetUsd) {
+        report("budget", `Jev's daily budget ($${config.dailyBudgetUsd}) is spent`);
+        return undefined;
+      }
       const result = await ask(state, questions, AbortSignal.timeout(15_000));
       await ledger.charge((result.inputTokens / 1_000_000) * config.inputUsdPerMillion);
       return result.answers;
-    } catch {
+    } catch (error) {
+      const text = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim() || "unknown error";
+      report("error", text.length > 200 ? `${text.slice(0, 200)}…` : text);
       return undefined;
     }
   };
@@ -290,10 +316,12 @@ export function createAskJev(
     ...(fetch ? { fetch } : {}),
   });
   return async (state, questions, signal) => {
-    const result = await client.systemOne(
-      { state: state as never, questions: questions as never },
-      { ...(signal ? { signal } : {}) },
-    );
+    const result = await client
+      .systemOne({ state: state as never, questions: questions as never }, { ...(signal ? { signal } : {}) })
+      .catch((error: unknown) => {
+        // Errors reach the user's screen: never let one carry the key.
+        throw new Error((error instanceof Error ? error.message : String(error)).split(apiKey).join("[redacted]"));
+      });
     return { answers: result.answers as Record<string, unknown>, inputTokens: result.usage.input_tokens };
   };
 }

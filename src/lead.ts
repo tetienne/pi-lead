@@ -11,7 +11,7 @@ import { createDelegator, type Delegator, type WorkerCommand } from "./delegate.
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
 import { createWorkerImage } from "./image.ts";
-import { createAskJev, createJudge, createLedger } from "./jev.ts";
+import { createAskJev, createJudge, createLedger, describeJevProblem } from "./jev.ts";
 import { registerReportGuard } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
 import { gitWorkspace } from "./workspace.ts";
@@ -119,6 +119,8 @@ export default function lead(pi: ExtensionAPI) {
       ask: createAskJev(config.jev),
       config: config.jev,
       ledger: createLedger(join(agentDir, "pi-lead", "jev-usage.json")),
+      // Otherwise a wrong key or model id silently turns every judgment into a default.
+      onProblem: (problem) => ui?.notify(describeJevProblem(problem), "warning"),
     });
     delegator = createDelegator({
       config,
