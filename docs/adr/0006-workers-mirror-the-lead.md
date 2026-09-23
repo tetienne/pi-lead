@@ -44,3 +44,16 @@ Decided 2026-09-22.
    mount it read-only at `/opt/mise`, so later starts are instant and a worker
    cannot poison the next one's tools. The default image is Debian (glibc) with
    git and mise, built from `sandbox/Dockerfile`; Alpine remains an option.
+6. **Only the Lead's pane outlives the Lead** (amended 2026-09-23). A worker
+   tab closes as soon as it is useless: at once when done, after
+   `waitingTimeoutMinutes` (default 120) without an answer when waiting, and at
+   the latest when the Lead session ends; closing the tab kills its Pi and VM.
+   `keepFailedWorkers` keeps a failed worker's tab only while the Lead runs,
+   and its directory after. Each task dir holds `tab.json` (tab and pane ids,
+   Lead pid); on start a Lead closes the tabs, still listed by `herdr tab
+   list`, of Leads whose process is gone, and removes their dirs. Worker panes
+   carry display-only `herdr pane report-metadata` (source `custom:pi-lead`:
+   title, `pi-lead <kind>`, model/thinking/branch/worker/state tokens) and an
+   `herdr agent rename` name `lead-<slug>-<id4>`, all best-effort; never
+   `report-agent`, which would take lifecycle authority from Herdr's Pi
+   integration.

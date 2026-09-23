@@ -43,6 +43,8 @@ export type LeadConfig = {
    * Only the global config can turn it `off`.
    */
   leadGuard: LeadGuardMode;
+  /** A worker waiting on a question this long without an answer is stopped and its tab closed. 0 disables. */
+  waitingTimeoutMinutes: number;
 };
 
 export type LeadGuardMode = "confirm" | "off";
@@ -74,6 +76,7 @@ export const DEFAULT_CONFIG: LeadConfig = {
   },
   keepFailedWorkers: true,
   leadGuard: "confirm",
+  waitingTimeoutMinutes: 120,
 };
 
 type PartialConfig = {
@@ -83,6 +86,7 @@ type PartialConfig = {
   jev?: Partial<LeadConfig["jev"]>;
   keepFailedWorkers?: boolean;
   leadGuard?: LeadGuardMode;
+  waitingTimeoutMinutes?: number;
 };
 
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
@@ -97,6 +101,7 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     jev: { ...base.jev, ...override.jev },
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
     leadGuard: override.leadGuard === "off" || override.leadGuard === "confirm" ? override.leadGuard : base.leadGuard,
+    waitingTimeoutMinutes: override.waitingTimeoutMinutes ?? base.waitingTimeoutMinutes,
   };
 }
 

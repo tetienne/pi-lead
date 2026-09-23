@@ -96,7 +96,8 @@ above. Everything else is optional:
   "sandbox": { "image": "pi-lead:latest", "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
   "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
   "keepFailedWorkers": true,
-  "leadGuard": "confirm"
+  "leadGuard": "confirm",
+  "waitingTimeoutMinutes": 120
 }
 ```
 
