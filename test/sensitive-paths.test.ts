@@ -22,6 +22,7 @@ test("host-executed and policy files match, in list order", () => {
       ".github/actions/**",
       "**/package.json",
       "**/.yarnrc*",
+      "**/mise/config*.toml",
       "**/.config/mise/**",
       "**/.envrc",
       ".pi/**",
@@ -47,6 +48,20 @@ test("ordinary files and look-alikes do not match", () => {
     [],
   );
   assert.deepEqual(sensitivePatterns([]), []);
+});
+
+test("case variants, mise local configs and parent-directory symlinks match", () => {
+  assert.deepEqual(sensitivePatterns(["tools/.ENVRC", "PACKAGE.JSON"]), ["**/package.json", "**/.envrc"]);
+  assert.deepEqual(sensitivePatterns(["mise.local.toml", ".mise.dev.toml", "mise/config.toml"]), [
+    "**/.mise*.toml",
+    "**/mise*.toml",
+    "**/mise/config*.toml",
+  ]);
+  // A symlink (or file) where a sensitive directory belongs: `.vscode -> ide`, `.github/workflows -> ci`.
+  assert.deepEqual(sensitivePatterns([".vscode", "ide/settings.json"]), [".vscode/tasks.json", ".vscode/settings.json"]);
+  assert.deepEqual(sensitivePatterns([".github/workflows"]), [".github/workflows/**"]);
+  assert.deepEqual(sensitivePatterns([".pi"]), [".pi/**"]);
+  assert.deepEqual(sensitivePatterns(["sub/.config"]), ["**/.config/mise/**"]);
 });
 
 test("every pattern matches at least one path of its own shape", () => {

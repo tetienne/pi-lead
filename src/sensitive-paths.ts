@@ -7,7 +7,11 @@
  * or commit. Lockfiles are left out: judging them means parsing registry URLs.
  *
  * `**` alone matches any path below; a leading `**` + `/` also matches
- * at any depth; `*` stays within one path segment.
+ * at any depth; `*` stays within one path segment. Matching ignores case (a
+ * case-insensitive host file system resolves `.ENVRC` as `.envrc`), and a
+ * changed path that is one of a pattern's parent directories matches too: it
+ * is a file, symlink or submodule where that directory should be, so a symlink
+ * such as `.vscode -> ide` cannot hide `ide/settings.json`.
  */
 export const SENSITIVE_PATHS: readonly string[] = [
   ".github/workflows/**",
@@ -16,8 +20,9 @@ export const SENSITIVE_PATHS: readonly string[] = [
   "**/.npmrc",
   "**/.yarnrc*",
   "**/.pnpmfile.cjs",
-  "**/.mise.toml",
-  "**/mise.toml",
+  "**/.mise*.toml",
+  "**/mise*.toml",
+  "**/mise/config*.toml",
   "**/.mise/**",
   "**/.config/mise/**",
   "**/.tool-versions",
@@ -46,10 +51,20 @@ function patternRegExp(pattern: string): RegExp {
     } else if (char === "*") source += "[^/]*";
     else source += char.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
   }
-  return new RegExp(`^${source}$`);
+  return new RegExp(`^${source}$`, "i");
 }
 
-const MATCHERS = SENSITIVE_PATHS.map((pattern) => ({ pattern, regexp: patternRegExp(pattern) }));
+/** The pattern itself, then each parent directory it names (`a/b/**` → `a`, `a/b`); never a bare `**`. */
+function patternRegExps(pattern: string): RegExp[] {
+  const segments = pattern.split("/");
+  const parents = segments
+    .slice(0, -1)
+    .map((_, i) => segments.slice(0, i + 1).join("/"))
+    .filter((parent) => !/(^|\/)\*\*$/.test(parent));
+  return [pattern, ...parents].map(patternRegExp);
+}
+
+const MATCHERS = SENSITIVE_PATHS.map((pattern) => ({ pattern, regexps: patternRegExps(pattern) }));
 
 /**
  * The patterns (from the fixed list, never the guest-chosen file names) that
@@ -57,5 +72,5 @@ const MATCHERS = SENSITIVE_PATHS.map((pattern) => ({ pattern, regexp: patternReg
  * as `git diff --name-only` prints them.
  */
 export function sensitivePatterns(files: readonly string[]): string[] {
-  return MATCHERS.filter(({ regexp }) => files.some((file) => regexp.test(file))).map(({ pattern }) => pattern);
+  return MATCHERS.filter(({ regexps }) => files.some((file) => regexps.some((regexp) => regexp.test(file)))).map(({ pattern }) => pattern);
 }
