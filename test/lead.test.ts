@@ -16,6 +16,8 @@ function fakePi() {
   const handlers = new Map<string, Handler[]>();
   const tools: any[] = [];
   const commands: string[] = [];
+  const commandHandlers = new Map<string, any>();
+  const renderers = new Map<string, any>();
   const api = {
     on(event: string, handler: Handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
@@ -23,11 +25,15 @@ function fakePi() {
     registerTool(tool: any) {
       tools.push(tool);
     },
-    registerCommand(name: string) {
+    registerCommand(name: string, options: any) {
       commands.push(name);
+      commandHandlers.set(name, options);
+    },
+    registerEntryRenderer(type: string, renderer: any) {
+      renderers.set(type, renderer);
     },
   };
-  return { api, handlers, tools, commands };
+  return { api, handlers, tools, commands, commandHandlers, renderers };
 }
 
 test("the Lead never intercepts user input: the model answers questions itself", () => {
@@ -41,8 +47,26 @@ test("the Lead never intercepts user input: the model answers questions itself",
     }
   }
   assert.ok(pi.handlers.has("tool_call"), "the report guard is registered");
-  assert.deepEqual(pi.commands, []);
+  assert.deepEqual(pi.commands, ["jev"]);
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker"]);
+});
+
+test("Jev decisions render as dim transcript lines, and /jev explains when Jev is off", async () => {
+  const pi = fakePi();
+  lead(pi.api as any);
+  const render = pi.renderers.get("pi-lead-jev");
+  const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` };
+  const entry = { data: { kind: "overlap", outcome: "unsure → waits", applied: "fallback", threshold: "overlaps at p ≥ 0.5", at: 0 } };
+  assert.deepEqual(render(entry, { expanded: false }, theme).render(80), ["<dim>◇ jev · overlap unsure → waits</dim>"]);
+  assert.deepEqual(render(entry, { expanded: true }, theme).render(80), [
+    "<dim>◇ jev · overlap unsure → waits</dim>",
+    "<dim>  threshold overlaps at p ≥ 0.5</dim>",
+  ]);
+  assert.equal(render({ data: { junk: true } }, { expanded: false }, theme), undefined);
+
+  const notes: string[] = [];
+  await pi.commandHandlers.get("jev").handler("", { ui: { notify: (text: string) => notes.push(text) } });
+  assert.match(notes[0]!, /^Jev is not configured/);
 });
 
 test("the workflow guidance is appended to the system prompt", async () => {
