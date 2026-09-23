@@ -50,7 +50,7 @@ test("without a key Jev is unavailable and every judgment falls back", async () 
   const judge = createJudge({ config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
   assert.equal(judge.available, false);
   assert.equal(await judge.modelTier({ task: "x", kind: "implement" }), undefined);
-  assert.equal(await judge.readiness("x"), undefined);
+  assert.deepEqual(await judge.intake({ task: "x", kind: "implement", checkReadiness: true }), {});
   assert.equal(await judge.egress({ task: "x", method: "GET", url: "https://example.com" }), "ask");
   assert.equal(await judge.overlap("a", "b"), undefined);
 });
@@ -84,13 +84,78 @@ test("malformed answers are rejected", async () => {
   assert.equal(await judge.verdict({ task: "x", reported: "done", summary: "", diffStat: "" }), undefined);
 });
 
-test("readiness lists the failed checks", async () => {
+test("intake asks readiness and difficulty in one call", async () => {
+  const calls: Array<{ state: unknown; questions: Record<string, unknown> }> = [];
   const judge = createJudge({
-    ask: fakeAsk({ acceptance: { noul: 0.1 }, bounded: { noul: 0.9 }, decided: { noul: 0.2 } }),
+    ask: fakeAsk(
+      {
+        acceptance: { noul: 0.1 },
+        bounded: { noul: 0.9 },
+        decided: { noul: 0.2 },
+        difficulty: { type: "score", score: 3.2, confidence: 0.9 },
+      },
+      calls,
+    ),
     config: DEFAULT_CONFIG.jev,
     ledger: await ledgerIn(),
   });
-  assert.deepEqual(await judge.readiness("make it better"), { ready: false, missing: ["acceptance", "decided"] });
+  assert.deepEqual(await judge.intake({ task: "make it better", kind: "implement", checkReadiness: true }), {
+    readiness: { ready: false, missing: ["acceptance", "decided"] },
+    tier: { tier: "deep", difficulty: 3.2 },
+  });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]!.state, { kind: "implement", ticket: "make it better" });
+  assert.deepEqual(Object.keys(calls[0]!.questions).sort(), ["acceptance", "bounded", "decided", "difficulty"]);
+
+  const tierOnly: typeof calls = [];
+  const quiet = createJudge({
+    ask: fakeAsk({ difficulty: { type: "score", score: 0.5, confidence: 0.9 } }, tierOnly),
+    config: DEFAULT_CONFIG.jev,
+    ledger: await ledgerIn(),
+  });
+  assert.deepEqual(await quiet.intake({ task: "t", kind: "implement", checkReadiness: false }), {
+    tier: { tier: "fast", difficulty: 0.5 },
+  });
+  assert.deepEqual(Object.keys(tierOnly[0]!.questions), ["difficulty"]);
+});
+
+test("intake parses readiness and difficulty independently", async () => {
+  const badReadiness = createJudge({
+    ask: fakeAsk({
+      acceptance: { noul: 0.9 },
+      bounded: { noul: "yes" },
+      decided: { noul: 0.9 },
+      difficulty: { type: "score", score: 2, confidence: 0.9 },
+    }),
+    config: DEFAULT_CONFIG.jev,
+    ledger: await ledgerIn(),
+  });
+  assert.deepEqual(await badReadiness.intake({ task: "t", kind: "implement", checkReadiness: true }), {
+    tier: { tier: "standard", difficulty: 2 },
+  });
+
+  const badDifficulty = createJudge({
+    ask: fakeAsk({
+      acceptance: { noul: 0.9 },
+      bounded: { noul: 0.9 },
+      decided: { noul: 0.9 },
+      difficulty: { score: "high", confidence: 2 },
+    }),
+    config: DEFAULT_CONFIG.jev,
+    ledger: await ledgerIn(),
+  });
+  assert.deepEqual(await badDifficulty.intake({ task: "t", kind: "implement", checkReadiness: true }), {
+    readiness: { ready: true, missing: [] },
+  });
+
+  const failing = createJudge({
+    ask: async () => {
+      throw new Error("503");
+    },
+    config: DEFAULT_CONFIG.jev,
+    ledger: await ledgerIn(),
+  });
+  assert.deepEqual(await failing.intake({ task: "t", kind: "implement", checkReadiness: true }), {});
 });
 
 test("egress decisions are banded and cached per method, host and path", async () => {

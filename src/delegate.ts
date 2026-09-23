@@ -760,26 +760,27 @@ export function createDelegator(deps: DelegateDeps) {
       if (params.startFrom !== undefined && !isSafeBranchName(params.startFrom)) {
         return { status: "failed", text: `"${params.startFrom}" is not a valid local branch name.` };
       }
-      if (params.kind === "implement" && !params.confirmedReady) {
-        const readiness = await deps.judge.readiness(params.task);
-        if (readiness && !readiness.ready) {
-          const reasons: Record<string, string> = {
-            acceptance: "no verifiable acceptance criteria",
-            bounded: "scope is not one bounded slice",
-            decided: "open product/design decisions",
-          };
-          return {
-            status: "not_ready",
-            missing: readiness.missing,
-            text: [
-              `Not delegated: Jev judged the ticket not ready (${readiness.missing.map((m) => reasons[m] ?? m).join("; ")}).`,
-              "Clarify with the user (grilling), then to-spec / to-tickets, and delegate the resulting ticket.",
-              "If the user confirms it is ready as is, call delegate again with confirmedReady: true.",
-            ].join("\n"),
-          };
-        }
+      const checkReadiness = params.kind === "implement" && !params.confirmedReady;
+      // One Jev round trip when readiness is checked; the tier alone otherwise.
+      const { readiness, tier: judged } = checkReadiness
+        ? await deps.judge.intake({ task: params.task, kind: params.kind, checkReadiness })
+        : { readiness: undefined, tier: await deps.judge.modelTier({ task: params.task, kind: params.kind }) };
+      if (readiness && !readiness.ready) {
+        const reasons: Record<string, string> = {
+          acceptance: "no verifiable acceptance criteria",
+          bounded: "scope is not one bounded slice",
+          decided: "open product/design decisions",
+        };
+        return {
+          status: "not_ready",
+          missing: readiness.missing,
+          text: [
+            `Not delegated: Jev judged the ticket not ready (${readiness.missing.map((m) => reasons[m] ?? m).join("; ")}).`,
+            "Clarify with the user (grilling), then to-spec / to-tickets, and delegate the resulting ticket.",
+            "If the user confirms it is ready as is, call delegate again with confirmedReady: true.",
+          ].join("\n"),
+        };
       }
-      const judged = await deps.judge.modelTier({ task: params.task, kind: params.kind });
       const tier: Tier = judged?.tier ?? (params.kind === "debug" || params.kind === "review" ? "deep" : "standard");
       const { lead, available } = routable(io);
       const resolved = resolveRoute(tier, deps.config.tiers, lead, available);
