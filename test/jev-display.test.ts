@@ -96,4 +96,12 @@ test("only well-formed stored entries are rendered", () => {
   assert.ok(!isDecision(undefined));
   assert.ok(!isDecision({ kind: "tier", outcome: 3, applied: "jev" }));
   assert.ok(!isDecision({ kind: "tier", outcome: "x", applied: "maybe" }));
+  assert.ok(!isDecision({ kind: "tier", outcome: "x", applied: "jev", at: 0, confidence: "high" }));
+});
+
+test("a replayed entry cannot inject escape sequences or overflow the line", () => {
+  const hostile = decision({ outcome: "x\x1b]0;title\x07漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢" });
+  const [line] = renderDecision(hostile, false, 40);
+  assert.ok(!/[\x00-\x1f]/.test(line!), "no control characters");
+  assert.ok([...line!].length <= 40 && /^[\x20-\x7e◆◇▲≥≤→…·]*$/.test(line!), "one column per character, within the width");
 });

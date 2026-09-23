@@ -46,7 +46,10 @@ export function isDecision(value: unknown): value is JevDecision {
     decision !== null &&
     typeof decision.kind === "string" &&
     typeof decision.outcome === "string" &&
-    (decision.applied === "jev" || decision.applied === "fallback" || decision.applied === "overridden")
+    (decision.applied === "jev" || decision.applied === "fallback" || decision.applied === "overridden") &&
+    typeof decision.at === "number" &&
+    (["confidence", "probability", "usd", "ms"] as const).every((key) => decision[key] === undefined || typeof decision[key] === "number") &&
+    (["threshold", "detail"] as const).every((key) => decision[key] === undefined || typeof decision[key] === "string")
   );
 }
 
@@ -75,12 +78,20 @@ export function decisionDetails(decision: JevDecision): string {
     .join(" · ");
 }
 
+/**
+ * Printable ASCII and the few symbols these lines use: all one terminal column
+ * wide. A stored entry is replayed from the session file, so anything else
+ * (escape sequences, wide or zero-width characters) is replaced rather than
+ * trusted to fit, since Pi aborts on a line wider than the terminal.
+ */
+const safe = (line: string) => line.replace(/[^\x20-\x7e◆◇▲≥≤→…·]/gu, "?");
+
 function fit(line: string, width: number): string {
-  const chars = [...line];
+  const chars = [...safe(line)];
   return chars.length <= width ? line : `${chars.slice(0, Math.max(0, width - 1)).join("")}…`;
 }
 
-/** Lines of the transcript entry, each at most `width` characters, before theming. */
+/** Lines of the transcript entry, each at most `width` columns, before theming. */
 export function renderDecision(decision: JevDecision, expanded: boolean, width: number): string[] {
   const details = expanded ? decisionDetails(decision) : "";
   return [decisionLine(decision), ...(details ? [`  ${details}`] : [])].map((line) => fit(line, width));
