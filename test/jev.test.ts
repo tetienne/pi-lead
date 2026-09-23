@@ -202,7 +202,7 @@ test("a failing Jev is reported once, clipped, and still falls back", async () =
     onProblem: (problem) => problems.push(problem),
   });
   assert.equal(await judge.overlap("a", "b"), undefined);
-  assert.equal(await judge.readiness("t"), undefined);
+  assert.deepEqual(await judge.intake({ task: "t", kind: "implement", checkReadiness: true }), {});
   assert.equal(await judge.egress({ task: "t", method: "GET", url: "https://example.com/x" }), "ask");
   assert.equal(problems.length, 1);
   assert.equal(problems[0]!.kind, "error");
