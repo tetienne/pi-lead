@@ -141,7 +141,9 @@ export default function lead(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     closed = false;
-    await setup(ctx);
+    const current = await setup(ctx);
+    // Close tabs a crashed or killed Lead left open; in the background, never blocking the session.
+    void current.reconcile().catch(() => undefined);
   });
 
   // Workers belong to the Lead session: when it ends (quit, /new, /resume,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
 
 import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
@@ -13,7 +13,7 @@ import {
   type DelegateIO,
   type DelegateOutcome,
 } from "../src/delegate.ts";
-import type { Herdr } from "../src/herdr.ts";
+import type { Herdr, PaneMetadata } from "../src/herdr.ts";
 import type { Judge, WorkerVerdict } from "../src/jev.ts";
 import type { WorkerTask } from "../src/protocol.ts";
 import type { Toolchains } from "../src/toolchains.ts";
@@ -51,7 +51,15 @@ const scriptOf = (command: string) => /^\/bin\/sh '([^']+)'$/.exec(command)![1]!
  * A fake Herdr whose "worker" reads the task file from the launch script and
  * replies: first with `replies[0]`, then with the next reply after each message.
  */
-function fakeHerdr(log: Log, replies: Reply[], seen: { task?: WorkerTask; script?: string } = {}): Herdr {
+type Seen = { task?: WorkerTask; script?: string; metadata?: PaneMetadata[] };
+
+function fakeHerdr(
+  log: Log,
+  replies: Reply[],
+  seen: Seen = {},
+  options: { tabs?: Record<string, string[]>; renameFailures?: number } = {},
+): Herdr {
+  let renameFailures = options.renameFailures ?? 0;
   let tabs = 0;
   const workers = new Map<string, { task: WorkerTask; exitPath: string; seq: number; turn: number }>();
   const reply = (paneId: string) => {
@@ -67,6 +75,21 @@ function fakeHerdr(log: Log, replies: Reply[], seen: { task?: WorkerTask; script
     }, next.delayMs ?? 5);
   };
   return {
+    workspace: "w1",
+    async listTabs(workspace) {
+      log.push(`list ${workspace}`);
+      const tabs = options.tabs?.[workspace];
+      if (!tabs) throw new Error("workspace_not_found");
+      return tabs;
+    },
+    async reportMetadata(paneId, metadata) {
+      log.push(`meta ${paneId} state=${metadata.tokens.state}`);
+      (seen.metadata ??= []).push(metadata);
+    },
+    async renameAgent(paneId, name) {
+      log.push(`rename ${paneId} ${name}`);
+      if (renameFailures-- > 0) throw new Error("agent_not_found");
+    },
     async openWorkerTab({ label, command }) {
       const tabId = `tab-${++tabs}`;
       const paneId = `pane-${tabs}`;
@@ -102,20 +125,30 @@ async function setup(t: TestContext, options: {
   herdr?: Herdr | false;
   maxWorkers?: number;
   toolchains?: Toolchains;
-  seen?: { task?: WorkerTask; script?: string };
+  seen?: Seen;
+  config?: Parameters<typeof mergeConfig>[1];
+  herdrOptions?: Parameters<typeof fakeHerdr>[3];
+  workspace?: Workspace;
+  processAlive?: (pid: number) => boolean;
+  stateRoot?: string;
 } = {}) {
   const log: Log = [];
   const outcomes: DelegateOutcome[] = [];
   const waiters: Array<(outcome: DelegateOutcome) => void> = [];
   const progress: string[] = [];
+  const stateRoot = options.stateRoot ?? (await mkdtemp(join(tmpdir(), "pi-lead-state-")));
   const delegator = createDelegator({
-    config: mergeConfig(DEFAULT_CONFIG, { maxWorkers: options.maxWorkers ?? 2 }),
+    config: mergeConfig(DEFAULT_CONFIG, { maxWorkers: options.maxWorkers ?? 2, ...options.config }),
     judge: { ...noJudge, ...options.judge },
-    herdr: options.herdr === false ? undefined : options.herdr ?? fakeHerdr(log, options.replies ?? [{ status: "done" }], options.seen),
-    workspace: fakeWorkspace(log),
+    herdr:
+      options.herdr === false
+        ? undefined
+        : options.herdr ?? fakeHerdr(log, options.replies ?? [{ status: "done" }], options.seen, options.herdrOptions),
+    workspace: options.workspace ?? fakeWorkspace(log),
     ...(options.toolchains ? { toolchains: options.toolchains } : {}),
+    ...(options.processAlive ? { processAlive: options.processAlive } : {}),
     workerCommand: ({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt],
-    stateRoot: await mkdtemp(join(tmpdir(), "pi-lead-state-")),
+    stateRoot,
     onOutcome: (outcome) => {
       outcomes.push(outcome);
       waiters.shift()?.(outcome);
@@ -134,8 +167,11 @@ async function setup(t: TestContext, options: {
         resolve(outcome);
       });
     });
-  return { delegator, log, outcomes, nextOutcome, progress };
+  return { delegator, log, outcomes, nextOutcome, progress, stateRoot };
 }
+
+/** Tab lifecycle only: open, close, remove (metadata calls are checked on their own). */
+const lifecycle = (log: Log) => log.filter((line) => /^(open|close|remove)/.test(line));
 
 test("helpers: slug, branch validation and shell quoting", () => {
   assert.equal(slugify("Add CSV export (v2)!"), "add-csv-export-v2");
@@ -158,7 +194,7 @@ test("delegate returns at once; the result arrives later, then the worker is cle
   assert.match(outcome.text, /Branch: pi-lead\/add-csv-export-/);
   assert.match(outcome.text, /src\/a\.ts/);
   assert.match(outcome.text, /anthropic\/claude-sonnet-5 · thinking medium · tier standard \(default tier; Jev unavailable\)/);
-  assert.deepEqual(log.filter((line) => !line.startsWith("create")), ["open lead: Add CSV export", "close tab-1", "remove clone"]);
+  assert.deepEqual(lifecycle(log), ["open lead: Add CSV export", "close tab-1", "remove clone"]);
   assert.equal(delegator.list()[0]!.state, "done");
 });
 
@@ -330,7 +366,7 @@ test("queued overlapping tickets start one at a time, in order", async (t) => {
   const all = [nextOutcome(), nextOutcome(), nextOutcome()];
   for (const title of ["A", "B", "C"]) await delegator.start({ kind: "implement", title, task: title }, io);
   await Promise.all(all);
-  const opens = log.filter((line) => line.startsWith("open") || line.startsWith("close"));
+  const opens = lifecycle(log).filter((line) => !line.startsWith("remove"));
   assert.deepEqual(opens, ["open lead: A", "close tab-1", "open lead: B", "close tab-2", "open lead: C", "close tab-3"]);
 });
 
@@ -344,4 +380,162 @@ test("a queued worker can be stopped before its turn", async (t) => {
   const outcome = await stopped;
   assert.equal(outcome.worker.title, "Second");
   assert.equal(outcome.status, "stopped");
+});
+
+const until = async (condition: () => boolean) => {
+  for (let i = 0; i < 300 && !condition(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(condition(), "condition not reached");
+};
+
+test("shutdown closes the tab of a worker waiting on a question", async (t) => {
+  const { delegator, log, nextOutcome, outcomes } = await setup(t, { replies: [{ status: "needs_human" }] });
+  const first = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Ask", task: "t" }, io);
+  await first;
+  assert.ok(!log.includes("close tab-1"));
+  await delegator.shutdown();
+  assert.deepEqual(lifecycle(log), ["open lead: Ask", "close tab-1", "remove clone"]);
+  assert.equal(outcomes.at(-1)?.status, "stopped");
+});
+
+test("shutdown closes a failed worker's kept tab but keeps its directory", async (t) => {
+  const seen: Seen = {};
+  const { delegator, log, nextOutcome } = await setup(t, { seen, replies: ["exit"] });
+  const failed = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Crash", task: "t" }, io);
+  const outcome = await failed;
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.text, /its tab closes when this Lead session ends/);
+  assert.ok(!log.includes("close tab-1"), "kept for inspection while the Lead runs");
+  const taskDir = dirname(seen.task!.resultPath);
+  assert.equal(JSON.parse(await readFile(join(taskDir, "tab.json"), "utf8")).tabId, "tab-1");
+
+  await delegator.shutdown();
+  assert.ok(log.includes("close tab-1"));
+  assert.ok(!log.includes("remove clone"), "keepFailedWorkers keeps the directory");
+  const record = JSON.parse(await readFile(join(taskDir, "tab.json"), "utf8"));
+  assert.equal(record.tabId, undefined, "nothing left for a later Lead to close");
+  assert.equal(record.failed, true);
+  assert.equal(record.leadPid, process.pid);
+});
+
+test("a worker left waiting too long is stopped, closed, and the Lead is told it timed out", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    replies: [{ status: "needs_human", summary: "Which colour?" }],
+    config: { waitingTimeoutMinutes: 0.001 },
+  });
+  const first = nextOutcome();
+  const second = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Colour", task: "t" }, io);
+  assert.match((await first).text, /stopped after 0\.001 minutes/);
+  const timedOut = await second;
+  assert.equal(timedOut.status, "stopped");
+  assert.match(timedOut.text, /timed out: it waited 0\.001 minutes for an answer/);
+  assert.ok(log.includes("close tab-1"));
+  assert.equal(delegator.list()[0]!.state, "stopped");
+});
+
+test("reconcile closes tabs of dead Leads that still exist and removes their directories", async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), "pi-lead-state-"));
+  const removed: string[] = [];
+  const record = async (name: string, content: object | undefined) => {
+    await mkdir(join(stateRoot, name));
+    if (content) {
+      await writeFile(join(stateRoot, name, "tab.json"), JSON.stringify({ version: 1, createdAt: "2026-09-20T00:00:00Z", ...content }));
+    }
+  };
+  await record("dead-open", { leadPid: 111, tabId: "w1:t7", paneId: "w1:p7" });
+  await record("dead-gone", { leadPid: 111, tabId: "w1:t8", paneId: "w1:p8" });
+  await record("dead-failed", { leadPid: 111, tabId: "w2:t3", paneId: "w2:p3", failed: true });
+  await record("alive", { leadPid: 222, tabId: "w1:t9", paneId: "w1:p9" });
+  await record("unowned", undefined);
+  const { delegator, log, progress } = await setup(t, {
+    stateRoot,
+    processAlive: (pid) => pid === 222,
+    // w2 is gone: Herdr cannot list it.
+    herdrOptions: { tabs: { w1: ["w1:t1", "w1:t7", "w1:t9"] } },
+    workspace: { ...fakeWorkspace([]), remove: async (path) => void removed.push(basename(path)) },
+  });
+  assert.equal(await delegator.reconcile(), 1);
+  assert.deepEqual(log.filter((line) => line.startsWith("close")), ["close w1:t7"], "only the dead Lead's live tab");
+  assert.deepEqual(removed.sort(), ["dead-gone", "dead-open"]);
+  const failed = JSON.parse(await readFile(join(stateRoot, "dead-failed", "tab.json"), "utf8"));
+  assert.equal(failed.tabId, undefined, "kept for inspection, but its tab is forgotten");
+  assert.ok(progress.some((line) => line.includes("closed 1 worker tab left by an earlier Lead")));
+});
+
+test("reconcile keeps every record when Herdr does not answer", async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), "pi-lead-state-"));
+  await mkdir(join(stateRoot, "dead"));
+  await writeFile(join(stateRoot, "dead", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x", tabId: "w1:t7" }));
+  const { delegator, log } = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: {} });
+  assert.equal(await delegator.reconcile(), 0);
+  assert.ok(!log.some((line) => line.startsWith("close") || line.startsWith("remove")));
+  assert.ok((await readdir(stateRoot)).includes("dead"));
+});
+
+test("reconcile never touches the task dirs of a Lead that is still running", async (t) => {
+  const { delegator, log, stateRoot } = await setup(t, { replies: ["silent"], herdrOptions: { tabs: { w1: ["tab-1"] } } });
+  await delegator.start({ kind: "research", title: "Live", task: "q" }, io);
+  await until(() => log.includes("open lead: Live"));
+  await until(() => log.some((line) => line.startsWith("meta")));
+  const [dir] = await readdir(stateRoot);
+  assert.equal(JSON.parse(await readFile(join(stateRoot, dir!, "tab.json"), "utf8")).tabId, "tab-1");
+  // Same process: even with processAlive faked away, its own records are skipped.
+  const other = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: { tabs: { w1: ["tab-1"] } } });
+  assert.equal(await other.delegator.reconcile(), 0);
+  assert.ok(!other.log.some((line) => line.startsWith("close")));
+});
+
+test("worker panes get Herdr metadata on every state and an agent name, best-effort", async (t) => {
+  const seen: Seen = {};
+  const { delegator, log, nextOutcome } = await setup(t, {
+    seen,
+    replies: [{ status: "done", delayMs: 80 }],
+    herdrOptions: { renameFailures: 1 },
+  });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Add CSV export", task: "t" }, io);
+  assert.ok(started.status === "started");
+  await pending;
+  const id = started.worker.id;
+  const name = `lead-add-csv-export-${id.slice(0, 4)}`;
+  assert.match(name, /^[a-z][a-z0-9_-]{0,31}$/);
+  assert.deepEqual(log.filter((line) => /^(meta|rename|close)/.test(line)), [
+    "meta pane-1 state=starting",
+    // Not detected yet at tab creation: one retry once the worker has been running a while.
+    `rename pane-1 ${name}`,
+    "meta pane-1 state=running",
+    `rename pane-1 ${name}`,
+    "meta pane-1 state=done",
+    "close tab-1",
+  ]);
+  assert.deepEqual(seen.metadata![0], {
+    title: "Add CSV export",
+    displayAgent: "pi-lead implement",
+    tokens: {
+      model: "anthropic/claude-sonnet-5",
+      thinking: "medium",
+      branch: delegator.list()[0]!.branch,
+      worker: id.slice(0, 8),
+      state: "starting",
+    },
+    workingLabel: "implement: Add CSV export",
+  });
+});
+
+test("failing Herdr metadata never affects the worker", async (t) => {
+  const log: Log = [];
+  const herdr = fakeHerdr(log, [{ status: "done" }]);
+  herdr.reportMetadata = () => {
+    throw new Error("sync failure");
+  };
+  herdr.renameAgent = async () => {
+    throw new Error("async failure");
+  };
+  const { delegator, nextOutcome } = await setup(t, { herdr });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
+  assert.equal((await pending).status, "done");
+  assert.ok(log.includes("close tab-1"));
 });

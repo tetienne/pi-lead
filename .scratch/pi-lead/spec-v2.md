@@ -29,6 +29,15 @@ conversation goes on while workers run. A worker that stops on a question
 answer with `worker` (message) and the worker reports again. `worker` also
 lists and stops workers. Nothing is pushed or merged.
 
+Tabs: only the Lead's own pane stays. A done worker's tab closes at once; a
+waiting one after `waitingTimeoutMinutes` without an answer (the Lead is told
+it timed out); every remaining worker tab, including failed ones kept for
+inspection, when the Lead session ends. Task dirs record their tab
+(`tab.json`), so a Lead that starts after a crashed one closes the orphaned
+tabs and removes their dirs. Worker panes show a title, `pi-lead <kind>`,
+model, thinking, branch, worker id and state in Herdr (display metadata only,
+best-effort) and get an agent name `lead-<slug>-<id4>`.
+
 ## Jev judgments
 
 Each maps a closed-set answer to a deterministic action; no answer, low
@@ -78,7 +87,8 @@ workers through `~/.pi/agent/pi-lead/jev-usage.json`.
 `~/.pi/agent/pi-lead.json`, overridden by `.pi/pi-lead.json` in trusted
 projects: `tiers.{fast,standard,deep}.{model,thinking}`, `maxWorkers`,
 `sandbox.{image,allowedHosts,memory,cpus}`, `jev.{apiKeyEnv,via,model,
-dailyBudgetUsd,minConfidence}`, `keepFailedWorkers`.
+dailyBudgetUsd,minConfidence}`, `keepFailedWorkers` (the directory survives
+the Lead; the tab does not), `waitingTimeoutMinutes` (default 120, 0 disables).
 
 ## Known limits / follow-ups
 
@@ -96,3 +106,7 @@ dailyBudgetUsd,minConfidence}`, `keepFailedWorkers`.
 5. The worker's `grep` (from Pi's Gondolin example) walks the guest tree from
    the host process: bound the pattern (ReDoS), file sizes and symlink loops,
    or run grep inside the guest.
+6. The waiting timeout counts from the worker's last result or Lead message;
+   a user answering directly in the worker's tab does not reset it. Herdr
+   metadata, `agent rename` and `tab list` have not been exercised against a
+   live Herdr yet (the `tab list` JSON shape is read as "any `tab_id`").

@@ -91,7 +91,8 @@ above. Everything else is optional:
   "maxWorkers": 2,
   "sandbox": { "image": "pi-lead:latest", "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
   "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
-  "keepFailedWorkers": true
+  "keepFailedWorkers": true,
+  "waitingTimeoutMinutes": 120
 }
 ```
 

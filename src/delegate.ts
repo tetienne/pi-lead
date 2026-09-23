@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
-import type { Herdr } from "./herdr.ts";
+import { workspaceFromPaneId, type Herdr } from "./herdr.ts";
 import type { FailureKind, Judge, ReviewAction, WorkKind, WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, workerPrompt, type WorkerResult, type WorkerTask } from "./protocol.ts";
@@ -94,7 +94,38 @@ export type DelegateDeps = {
   onProgress?(text: string): void;
   pollMs?: number;
   heartbeatMs?: number;
+  /** Whether the Lead process that wrote a task record still runs (tests fake it). */
+  processAlive?(pid: number): boolean;
 };
+
+/**
+ * `tab.json` in each task dir, written by the Lead that owns it. A later Lead
+ * uses it to close the tabs of a Lead that crashed or was killed.
+ */
+type TabRecord = {
+  version: 1;
+  leadPid: number;
+  createdAt: string;
+  tabId?: string;
+  paneId?: string;
+  /** A failed worker whose task dir is kept for inspection (keepFailedWorkers). */
+  failed?: boolean;
+};
+
+const RECORD = "tab.json";
+
+/** Abort reason of a worker that waited too long on a question. */
+class WaitingTimeout extends Error {}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: it exists but belongs to someone else.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
 type Worker = WorkerInfo & {
   params: DelegateParams;
@@ -113,6 +144,12 @@ type Worker = WorkerInfo & {
   exitPath?: string;
   lastSeq: number;
   attempts: number;
+  createdAt?: string;
+  /** When the worker started waiting on a question (waitingTimeoutMinutes). */
+  waitingSince?: number;
+  /** Herdr agent name: set once, tried at most twice per tab. */
+  named: boolean;
+  renameTries: number;
 };
 
 const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debug"];
@@ -191,6 +228,83 @@ export function createDelegator(deps: DelegateDeps) {
     ...(worker.branch ? { branch: worker.branch } : {}),
   });
 
+  const waitingTimeoutMs = deps.config.waitingTimeoutMinutes * 60_000;
+  const processAlive = deps.processAlive ?? isProcessAlive;
+
+  /** Herdr presentation is never needed for correctness: fire and forget, swallow every error. */
+  const bestEffort = (call: () => Promise<unknown> | undefined) => {
+    try {
+      void call()?.catch(() => undefined);
+    } catch {
+      // A synchronous throw is swallowed too.
+    }
+  };
+
+  /** `[a-z][a-z0-9_-]{0,31}`, unique enough among live agents thanks to the id. */
+  const agentName = (worker: Worker) =>
+    `lead-${slugify(worker.title).slice(0, 22).replace(/-+$/, "")}-${worker.id.slice(0, 4)}`;
+
+  /** Title, sidebar name and tokens of the worker's pane, reported on every state change. */
+  const describe = (worker: Worker) => {
+    const paneId = worker.paneId;
+    if (!paneId) return;
+    bestEffort(() =>
+      deps.herdr?.reportMetadata(paneId, {
+        title: worker.title,
+        displayAgent: `pi-lead ${worker.kind}`,
+        tokens: {
+          model: worker.route.model,
+          thinking: worker.route.thinking,
+          ...(worker.branch ? { branch: worker.branch } : {}),
+          worker: worker.id.slice(0, 8),
+          state: worker.state,
+        },
+        workingLabel: `${worker.kind}: ${worker.title}`,
+      }),
+    );
+  };
+
+  const setState = (worker: Worker, state: WorkerState) => {
+    worker.state = state;
+    describe(worker);
+  };
+
+  /** `agent rename` only works once Herdr has detected the Pi, so it gets one retry. */
+  const nameAgent = (worker: Worker) => {
+    const paneId = worker.paneId;
+    if (!paneId || worker.named || worker.renameTries >= 2) return;
+    worker.renameTries += 1;
+    bestEffort(() =>
+      deps.herdr?.renameAgent(paneId, agentName(worker)).then(() => {
+        worker.named = true;
+      }),
+    );
+  };
+
+  /** Best-effort as well: without a record a crashed Lead's tab is only left open, never wrongly closed. */
+  const writeRecord = async (worker: Worker) => {
+    if (!worker.taskDir) return;
+    const record: TabRecord = {
+      version: 1,
+      leadPid: process.pid,
+      createdAt: worker.createdAt ?? new Date().toISOString(),
+      ...(worker.tabId ? { tabId: worker.tabId } : {}),
+      ...(worker.paneId ? { paneId: worker.paneId } : {}),
+      ...(worker.state === "failed" ? { failed: true } : {}),
+    };
+    await writeFile(join(worker.taskDir, RECORD), JSON.stringify(record, null, 2)).catch(() => undefined);
+  };
+
+  const readRecord = async (dir: string): Promise<TabRecord | undefined> => {
+    try {
+      const record = JSON.parse(await readFile(join(dir, RECORD), "utf8")) as TabRecord;
+      // A pid of 0 or below would signal a process group.
+      return Number.isInteger(record?.leadPid) && record.leadPid > 0 ? record : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   /** Workers holding a slot. A waiting worker's VM idles on a question, so it does not count. */
   const busy = () => [...workers.values()].filter((w) => w.state === "starting" || w.state === "running");
 
@@ -268,26 +382,42 @@ export function createDelegator(deps: DelegateDeps) {
       const exit = (await readIfPresent(worker.exitPath!))?.trim();
       if (exit) throw new Error(`worker Pi exited (status ${exit}) without calling finish`);
       if (Date.now() - lastBeat >= heartbeatMs) {
-        if (worker.state === "running") progress(`"${worker.title}" is working in its Herdr tab`);
+        if (worker.state === "running") {
+          progress(`"${worker.title}" is working in its Herdr tab`);
+          // By now Herdr has detected the Pi, if the name failed at tab creation.
+          nameAgent(worker);
+        }
         lastBeat = Date.now();
+      }
+      // An unanswered question must not keep a VM up forever: the abort ends in `fail`.
+      if (worker.state === "waiting" && waitingTimeoutMs > 0 && Date.now() - (worker.waitingSince ?? 0) >= waitingTimeoutMs) {
+        worker.controller.abort(new WaitingTimeout(`no answer within ${deps.config.waitingTimeoutMinutes} minutes`));
       }
       await sleep(pollMs, worker.controller.signal);
     }
   };
 
-  const closeAndClean = async (worker: Worker) => {
+  /** Close the tab (which kills its Pi and VM), then remove the task dir unless it is kept for inspection. */
+  const closeAndClean = async (worker: Worker, keepDir = false) => {
     if (worker.tabId) await deps.herdr?.closeTab(worker.tabId).catch(() => undefined);
     worker.tabId = undefined;
     worker.paneId = undefined;
-    if (worker.taskDir) await deps.workspace.remove(worker.taskDir).catch(() => undefined);
+    if (!worker.taskDir) return;
+    if (keepDir) await writeRecord(worker); // no tab left to close
+    else await deps.workspace.remove(worker.taskDir).catch(() => undefined);
   };
 
   const launch = async (worker: Worker) => {
     const { params, io } = worker;
     worker.attempts += 1;
     worker.lastSeq = 0;
+    worker.named = false;
+    worker.renameTries = 0;
+    worker.createdAt = new Date().toISOString();
     await mkdir(deps.stateRoot, { recursive: true });
     worker.taskDir = await mkdtemp(join(deps.stateRoot, `${worker.id.slice(0, 8)}-`));
+    // Owned from the start, so a later Lead never mistakes it for an orphan while this one lives.
+    await writeRecord(worker);
     worker.clonePath = join(worker.taskDir, "repo");
     worker.resultPath = join(worker.taskDir, "result.json");
     worker.exitPath = join(worker.taskDir, "exit");
@@ -365,6 +495,9 @@ export function createDelegator(deps: DelegateDeps) {
       cwd: worker.taskDir,
       command: `/bin/sh ${shellQuote(script)}`,
     }));
+    await writeRecord(worker);
+    describe(worker);
+    nameAgent(worker);
     progress(`"${worker.title}" started on ${worker.route.model} (${worker.route.thinking})`);
   };
 
@@ -392,12 +525,18 @@ export function createDelegator(deps: DelegateDeps) {
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
     const keep = status !== "done" && deps.config.keepFailedWorkers;
-    worker.state = status === "done" ? "done" : keep ? "waiting" : "failed";
-    if (!keep) await closeAndClean(worker);
+    setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
+    if (keep) worker.waitingSince = Date.now();
+    else await closeAndClean(worker);
 
     const id = worker.id.slice(0, 8);
     const next: string[] = [];
-    if (keep) next.push(`The worker waits in its tab: relay what it needs with \`worker\` (action message, id ${id}), or stop it.`);
+    if (keep) {
+      next.push(
+        `The worker waits in its tab: relay what it needs with \`worker\` (action message, id ${id}), or stop it.` +
+          (waitingTimeoutMs > 0 ? ` Without an answer it is stopped after ${deps.config.waitingTimeoutMinutes} minutes.` : ""),
+      );
+    }
     if (status === "needs_human") next.push(keep ? "Ask the user for what the worker needs, then relay the answer." : "Ask the user for what the worker needed, then delegate a new task with the answer.");
     if (status === "partial" || status === "blocked") next.push("Tell the user what is left; continue only if they agree.");
     if (review?.action === "auto_fix") next.push("Review found fixable issues: delegate an implement task with these findings, starting from the reviewed branch.");
@@ -433,20 +572,30 @@ export function createDelegator(deps: DelegateDeps) {
 
   const fail = async (worker: Worker, error: unknown) => {
     if (worker.controller.signal.aborted) {
-      worker.state = "stopped";
+      const timedOut = worker.controller.signal.reason instanceof WaitingTimeout;
+      setState(worker, "stopped");
       await closeAndClean(worker);
       report({
         worker: info(worker),
         status: "stopped",
-        text: `Worker "${worker.title}" [${worker.id.slice(0, 8)}] was stopped.`,
+        text: timedOut
+          ? [
+              `Worker "${worker.title}" [${worker.id.slice(0, 8)}] timed out: it waited ${deps.config.waitingTimeoutMinutes} minutes for an answer, so it was stopped and its tab closed.`,
+              ...(worker.branch ? [`Work reported so far is on local branch ${worker.branch}.`] : []),
+              "Next:",
+              "- Tell the user; if the question still matters, get the answer and delegate a new task with it.",
+            ].join("\n")
+          : `Worker "${worker.title}" [${worker.id.slice(0, 8)}] was stopped.`,
         details: {},
       });
       return;
     }
     const failure = await deps.judge.failureKind({ task: worker.params.task, log: errorText(error) });
     const keep = deps.config.keepFailedWorkers;
-    worker.state = "failed";
-    if (!keep) await closeAndClean(worker);
+    setState(worker, "failed");
+    // A kept tab is for inspection only: it is closed when the Lead session ends.
+    if (keep) await writeRecord(worker);
+    else await closeAndClean(worker);
     report({
       worker: info(worker),
       status: "failed",
@@ -454,7 +603,9 @@ export function createDelegator(deps: DelegateDeps) {
         ...header(worker),
         `Worker failed: ${errorText(error)}`,
         ...(failure ? [`Jev failure kind: ${failure}`] : []),
-        ...(keep && worker.taskDir ? [`Tab and clone kept for inspection: ${worker.taskDir}`] : []),
+        ...(keep && worker.taskDir
+          ? [`Kept for inspection: ${worker.taskDir} (its tab closes when this Lead session ends; the directory stays).`]
+          : []),
       ].join("\n"),
       details: failure ? { failure } : {},
     });
@@ -486,7 +637,7 @@ export function createDelegator(deps: DelegateDeps) {
       while (true) {
         try {
           await launch(worker);
-          worker.state = "running";
+          setState(worker, "running");
           break;
         } catch (error) {
           if (worker.controller.signal.aborted || worker.attempts > 1) throw error;
@@ -563,6 +714,8 @@ export function createDelegator(deps: DelegateDeps) {
         resolveDone,
         lastSeq: 0,
         attempts: 0,
+        named: false,
+        renameTries: 0,
       };
       // Workers still in the queue will take slots before this one.
       const ahead = [...workers.values()].filter((w) => ["queued", "starting", "running"].includes(w.state)).length;
@@ -594,7 +747,8 @@ export function createDelegator(deps: DelegateDeps) {
       } catch (error) {
         return `Could not reach "${worker.title}" through Herdr: ${errorText(error)}`;
       }
-      worker.state = "running";
+      worker.waitingSince = undefined;
+      setState(worker, "running");
       return `Sent to "${worker.title}". Its next result will arrive as a message.`;
     },
 
@@ -610,11 +764,76 @@ export function createDelegator(deps: DelegateDeps) {
       return `Stopping "${worker.title}".`;
     },
 
-    /** The Lead session ends: stop every worker that has not ended and wait for their cleanup. */
+    /**
+     * The Lead session ends: stop every worker that has not ended (waiting ones
+     * included) and wait for their cleanup, then close every tab still open.
+     * Only the Lead's own pane outlives it; a failed worker keeps its directory
+     * (keepFailedWorkers) but never its tab, whose Pi may still run a VM.
+     */
     async shutdown(): Promise<void> {
       const live = [...workers.values()].filter((worker) => !["done", "failed", "stopped"].includes(worker.state));
       for (const worker of live) worker.controller.abort(new Error("Lead session closed"));
       await Promise.race([Promise.all(live.map((worker) => worker.done)), sleep(10_000)]);
+      await Promise.all(
+        [...workers.values()]
+          .filter((worker) => worker.tabId)
+          .map((worker) => closeAndClean(worker, worker.state === "failed" && deps.config.keepFailedWorkers)),
+      );
+    },
+
+    /**
+     * On Lead start: close the tabs that earlier Lead processes, now dead
+     * (crash, kill), left open, and remove their task dirs. Records of live
+     * Leads (other sessions, or this process) are left alone. Returns how
+     * many tabs were closed.
+     */
+    async reconcile(): Promise<number> {
+      const herdr = deps.herdr;
+      // Nothing can be closed outside Herdr: keep the records for a Lead inside it.
+      if (!herdr) return 0;
+      let names: string[];
+      try {
+        names = await readdir(deps.stateRoot);
+      } catch {
+        return 0;
+      }
+      const orphans: Array<{ dir: string; record: TabRecord }> = [];
+      for (const name of names) {
+        const dir = join(deps.stateRoot, name);
+        const record = await readRecord(dir);
+        if (record && record.leadPid !== process.pid && !processAlive(record.leadPid)) orphans.push({ dir, record });
+      }
+      if (orphans.length === 0) return 0;
+      // If Herdr does not answer for the Lead's own workspace, try again on the next start.
+      const listings = new Map<string, Promise<string[] | undefined>>();
+      const tabsIn = (workspace: string) => {
+        if (!listings.has(workspace)) listings.set(workspace, herdr.listTabs(workspace).catch(() => undefined));
+        return listings.get(workspace)!;
+      };
+      if (!(await tabsIn(herdr.workspace))) return 0;
+      let closed = 0;
+      for (const { dir, record } of orphans) {
+        if (record.tabId) {
+          // Herdr answered for our workspace, so a workspace it cannot list is gone with its tabs.
+          const tabs = (await tabsIn(workspaceFromPaneId(record.tabId) ?? herdr.workspace)) ?? [];
+          if (tabs.includes(record.tabId)) {
+            try {
+              await herdr.closeTab(record.tabId);
+              closed += 1;
+            } catch {
+              continue; // keep the record: the tab may still run a VM
+            }
+          }
+        }
+        if (record.failed && deps.config.keepFailedWorkers) {
+          const { tabId: _tab, paneId: _pane, ...kept } = record;
+          await writeFile(join(dir, RECORD), JSON.stringify(kept, null, 2)).catch(() => undefined);
+        } else {
+          await deps.workspace.remove(dir).catch(() => undefined);
+        }
+      }
+      if (closed) progress(`closed ${closed} worker tab${closed === 1 ? "" : "s"} left by an earlier Lead`);
+      return closed;
     },
   };
 }

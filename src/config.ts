@@ -36,6 +36,8 @@ export type LeadConfig = {
   };
   /** Keep the Herdr tab and clone of a worker that did not finish cleanly. */
   keepFailedWorkers: boolean;
+  /** A worker waiting on a question this long without an answer is stopped and its tab closed. 0 disables. */
+  waitingTimeoutMinutes: number;
 };
 
 export const DEFAULT_CONFIG: LeadConfig = {
@@ -64,6 +66,7 @@ export const DEFAULT_CONFIG: LeadConfig = {
     minConfidence: 0.7,
   },
   keepFailedWorkers: true,
+  waitingTimeoutMinutes: 120,
 };
 
 type PartialConfig = {
@@ -72,6 +75,7 @@ type PartialConfig = {
   sandbox?: Partial<LeadConfig["sandbox"]>;
   jev?: Partial<LeadConfig["jev"]>;
   keepFailedWorkers?: boolean;
+  waitingTimeoutMinutes?: number;
 };
 
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
@@ -85,6 +89,7 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     sandbox: { ...base.sandbox, ...override.sandbox },
     jev: { ...base.jev, ...override.jev },
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
+    waitingTimeoutMinutes: override.waitingTimeoutMinutes ?? base.waitingTimeoutMinutes,
   };
 }
 

@@ -5,12 +5,35 @@ const execFileAsync = promisify(execFile);
 
 /** Host-side Herdr presentation. Workers never receive the Herdr socket. */
 export type Herdr = {
+  /** The Lead's own workspace, where worker tabs open. */
+  readonly workspace: string;
   /** Open a named tab without stealing focus and type `command` into its shell. */
   openWorkerTab(input: { label: string; cwd: string; command: string }): Promise<{ tabId: string; paneId: string }>;
   /** Submit text to the Pi running in a pane, as if typed (bracketed paste, then Enter). */
   sendToAgent(paneId: string, text: string): Promise<void>;
+  /** Close a tab; this kills the processes in its panes (worker Pi and its VM). */
   closeTab(tabId: string): Promise<void>;
+  /** Ids of the tabs that currently exist in a workspace. */
+  listTabs(workspace: string): Promise<string[]>;
+  /**
+   * Display-only pane metadata (title, sidebar name, tokens, working label).
+   * Never lifecycle state: that stays with Herdr's Pi integration.
+   */
+  reportMetadata(paneId: string, metadata: PaneMetadata): Promise<void>;
+  /** Name the agent in a pane (live-unique); fails until Herdr has detected the agent. */
+  renameAgent(paneId: string, name: string): Promise<void>;
 };
+
+export type PaneMetadata = {
+  title: string;
+  displayAgent: string;
+  tokens: Record<string, string>;
+  /** Shown instead of "working" while the agent works. */
+  workingLabel: string;
+};
+
+/** `--agent pi` makes Herdr apply the presentation fields only while a Pi occupies the pane. */
+export const METADATA_SOURCE = "custom:pi-lead";
 
 function findString(value: unknown, field: string): string | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -23,7 +46,15 @@ function findString(value: unknown, field: string): string | undefined {
   return undefined;
 }
 
-/** The workspace is the prefix of the Lead's own pane id (`<workspace>:<pane>`). */
+function collectStrings(value: unknown, field: string, found: string[] = []): string[] {
+  if (!value || typeof value !== "object") return found;
+  const record = value as Record<string, unknown>;
+  if (typeof record[field] === "string") found.push(record[field]);
+  for (const nested of Object.values(record)) collectStrings(nested, field, found);
+  return found;
+}
+
+/** The workspace is the prefix of a pane or tab id (`<workspace>:<pane>`, `<workspace>:<tab>`). */
 export function workspaceFromPaneId(paneId: string | undefined): string | undefined {
   const separator = paneId?.indexOf(":") ?? -1;
   return paneId && separator > 0 ? paneId.slice(0, separator) : undefined;
@@ -37,6 +68,7 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     return stdout.trim() ? (JSON.parse(stdout) as unknown) : undefined;
   };
   return {
+    workspace,
     async openWorkerTab({ label, cwd, command }) {
       const created = await herdr(["tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus"]);
       const tabId = findString(created, "tab_id");
@@ -53,6 +85,31 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     },
     async closeTab(tabId) {
       await herdr(["tab", "close", tabId]);
+    },
+    async listTabs(inWorkspace) {
+      return collectStrings(await herdr(["tab", "list", "--workspace", inWorkspace]), "tab_id");
+    },
+    async reportMetadata(paneId, { title, displayAgent, tokens, workingLabel }) {
+      // argv, never a shell: titles and branches are user/model text.
+      await herdr([
+        "pane",
+        "report-metadata",
+        paneId,
+        "--source",
+        METADATA_SOURCE,
+        "--agent",
+        "pi",
+        "--title",
+        title,
+        "--display-agent",
+        displayAgent,
+        ...Object.entries(tokens).flatMap(([name, value]) => ["--token", `${name}=${value}`]),
+        "--state-label",
+        `working=${workingLabel}`,
+      ]);
+    },
+    async renameAgent(paneId, name) {
+      await herdr(["agent", "rename", paneId, name]);
     },
   };
 }
