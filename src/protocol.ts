@@ -22,6 +22,8 @@ export type WorkerTask = {
   toolchainCache?: string;
   /** Host directories mounted read-only at the same path in the guest (skill folders). */
   readonlyMounts: string[];
+  /** Send an unverified `done` back to the worker once (config `steerUnverifiedDone`); unset means true. */
+  steerUnverifiedDone?: boolean;
 };
 
 /** Written by the worker's `finish` tool. */
@@ -52,6 +54,9 @@ export type WorkerResult = {
  * is -1 when the command did not complete (timeout, abort).
  */
 export type LastTest = { command: string; exitCode: number };
+
+/** Work kinds whose worker changes code, and so should run its tests. */
+export const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debug"];
 
 export const WORKER_STATUSES = ["done", "partial", "blocked", "needs_human"] as const satisfies readonly WorkerVerdict[];
 

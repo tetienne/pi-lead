@@ -50,6 +50,11 @@ export type LeadConfig = {
   leadGuard: LeadGuardMode;
   /** A worker waiting on a question this long without an answer is stopped and its tab closed. 0 disables. */
   waitingTimeoutMinutes: number;
+  /**
+   * A worker that finishes code work as `done` without a passing test run is
+   * sent back once to run the tests, or to finish as `partial`.
+   */
+  steerUnverifiedDone: boolean;
 };
 
 export type LeadGuardMode = "confirm" | "off";
@@ -82,6 +87,7 @@ export const DEFAULT_CONFIG: LeadConfig = {
   keepFailedWorkers: true,
   leadGuard: "confirm",
   waitingTimeoutMinutes: 120,
+  steerUnverifiedDone: true,
 };
 
 type PartialConfig = {
@@ -92,6 +98,7 @@ type PartialConfig = {
   keepFailedWorkers?: boolean;
   leadGuard?: LeadGuardMode;
   waitingTimeoutMinutes?: number;
+  steerUnverifiedDone?: boolean;
 };
 
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
@@ -107,6 +114,7 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
     leadGuard: override.leadGuard === "off" || override.leadGuard === "confirm" ? override.leadGuard : base.leadGuard,
     waitingTimeoutMinutes: override.waitingTimeoutMinutes ?? base.waitingTimeoutMinutes,
+    steerUnverifiedDone: override.steerUnverifiedDone ?? base.steerUnverifiedDone,
   };
 }
 
