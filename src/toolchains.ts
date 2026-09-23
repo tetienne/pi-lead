@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
-import { access, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, open, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { LeadConfig } from "./config.ts";
 import type { Judge } from "./jev.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv } from "./sandbox.ts";
 import { createEgressPolicy } from "./worker/egress.ts";
+
+/** Where the host cache mounts during warm-up, so /opt/mise itself can be guest-local (see warmUp). */
+const GUEST_MISE_CACHE = "/opt/mise-cache";
 
 /**
  * Project toolchains, the mise way. The host's own mise cache holds host
@@ -79,6 +82,34 @@ export type Toolchains = {
   }): Promise<string | undefined>;
 };
 
+/**
+ * Walks a toolchain cache and marks every ELF binary or shebang script executable.
+ * Never follows symlinks (mise installs are full of them, pointing at siblings already
+ * fixed up or still to come) and never touches anything that isn't a regular file.
+ */
+export async function chmodExecutables(dir: string): Promise<void> {
+  const names = await readdir(dir);
+  for (const name of names) {
+    const path = join(dir, name);
+    const stat = await lstat(path); // lstat, never stat: a symlink must never be followed here
+    if (stat.isDirectory()) {
+      await chmodExecutables(path);
+      continue;
+    }
+    if (!stat.isFile()) continue; // skips symlinks and other non-regular entries
+    const head = Buffer.alloc(4);
+    const handle = await open(path, "r");
+    try {
+      await handle.read(head, 0, 4, 0);
+    } finally {
+      await handle.close();
+    }
+    const isElf = head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46;
+    const isShebang = head[0] === 0x23 && head[1] === 0x21;
+    if (isElf || isShebang) await chmod(path, 0o755);
+  }
+}
+
 export function createToolchains(options: {
   root: string;
   judge: Pick<Judge, "egress">;
@@ -90,10 +121,13 @@ export function createToolchains(options: {
     input.progress("installing the project's mise toolchains in a sandbox (first time only)");
     const vm = await createSandboxVm({
       label: "pi-lead toolchains",
-      sandbox: input.sandbox,
+      // Gondolin's VFS has no chmod/setattr, so anything mise installs straight onto the
+      // mounted host cache would land there mode 0644 and fail to execute. Give /opt/mise
+      // room in guest memory instead, and only copy the result onto the host afterwards.
+      sandbox: { ...input.sandbox, memory: input.sandbox.memory ?? "3g" },
       mounts: {
         [GUEST_WORKSPACE]: { host: input.clonePath, readonly: true },
-        [GUEST_MISE_DIR]: { host: cacheDir },
+        [GUEST_MISE_CACHE]: { host: cacheDir },
       },
       allowRequest: createEgressPolicy({
         allowedHosts: [...MISE_HOSTS, ...input.sandbox.allowedHosts],
@@ -103,16 +137,25 @@ export function createToolchains(options: {
       }),
     });
     try {
-      const env = guestEnv(true);
+      // mise's HTTP timeout (30s) is shorter than the 120s the lead gives a human to
+      // confirm an egress request, so a paused download would die before an answer lands.
+      const env = { ...guestEnv(true), MISE_HTTP_TIMEOUT: "180s" };
       const probe = await vm.exec(["/bin/sh", "-lc", "command -v mise"], { env });
       if (probe.exitCode !== 0) throw new Error("the Gondolin image has no mise; use PI Lead's default image or add mise to yours");
+      const tmpfs = await vm.exec(["/bin/sh", "-lc", `mkdir -p ${GUEST_MISE_DIR} && mount -t tmpfs tmpfs ${GUEST_MISE_DIR}`], { env });
+      if (tmpfs.exitCode !== 0) throw new Error(`failed to set up ${GUEST_MISE_DIR}:\n${tmpfs.stdout}`);
       const result = await vm.exec(["/bin/sh", "-lc", "mise install 2>&1"], { cwd: GUEST_WORKSPACE, env });
       if (result.exitCode !== 0) {
         throw new Error(`mise install failed:\n${result.stdout.split("\n").slice(-20).join("\n")}`);
       }
+      const copy = await vm.exec(["/bin/sh", "-lc", `cp -a ${GUEST_MISE_DIR}/. ${GUEST_MISE_CACHE}/`], { env });
+      if (copy.exitCode !== 0) throw new Error(`failed to copy toolchains to the host cache:\n${copy.stdout}`);
     } finally {
       await vm.close();
     }
+    // The copy above went through the same chmod-less VFS, so fix up exec bits on the host
+    // directly (a plain filesystem chmod, outside the guest, is unaffected by that limitation).
+    await chmodExecutables(cacheDir);
     await writeFile(marker, new Date().toISOString());
     input.progress("mise toolchains ready");
     return cacheDir;
