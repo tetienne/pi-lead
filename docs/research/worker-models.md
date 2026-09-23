@@ -18,7 +18,11 @@ inspected.
 3. `resolveRoute` (`src/model-routing.ts`) turns the tier into a model: the tier's
    `model`, then each `fallbacks` entry in order, then the Lead's own model.
    A model counts as available when Pi's catalog has it and its provider has auth.
-   Quota is not checked: an exhausted subscription surfaces as a worker failure.
+4. When a worker runs out of quota, the worker extension reports it (Pi never
+   retries quota errors). The Lead then skips that provider until its reset
+   (ChatGPT gives the delay, otherwise 60 min). It restarts the task on the tier's
+   next available model, from the branch so far. With no other model, the worker
+   reports `blocked` and waits in its tab.
 
 ## ChatGPT Pro (`openai-codex` provider)
 
@@ -115,8 +119,8 @@ Configuration (`~/.pi/agent/pi-lead.json`):
 
 - No live run: this mapping has not been tested against a real account. Go was
   last seen out of quota (ticket 09).
-- Quota exhaustion does not trigger a fallback. Fallbacks cover only a missing
-  provider or a model missing from the installed Pi version.
+- Exhausted providers are remembered by the Lead process only. A new Lead
+  session tries them again once and learns from the first failure.
 - The Go benchmark standings are thin. Revisit `standard`/`deep` fallbacks once
   real worker runs give evidence.
 

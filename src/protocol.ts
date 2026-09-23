@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import type { LeadConfig } from "./config.ts";
 import type { WorkKind, WorkerVerdict } from "./jev.ts";
+import type { QuotaError } from "./quota.ts";
 
 /** Written by the Lead, read by the worker extension (`--pi-lead-task`). */
 export type WorkerTask = {
@@ -33,6 +34,12 @@ export type WorkerResult = {
   summary: string;
   /** Review findings, when the work was a review. */
   findings?: string;
+  /**
+   * Written by the worker extension, not by `finish`: the model stopped on a
+   * provider error. `quota` is set when that error is an exhausted allowance.
+   */
+  modelError?: string;
+  quota?: QuotaError;
 };
 
 export const WORKER_STATUSES = ["done", "partial", "blocked", "needs_human"] as const satisfies readonly WorkerVerdict[];
@@ -50,7 +57,12 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
     (result.seq as number) < 1 ||
     !WORKER_STATUSES.includes(result.status as WorkerVerdict) ||
     typeof result.summary !== "string" ||
-    (result.findings !== undefined && typeof result.findings !== "string")
+    (result.findings !== undefined && typeof result.findings !== "string") ||
+    (result.modelError !== undefined && typeof result.modelError !== "string") ||
+    (result.quota !== undefined &&
+      (typeof result.quota?.message !== "string" ||
+        (result.quota.retryAfterMinutes !== undefined &&
+          !(Number.isFinite(result.quota.retryAfterMinutes) && result.quota.retryAfterMinutes >= 0))))
   ) {
     throw new Error("worker result is malformed");
   }

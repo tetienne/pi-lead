@@ -15,7 +15,7 @@ import {
 } from "../src/delegate.ts";
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
 import type { Judge, WorkerVerdict } from "../src/jev.ts";
-import type { WorkerTask } from "../src/protocol.ts";
+import type { WorkerResult, WorkerTask } from "../src/protocol.ts";
 import type { Toolchains } from "../src/toolchains.ts";
 import type { Workspace } from "../src/workspace.ts";
 
@@ -31,7 +31,10 @@ const noJudge: Judge = {
 };
 
 type Log = string[];
-type Reply = { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number } | "exit" | "silent";
+type Reply =
+  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string }
+  | "exit"
+  | "silent";
 
 function fakeWorkspace(log: Log): Workspace {
   return {
@@ -57,20 +60,22 @@ function fakeHerdr(
   log: Log,
   replies: Reply[],
   seen: Seen = {},
-  options: { tabs?: Record<string, string[]>; renameFailures?: number } = {},
+  options: { tabs?: Record<string, string[]>; renameFailures?: number; sharedTurns?: boolean } = {},
 ): Herdr {
   let renameFailures = options.renameFailures ?? 0;
+  // With sharedTurns, a relaunched worker (new tab) continues the reply list instead of restarting it.
+  let sharedTurn = 0;
   let tabs = 0;
   const workers = new Map<string, { task: WorkerTask; exitPath: string; seq: number; turn: number }>();
   const reply = (paneId: string) => {
     const worker = workers.get(paneId)!;
-    const next = replies[Math.min(worker.turn++, replies.length - 1)]!;
+    const next = replies[Math.min(options.sharedTurns ? sharedTurn++ : worker.turn++, replies.length - 1)]!;
     if (next === "silent") return;
     if (next === "exit") return void setTimeout(() => void writeFile(worker.exitPath, "1\n"), 5);
     setTimeout(() => {
       void writeFile(
         worker.task.resultPath,
-        JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}) }),
+        JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}), ...(next.quota ? { quota: next.quota } : {}), ...(next.modelError ? { modelError: next.modelError } : {}) }),
       );
     }, next.delayMs ?? 5);
   };
@@ -538,4 +543,82 @@ test("failing Herdr metadata never affects the worker", async (t) => {
   await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
   assert.equal((await pending).status, "done");
   assert.ok(log.includes("close tab-1"));
+});
+
+const chatgptLimit = {
+  status: "blocked",
+  summary: "The model's quota is exhausted",
+  modelError: "You have hit your ChatGPT usage limit (pro plan). Try again in ~90 min.",
+  quota: { message: "You have hit your ChatGPT usage limit (pro plan). Try again in ~90 min.", retryAfterMinutes: 90 },
+} as const;
+
+test("a worker out of quota continues on the tier's fallback from its branch, and later workers skip the provider", async (t) => {
+  const seen: Seen = {};
+  const { delegator, log, nextOutcome } = await setup(t, {
+    replies: [chatgptLimit, { status: "done" }],
+    herdrOptions: { sharedTurns: true },
+    seen,
+    config: {
+      tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high", fallbacks: [{ model: "opencode-go/glm-5.3" }] } },
+    },
+  });
+  const both: DelegateIO = {
+    ...io,
+    lead: { provider: "openai-codex", id: "gpt-6-sol" },
+    available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
+  };
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Export", task: "t" }, both);
+  assert.match(started.text, /to openai-codex\/gpt-6-sol \(thinking high/);
+  const outcome = await pending;
+
+  assert.equal(outcome.status, "done", "only the final result is reported");
+  const first = log.find((line) => line.startsWith("create "))!.slice("create ".length);
+  assert.ok(log.includes(`create ${first}-2 from ${first}`), "the second attempt starts from the first one's branch");
+  assert.match(outcome.text, /opencode-go\/glm-5\.3 · thinking high · tier standard/);
+  assert.match(outcome.text, new RegExp(`Note: openai-codex/gpt-6-sol ran out of quota; continued on opencode-go/glm-5\\.3 from ${first}`));
+  assert.match(seen.script!, /'--model' 'opencode-go\/glm-5\.3'/);
+  assert.match(seen.script!, /ran out of model quota on this task/);
+  assert.deepEqual(lifecycle(log), ["open lead: Export", "close tab-1", "remove clone", "open lead: Export", "close tab-2", "remove clone"]);
+
+  const next = await delegator.start({ kind: "implement", title: "Import", task: "t" }, both);
+  assert.match(next.text, /to opencode-go\/glm-5\.3/);
+  assert.match(delegator.list()[1]!.route.note!, /quota exhausted: openai-codex until ~\d\d:\d\d/);
+});
+
+test("without another model a worker out of quota is reported blocked, never sent to a paid balance", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    replies: [chatgptLimit],
+    config: { tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high" } } },
+  });
+  const codexOnly: DelegateIO = {
+    ...io,
+    lead: { provider: "openai-codex", id: "gpt-6-sol" },
+    available: [{ provider: "openai-codex", id: "gpt-6-sol" }],
+  };
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Export", task: "t" }, codexOnly);
+  const outcome = await pending;
+  assert.equal(outcome.status, "blocked");
+  assert.equal(outcome.details.quota?.retryAfterMinutes, 90);
+  assert.match(outcome.text, /quota of openai-codex is exhausted \(back around \d\d:\d\d\).*nothing was charged to a paid balance/);
+  assert.equal(log.filter((line) => line.startsWith("open")).length, 1, "no second attempt");
+  assert.equal(delegator.list()[0]!.state, "waiting", "the tab stays open to resume once the quota is back");
+
+  const refused = await delegator.start({ kind: "implement", title: "Import", task: "t" }, codexOnly);
+  assert.equal(refused.status, "failed");
+  assert.match(refused.text, /No worker model: .*\(quota exhausted: openai-codex until ~\d\d:\d\d\)/);
+});
+
+test("a provider error that is not about quota is reported instead of leaving the worker hanging", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, {
+    replies: [{ status: "blocked", summary: "The model stopped on a provider error: 401 unauthorized", modelError: "401 unauthorized" }],
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Export", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "blocked");
+  assert.match(outcome.text, /401 unauthorized/);
+  assert.match(outcome.text, /stopped on a provider error: tell the user/);
+  assert.equal(outcome.details.quota, undefined);
 });
