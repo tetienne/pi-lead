@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/tetienne/pi-lead/compare/v0.3.1...v0.3.2) (2026-09-23)
+
+
+### Bug Fixes
+
+* mount every loaded skill in the worker VM ([#9](https://github.com/tetienne/pi-lead/issues/9)) ([3380e75](https://github.com/tetienne/pi-lead/commit/3380e75958898802276b81078682f9d744ae434f))
+
 ## [0.3.1](https://github.com/tetienne/pi-lead/compare/v0.3.0...v0.3.1) (2026-09-23)
 
 
