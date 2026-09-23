@@ -180,20 +180,36 @@ export default function worker(pi: ExtensionAPI) {
     const error = runError;
     runError = undefined;
     if (error === undefined) return;
-    const current = await loadTask();
-    // Keep the work so far on the branch for whoever continues it; best-effort.
-    const commit = await commitLeftovers(ctx).catch(() => undefined);
     const quota = quotaError(error);
-    const uncommitted = commit && commit.exitCode !== 0 ? "\nUncommitted changes could not be committed and stay in the clone." : "";
-    await writeResult({
-      version: 1,
-      id: current.id,
-      seq: ++seq,
-      status: "blocked",
-      summary: `${quota ? "The model's quota is exhausted" : "The model stopped on a provider error"}: ${error.slice(0, 500)}${uncommitted}`,
-      modelError: error.slice(0, 2_000),
-      ...(quota ? { quota } : {}),
-    });
+    const summary = `${quota ? "The model's quota is exhausted" : "The model stopped on a provider error"}: ${error.slice(0, 500)}`;
+    try {
+      const current = await loadTask();
+      // Keep the work so far on the branch for whoever continues it, then stop
+      // the VM: the worker now waits, and its next tool call starts a new one.
+      // No VM means no tool ran, so there is nothing to commit.
+      let uncommitted = false;
+      const active = running;
+      if (active) {
+        const handle = await active.catch(() => undefined);
+        const commit = handle ? await commitLeftovers(ctx).catch(() => undefined) : undefined;
+        uncommitted = handle !== undefined && commit?.exitCode !== 0;
+        if (running === active) running = undefined;
+        await handle?.vm.close().catch(() => undefined);
+      }
+      await writeResult({
+        version: 1,
+        id: current.id,
+        seq: ++seq,
+        status: "blocked",
+        summary: uncommitted ? `${summary}\nSome changes could not be committed and stay in the clone.` : summary,
+        modelError: error.slice(0, 2_000),
+        ...(quota ? { quota } : {}),
+        ...(uncommitted ? { uncommitted } : {}),
+      });
+    } catch (failure) {
+      // Without a result the Lead would wait on this idle tab until Pi exits.
+      ctx?.ui.notify(`PI Lead could not report "${summary}": ${failure instanceof Error ? failure.message : String(failure)}`, "error");
+    }
   });
 
   pi.on("session_shutdown", async () => {

@@ -40,6 +40,8 @@ export type WorkerResult = {
    */
   modelError?: string;
   quota?: QuotaError;
+  /** Changes left in the clone because committing them failed. */
+  uncommitted?: boolean;
 };
 
 export const WORKER_STATUSES = ["done", "partial", "blocked", "needs_human"] as const satisfies readonly WorkerVerdict[];
@@ -59,6 +61,7 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
     typeof result.summary !== "string" ||
     (result.findings !== undefined && typeof result.findings !== "string") ||
     (result.modelError !== undefined && typeof result.modelError !== "string") ||
+    (result.uncommitted !== undefined && typeof result.uncommitted !== "boolean") ||
     (result.quota !== undefined &&
       (typeof result.quota?.message !== "string" ||
         (result.quota.retryAfterMinutes !== undefined &&

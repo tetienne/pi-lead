@@ -32,7 +32,7 @@ const noJudge: Judge = {
 
 type Log = string[];
 type Reply =
-  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string }
+  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string; uncommitted?: boolean }
   | "exit"
   | "silent";
 
@@ -75,7 +75,7 @@ function fakeHerdr(
     setTimeout(() => {
       void writeFile(
         worker.task.resultPath,
-        JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}), ...(next.quota ? { quota: next.quota } : {}), ...(next.modelError ? { modelError: next.modelError } : {}) }),
+        JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}), ...(next.quota ? { quota: next.quota } : {}), ...(next.modelError ? { modelError: next.modelError } : {}), ...(next.uncommitted ? { uncommitted: true } : {}) }),
       );
     }, next.delayMs ?? 5);
   };
@@ -621,4 +621,36 @@ test("a provider error that is not about quota is reported instead of leaving th
   assert.match(outcome.text, /401 unauthorized/);
   assert.match(outcome.text, /stopped on a provider error: tell the user/);
   assert.equal(outcome.details.quota, undefined);
+});
+
+test("a worker out of quota with uncommitted changes stays put instead of moving to the fallback", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    replies: [{ ...chatgptLimit, uncommitted: true }],
+    config: {
+      tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high", fallbacks: [{ model: "opencode-go/glm-5.3" }] } },
+    },
+  });
+  const both: DelegateIO = {
+    ...io,
+    available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
+  };
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Export", task: "t" }, both);
+  const outcome = await pending;
+  assert.equal(outcome.status, "blocked");
+  assert.match(outcome.text, /uncommitted changes, so it was not moved to another model/);
+  assert.equal(log.filter((line) => line.startsWith("open")).length, 1);
+  assert.ok(!log.includes("remove clone"), "the clone with the changes is kept");
+});
+
+test("with keepFailedWorkers off, a blocked quota report says to delegate again from the branch", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, {
+    replies: [chatgptLimit],
+    config: { keepFailedWorkers: false, tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high" } } },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Export", task: "t" }, { ...io, lead: undefined, available: [{ provider: "openai-codex", id: "gpt-6-sol" }] });
+  const outcome = await pending;
+  assert.match(outcome.text, /once the quota is back, delegate again, starting from branch pi-lead\/export-/);
+  assert.doesNotMatch(outcome.text, /relay a message/);
 });

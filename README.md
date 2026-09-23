@@ -109,9 +109,10 @@ otherwise `deep`; debug and review start at `standard`). The first available
 of `model` and its `fallbacks` runs the worker. A model is available when its
 provider has auth. When none is available the Lead's model runs it. A worker
 whose provider runs out of quota continues on the next available model, from
-its branch; that provider is skipped until its quota resets (the time ChatGPT
-gives, otherwise an hour). With nothing left, the worker reports `blocked` and
-waits in its tab. Pi never retries a quota error, so nothing is charged to a
+its branch. That provider is skipped until its quota resets: the time ChatGPT
+gives (at least 5 minutes), 5 minutes for a ChatGPT limit without a time, one
+hour otherwise. A worker whose changes could not be committed stays put. With
+nothing left, the worker reports `blocked`. Pi never retries a quota error, so nothing is charged to a
 paid balance. A tier without `model` uses the Lead's current model with that tier's
 thinking level. The example is the ChatGPT Pro + OpenCode Go mapping from
 [worker-models.md](docs/research/worker-models.md).

@@ -7,7 +7,7 @@ import { workspaceFromPaneId, type Herdr } from "./herdr.ts";
 import type { FailureKind, Judge, ReviewAction, WorkKind, WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, workerPrompt, type WorkerResult, type WorkerTask } from "./protocol.ts";
-import { providerOf, type QuotaError } from "./quota.ts";
+import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import type { Toolchains } from "./toolchains.ts";
 import type { Workspace } from "./workspace.ts";
@@ -117,8 +117,8 @@ type TabRecord = {
 
 const RECORD = "tab.json";
 
-/** How long a provider whose quota ran out is skipped when it does not say when it resets. */
-export const DEFAULT_QUOTA_PAUSE_MINUTES = 60;
+/** Model changes a single task may go through on quota errors. */
+const MAX_REROUTES = 3;
 
 const RESUME_NOTE =
   "\n\nA previous PI Lead worker ran out of model quota on this task. Its work so far is committed on the current branch: review it with git log and continue from there.";
@@ -161,6 +161,7 @@ type Worker = WorkerInfo & {
   renameTries: number;
   /** Continues the branch of an attempt that ran out of quota. */
   resumed: boolean;
+  reroutes: number;
 };
 
 const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debug"];
@@ -574,15 +575,18 @@ export function createDelegator(deps: DelegateDeps) {
     if (review?.action === "auto_fix") next.push("Review found fixable issues: delegate an implement task with these findings, starting from the reviewed branch.");
     if (review?.action === "escalate") next.push("Review found serious issues: show them to the user before doing anything else.");
     if (status === "done" && worker.kind !== "review") next.push(`Work is on local branch ${worker.branch}; nothing was pushed or merged.`);
+    const resume = keep
+      ? "relay a message to the worker to continue, or stop it"
+      : `delegate again, starting from branch ${worker.branch}`;
     if (result.quota) {
       const until = exhausted.get(providerOf(worker.route.model));
       next.push(
         `The quota of ${providerOf(worker.route.model)} is exhausted` + (until ? ` (back around ${clock(until)})` : "") +
-          " and no other configured model is available; nothing was charged to a paid balance." +
-          " Tell the user; once the quota is back, relay a message to continue, or stop the worker.",
+          (result.uncommitted ? "; the worker has uncommitted changes, so it was not moved to another model" : " and no other configured model is available") +
+          `; nothing was charged to a paid balance. Tell the user; once the quota is back, ${resume}.`,
       );
     } else if (result.modelError) {
-      next.push("The model stopped on a provider error: tell the user; relay a message to retry, or stop the worker.");
+      next.push(`The model stopped on a provider error: tell the user; to retry, ${resume}.`);
     }
 
     report({
@@ -618,13 +622,15 @@ export function createDelegator(deps: DelegateDeps) {
    * configured model of the tier is available, continue the task there from
    * the worker's branch. Returns false when nothing else can take it.
    */
-  const reroute = async (worker: Worker, quota: QuotaError): Promise<boolean> => {
+  const reroute = async (worker: Worker, result: WorkerResult & { quota: QuotaError }): Promise<boolean> => {
     const from = worker.route.model;
-    const minutes = quota.retryAfterMinutes ?? DEFAULT_QUOTA_PAUSE_MINUTES;
-    exhausted.set(providerOf(from), now() + minutes * 60_000);
+    exhausted.set(providerOf(from), now() + quotaPauseMinutes(result.quota) * 60_000);
+    // Uncommitted changes live only in this clone: keep the worker where it is.
+    if (result.uncommitted || worker.reroutes >= MAX_REROUTES) return false;
     const { lead, available } = routable(worker.io);
     const route = resolveRoute(worker.route.tier, deps.config.tiers, lead, available);
-    if ("error" in route) return false;
+    if ("error" in route || route.model === from) return false;
+    worker.reroutes += 1;
     // Fetch the work so far into the repository, so the next attempt can start from it.
     await deps.workspace.collect({ repoRoot: worker.repoRoot!, path: worker.clonePath!, branch: worker.branch!, base: worker.base! });
     const previous = worker.branch!;
@@ -632,8 +638,13 @@ export function createDelegator(deps: DelegateDeps) {
     worker.route = { model: route.model, thinking: route.thinking, tier: route.tier, note: `${from} ran out of quota; continued on ${route.model} from ${previous}` };
     worker.resumed = true;
     progress(`"${worker.title}": ${from} ran out of quota; continuing on ${route.model}`);
+    // A worker left waiting holds no slot (the user may have typed in its tab): take one again.
+    const hadSlot = worker.state === "running";
     await closeAndClean(worker);
-    setState(worker, "starting");
+    if (hadSlot) setState(worker, "starting");
+    else await takeSlot(worker);
+    // Stopped meanwhile: open no new tab.
+    if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
     await launch(worker);
     setState(worker, "running");
     return true;
@@ -690,7 +701,7 @@ export function createDelegator(deps: DelegateDeps) {
       do {
         const result = await waitForResult(worker);
         worker.lastSeq = result.seq;
-        if (result.quota && (await reroute(worker, result.quota))) continue;
+        if (result.quota && (await reroute(worker, { ...result, quota: result.quota }))) continue;
         await settle(worker, result);
       } while (worker.state === "waiting" || worker.state === "running");
     } catch (error) {
@@ -714,6 +725,7 @@ export function createDelegator(deps: DelegateDeps) {
           if ((await deps.judge.failureKind({ task: worker.params.task, log: errorText(error) })) !== "transient") throw error;
           progress(`"${worker.title}" failed to start transiently; retrying once`);
           await closeAndClean(worker);
+          worker.base = undefined; // the retry is a fresh start: HEAD may have moved
         }
       }
     } catch (error) {
@@ -790,6 +802,7 @@ export function createDelegator(deps: DelegateDeps) {
         named: false,
         renameTries: 0,
         resumed: false,
+        reroutes: 0,
       };
       // Workers still in the queue will take slots before this one.
       const ahead = [...workers.values()].filter((w) => ["queued", "starting", "running"].includes(w.state)).length;

@@ -62,6 +62,11 @@ test("a run that ends on a provider error reports it to the Lead instead of idli
   assert.deepEqual(result.quota, { message: limit, retryAfterMinutes: 12 });
   assert.match(result.summary, /quota is exhausted/);
 
+  // A failed attempt that Pi retried successfully before settling reports nothing.
+  await handlers.get("agent_end")!({ type: "agent_end", messages: [{ role: "assistant", stopReason: "error", errorMessage: "503 overloaded" }] });
+  await settle([{ role: "assistant", stopReason: "toolUse" }]);
+  assert.equal(parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t").seq, 1);
+
   await settle([{ role: "assistant", stopReason: "error", errorMessage: "401 unauthorized" }]);
   const second = parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t");
   assert.equal(second.seq, 2);

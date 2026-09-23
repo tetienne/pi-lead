@@ -20,7 +20,8 @@ inspected.
    A model counts as available when Pi's catalog has it and its provider has auth.
 4. When a worker runs out of quota, the worker extension reports it (Pi never
    retries quota errors). The Lead then skips that provider until its reset
-   (ChatGPT gives the delay, otherwise 60 min). It restarts the task on the tier's
+   (ChatGPT's delay, at least 5 min). Without a delay it waits 5 min for ChatGPT,
+   because Pi reports every ChatGPT 429 as a "usage limit", and 60 min otherwise. It restarts the task on the tier's
    next available model, from the branch so far. With no other model, the worker
    reports `blocked` and waits in its tab.
 
