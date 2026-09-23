@@ -1,3 +1,5 @@
+> Superseded by [ADR 0005](../../docs/adr/0005-lead-is-a-tool-driven-conversation.md) and [spec v2](spec-v2.md) on 2026-09-22. Kept as history.
+
 # PI Lead: isolated, visible engineering workers
 
 Status: approved; refocused by Ticket 17 on 2026-09-22

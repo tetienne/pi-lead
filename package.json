@@ -1,6 +1,6 @@
 {
   "name": "pi-lead",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "repository": {
@@ -12,47 +12,10 @@
     "url": "https://github.com/tetienne/pi-lead/issues"
   },
   "files": [
-    ".mise.toml",
-    ".agents/skills/research/SKILL.md",
+    ".agents/skills/",
     "README.md",
-    "src/chatgpt-input.ts",
-    "src/chatgpt-launcher.ts",
-    "src/chatgpt-policy.ts",
-    "src/chatgpt-task.ts",
-    "src/chatgpt-worker-host.ts",
-    "src/controller-dispatch.ts",
-    "src/dependency-request-policy.ts",
-    "src/debug-review-task.ts",
-    "src/effective-route-observation.ts",
-    "src/git-proposal.ts",
-    "src/herdr-client.ts",
-    "src/implementation-intake.ts",
-    "src/jev-intent-routing.ts",
-    "src/lead.ts",
-    "src/model-reasoning-routing.ts",
-    "src/mise-environment.ts",
-    "src/native-chatgpt-runtime.ts",
-    "src/native-debug-review-runtime.ts",
-    "src/native-proposed-change-runtime.ts",
-    "src/native-review-fix-commit-runtime.ts",
-    "src/native-task-journal.ts",
-    "src/native-task-recovery.ts",
-    "src/native-worker-observation.ts",
-    "src/openrouter-jev-transport.ts",
-    "src/planning-intake.ts",
-    "src/policy.ts",
-    "src/process-observation.ts",
-    "src/proposed-change-input.ts",
-    "src/proposed-change-launcher.ts",
-    "src/proposed-change-policy.ts",
-    "src/proposed-change-task.ts",
-    "src/proposed-change-worker-host.ts",
-    "src/review-context.ts",
-    "src/review-fix-commit-task.ts",
-    "src/state-files.ts",
-    "src/task-recovery.ts",
-    "src/tracker-intake.ts",
-    "src/worker-toolchain-storage.ts"
+    "src/",
+    "sandbox/"
   ],
   "keywords": [
     "pi-package"
@@ -62,17 +25,10 @@
   },
   "packageManager": "npm@11.11.0",
   "scripts": {
-    "chatgpt-fixture": "node src/run-chatgpt-fake-cli.ts",
-    "chatgpt-cancel-fixture": "node src/run-chatgpt-fake-cli.ts --cancel",
-    "chatgpt-reflection-fixture": "node src/run-chatgpt-fake-cli.ts --reflect-secret",
-    "chatgpt-live": "node src/run-chatgpt-live-cli.ts",
-    "change-fixture": "node src/run-proposed-change-fixture-cli.ts",
-    "change-denied-fixture": "node src/run-proposed-change-fixture-cli.ts --deny-bootstrap",
-    "change-mutating-check-fixture": "node src/run-proposed-change-fixture-cli.ts --mutating-check",
-    "fixture": "node src/run-fixture-cli.ts",
-    "package-acceptance": "node src/run-package-acceptance-cli.ts",
     "test": "node --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sandbox:image": "node sandbox/build-image.ts",
+    "sandbox:smoke": "node sandbox/smoke.ts"
   },
   "pi": {
     "extensions": [
@@ -84,11 +40,15 @@
     "@typesafe-ai/sdk": "^0.6.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.86.1",
     "@earendil-works/pi-coding-agent": "0.86.1",
     "@types/node": "24.10.0",
+    "typebox": "1.3.27",
     "typescript": "5.9.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "0.86.1"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   }
 }
