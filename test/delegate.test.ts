@@ -106,9 +106,10 @@ function fakeHerdr(
   log: Log,
   replies: Reply[],
   seen: Seen = {},
-  options: { tabs?: Record<string, string[]>; renameFailures?: number; sharedTurns?: boolean } = {},
+  options: { tabs?: Record<string, string[]>; renameFailures?: number; closeFailures?: number; sharedTurns?: boolean } = {},
 ): Herdr {
   let renameFailures = options.renameFailures ?? 0;
+  let closeFailures = options.closeFailures ?? 0;
   // With sharedTurns, a relaunched worker (new tab) continues the reply list instead of restarting it.
   let sharedTurn = 0;
   let tabs = 0;
@@ -165,6 +166,7 @@ function fakeHerdr(
     },
     async closeTab(tabId) {
       log.push(`close ${tabId}`);
+      if (closeFailures-- > 0) throw new Error("tab still running");
     },
   };
 }
@@ -981,7 +983,7 @@ test("reconcile stops an orphaned worker's sandbox.services even without Herdr",
   assert.ok(log.includes("services stop dead-task"));
 });
 
-test("reconcile does not call Docker when no sandbox.services are configured", async (t) => {
+test("reconcile stops orphaned services after the configuration removes sandbox.services", async (t) => {
   const stateRoot = await mkdtemp(join(tmpdir(), "pi-lead-state-"));
   await mkdir(join(stateRoot, "dead-task"));
   await writeFile(join(stateRoot, "dead-task", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x" }));
@@ -989,7 +991,30 @@ test("reconcile does not call Docker when no sandbox.services are configured", a
   const { services } = fakeServices(log);
   const { delegator } = await setup(t, { stateRoot, services, herdr: false, processAlive: () => false });
   await delegator.reconcile();
-  assert.ok(!log.some((line) => line.startsWith("services stop")));
+  assert.ok(log.includes("services stop dead-task"));
+});
+
+test("reconcile keeps a running tab's services when closing the tab fails", async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), "pi-lead-state-"));
+  await mkdir(join(stateRoot, "dead-task"));
+  await writeFile(join(stateRoot, "dead-task", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x", tabId: "w1:t7" }));
+  const serviceLog: Log = [];
+  const { services } = fakeServices(serviceLog);
+  const { delegator, log } = await setup(t, {
+    stateRoot,
+    services,
+    processAlive: () => false,
+    herdrOptions: { tabs: { w1: ["w1:t7"] }, closeFailures: 1 },
+  });
+  assert.equal(await delegator.reconcile(), 0);
+  assert.ok(log.includes("close w1:t7"));
+  assert.ok(!serviceLog.includes("services stop dead-task"));
+  assert.ok(!log.includes("remove clone"));
+  assert.ok((await readdir(stateRoot)).includes("dead-task"));
+
+  assert.equal(await delegator.reconcile(), 1);
+  assert.ok(serviceLog.includes("services stop dead-task"));
+  assert.ok(log.includes("remove clone"));
 });
 
 test("worker panes get Herdr metadata on every state and an agent name, best-effort", async (t) => {

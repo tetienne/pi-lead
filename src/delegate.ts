@@ -1122,13 +1122,14 @@ export function createDelegator(deps: DelegateDeps) {
         const record = await readRecord(dir);
         if (record && record.leadPid !== process.pid && !processAlive(record.leadPid)) orphans.push({ dir, record });
       }
-      // Independent of Herdr: an orphaned task dir's containers must go even without a tab to close.
-      if (deps.services && deps.config.sandbox.services?.length) {
-        for (const { dir } of orphans) {
-          const leftover = await deps.services.stop(basename(dir)).catch(() => []);
-          if (leftover.length) progress(`could not remove Docker resources for "${basename(dir)}": ${leftover.join(", ")}`);
-        }
-      }
+      // The old Lead may have started services even if this session's config no longer declares them.
+      const stopOrphanServices = async (dir: string) => {
+        if (!deps.services) return;
+        const leftover = await deps.services.stop(basename(dir)).catch(() => []);
+        if (leftover.length) progress(`could not remove Docker resources for "${basename(dir)}": ${leftover.join(", ")}`);
+      };
+      // A task with no tab cannot still have a VM using its services, even without Herdr.
+      for (const { dir, record } of orphans) if (!record.tabId) await stopOrphanServices(dir);
       const herdr = deps.herdr;
       // Nothing can be closed outside Herdr: keep the records for a Lead inside it.
       if (!herdr || orphans.length === 0) return 0;
@@ -1152,6 +1153,8 @@ export function createDelegator(deps: DelegateDeps) {
               continue; // keep the record: the tab may still run a VM
             }
           }
+          // Stop services only after the tab is confirmed gone. A failed close keeps its VM alive.
+          await stopOrphanServices(dir);
         }
         if (record.failed && deps.config.keepFailedWorkers) {
           const { tabId: _tab, paneId: _pane, ...kept } = record;
