@@ -92,7 +92,7 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
   return {
     workspace,
     async openWorkerTab({ label, cwd, command }) {
-      const created = await herdr(["tab", "create", "--workspace", workspace, "--cwd", cwd, `--label=${label}`, "--no-focus"]);
+      const created = await herdr(["tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus"]);
       const tabId = findString(created, "tab_id");
       const paneId = findString(created, "pane_id");
       if (!tabId || !paneId) throw new Error("herdr did not return tab_id and pane_id");
@@ -112,27 +112,33 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
       return collectStrings(await herdr(["tab", "list", "--workspace", inWorkspace]), "tab_id");
     },
     async reportMetadata(paneId, { title, displayAgent, tokens, workingLabel, idleLabel, blockedLabel, seq }) {
-      // argv, never a shell: titles and branches are user/model text; `=` keeps a value from reading as a flag.
+      // argv, never a shell: titles and branches are user/model text.
       const base = [
         "pane",
         "report-metadata",
+        paneId,
         "--source",
         METADATA_SOURCE,
         "--agent",
         "pi",
-        `--title=${title}`,
-        `--display-agent=${displayAgent}`,
-        ...Object.entries(tokens).map(([name, value]) => `--token=${name}=${value}`),
-        `--state-label=working=${workingLabel}`,
+        "--title",
+        title,
+        "--display-agent",
+        displayAgent,
+        ...Object.entries(tokens).flatMap(([name, value]) => ["--token", `${name}=${value}`]),
+        "--state-label",
+        `working=${workingLabel}`,
       ];
       const full = [
         ...base,
-        `--state-label=idle=${idleLabel}`,
-        `--state-label=done=${idleLabel}`,
-        `--state-label=blocked=${blockedLabel}`,
-        `--seq=${seq}`,
-        "--",
-        paneId,
+        "--state-label",
+        `idle=${idleLabel}`,
+        "--state-label",
+        `done=${idleLabel}`,
+        "--state-label",
+        `blocked=${blockedLabel}`,
+        "--seq",
+        String(seq),
       ];
       if (!legacyMetadata) {
         try {
@@ -141,7 +147,7 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
           // A Herdr without `--seq` or these state labels rejects the whole report: keep what it knows.
           if (!isUsageError(error)) throw error;
           try {
-            await herdr([...base, "--", paneId]);
+            await herdr(base);
           } catch {
             throw error;
           }
@@ -149,7 +155,7 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
           return;
         }
       }
-      await herdr([...base, "--", paneId]);
+      await herdr(base);
     },
     async renameAgent(paneId, name) {
       await herdr(["agent", "rename", paneId, name]);
@@ -158,7 +164,7 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
       await herdr(["tab", "rename", "--", tabId, label]);
     },
     async notify(title, sound) {
-      await herdr(["notification", "show", `--sound=${sound}`, "--", title]);
+      await herdr(["notification", "show", title, "--sound", sound]);
     },
   };
 }
