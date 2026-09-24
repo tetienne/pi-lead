@@ -3,8 +3,8 @@
 A Pi package that turns one Pi session into an engineering lead. You talk in
 plain language; the Lead answers questions itself, shapes ideas with
 [Matt Pocock's skills](https://github.com/mattpocock/skills), and delegates
-real work to sandboxed workers that run in background [Herdr](https://herdr.dev)
-tabs on a model chosen by [Jev](https://docs.typesafe.ai).
+real work to workers that run in background [Herdr](https://herdr.dev) tabs
+on a model chosen by [Jev](https://docs.typesafe.ai).
 
 No commands. Ask "how does the session store work?" and you get an answer.
 Say "let's add CSV export" and the Lead reads Matt's own router, `ask-matt`,
@@ -20,11 +20,10 @@ you ─► Lead (Pi, your tab)
         implement / prototype / diagnosing-bugs / code-review / research
                             → delegate tool
                                  Jev: ticket ready? how hard? → model + thinking level
-                                 disposable git clone, project mise toolchains (cached)
-                                 → Herdr tab (no focus)
-                                 worker Pi: tools inside a Gondolin VM, /skill:implement …
-                                 Jev guards egress; worker calls finish
-                                 branch fetched back, Jev checks the verdict, tab closed
+                                 → Herdr tab (no focus), worker Pi in its own git worktree
+                                 worker Pi: runs on the host, /skill:implement …
+                                 worker calls finish
+                                 Jev checks the verdict, tab closed
                                  (delegate returns at once; the result comes back as a message)
         worker tool         → list workers, relay an answer to one waiting on you, stop one
 ```
@@ -35,7 +34,7 @@ you ─► Lead (Pi, your tab)
 - **Worker reports are untrusted.** From the moment one reaches the Lead until
   you reply, every Lead tool call that can execute or write on your machine
   (bash, write, edit…) asks you first, and is blocked without a UI. Set
-  `"leadGuard": "off"` in the global config to disable it. When the fetched
+  `"leadGuard": "off"` in the global config to disable it. When the worker's
   branch touches files that can run on your machine or in CI, or steer future
   agents, the report adds a host-generated "Host check" line naming the
   matched patterns: CI workflows and actions, `package.json` (only when its
@@ -44,15 +43,15 @@ you ─► Lead (Pi, your tab)
   `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` and `.gitmodules`. It is a hint
   to focus your review, not a security guarantee: ordinary source, tests and
   lockfiles run too once you use them, and it never blocks.
-- A **worker** is an interactive Pi session in its own Herdr tab. Its
-  `read/write/edit/bash/ls/find/grep` tools run inside a Gondolin micro-VM that
-  mounts only a throw-away clone of the repository. The guest never sees your
-  environment, credentials or checkout; provider calls stay on the host, so
-  any Pi provider or subscription works. A worker is a Pi like the Lead: same
-  skills, prompts and `AGENTS.md`, plus the repository's own skills when you
-  trust the project, but no host-side extensions except Herdr's Pi
-  integration (working/idle badges). It can search the web with `web_search`
-  through your ChatGPT subscription (see
+- A **worker** is an interactive Pi session in its own Herdr tab, running
+  directly on the host in its own git worktree/branch; its
+  `read/write/edit/bash/ls/find/grep` tools have the same network and
+  filesystem access as the user running the Lead (see
+  [ADR 0005](docs/adr/0005-run-workers-on-the-host.md)). A worker is a Pi like
+  the Lead: same skills, prompts and `AGENTS.md`, plus the repository's own
+  skills when you trust the project, but no host-side extensions except
+  Herdr's Pi integration (working/idle badges). It can search the web with
+  `web_search` through your ChatGPT subscription (see
   [Web access for workers](#web-access-for-workers)). When the project names a
   `verify` command, PI Lead runs it itself when code work finishes (see
   [Verify](#verify)).
@@ -68,34 +67,26 @@ you ─► Lead (Pi, your tab)
   Each result shows in the Lead as a card: verdict, time, model, commits and
   diff, the verify line, the branch, review hints and next steps, with every
   line the worker wrote behind a `│` gutter, marked untrusted. Expand it to
-  read the full report the model received. `/lead-doctor` checks the setup
-  (Herdr and its Pi integration, Jev, the worker image, `verify`, the model
-  behind each tier); the Lead warns at start only when workers cannot run.
+  read the full report the model received. The Lead warns at start only when
+  workers cannot run (not inside Herdr, or Herdr's Pi integration missing).
   Tab glyphs, state labels and notifications need Herdr 0.9.1 or later
   (`tab rename`, `notification show`, `--seq`); on an older Herdr, tabs keep
   their plain title and the pane keeps its title, tokens and working label.
-- **Toolchains** come from the project's mise config: the first worker runs
-  `mise install` in a sandbox into a per-project cache, later workers mount it
-  read-only and start instantly. (Your Mac's own mise cache holds macOS
-  binaries, which the Linux guest cannot run.)
-- **Jev** answers small closed questions — difficulty, readiness, egress,
-  verdict, review severity, failure kind, ticket overlap — and code maps each
-  answer to an action. Without a key, documented defaults apply.
+- **Jev** answers small closed questions — difficulty, readiness, verdict,
+  review severity, failure kind, ticket overlap — and code maps each answer
+  to an action. Without a key, documented defaults apply.
 
-Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
-[ADR 0006](docs/adr/0006-workers-mirror-the-lead.md),
-[ADR 0007](docs/adr/0007-verify-with-a-host-chosen-command.md) and
-[spec v2](.scratch/pi-lead/spec-v2.md).
+Design record: [ADR 0001](docs/adr/0001-lead-is-a-tool-driven-conversation.md),
+[ADR 0002](docs/adr/0002-bound-jev-judgments-with-policy.md),
+[ADR 0003](docs/adr/0003-workers-mirror-the-lead.md),
+[ADR 0004](docs/adr/0004-verify-with-a-project-chosen-command.md) and
+[ADR 0005](docs/adr/0005-run-workers-on-the-host.md).
 
 ## Requirements
 
-- Pi ≥ 0.87.1 (GPT-6 Sol/Luna), Node ≥ 23.6 (Gondolin), git, QEMU (`brew install qemu`).
+- Pi ≥ 0.87.1 (GPT-6 Sol/Luna), Node ≥ 23.6, git.
 - Herdr: start the Lead's Pi inside a Herdr pane; `herdr integration install pi`
   for worker status badges and reliable Lead → worker messages.
-- Nothing to build: each release carries the worker image (Debian + git +
-  mise, x86_64 and arm64). The first worker downloads the one of the installed
-  version (a few hundred MB, sha256-checked) into Gondolin's image store.
-
 - Optional: a TypeSafe or OpenRouter key for Jev in `PI_LEAD_JEV_API_KEY`
   (exported in the shell Herdr starts panes with, so workers get it too).
   If the key is set but Jev fails (bad key, wrong model, network) or its daily
@@ -142,7 +133,6 @@ A global file, for example:
                   "fallbacks": [{ "model": "opencode-go/deepseek-v4-pro", "thinking": "max" }] }
   },
   "maxWorkers": 2,
-  "sandbox": { "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
   "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
   "keepFailedWorkers": true,
   "leadGuard": "confirm",
@@ -162,43 +152,7 @@ gives (at least 5 minutes), 5 minutes for a ChatGPT limit without a time, one
 hour otherwise. A worker whose changes could not be committed stays put. With
 nothing left, the worker reports `blocked`. Pi never retries a quota error, so nothing is charged to a
 paid balance. A tier without `model` uses the Lead's current model with that tier's
-thinking level. The example is the ChatGPT Pro + OpenCode Go mapping from
-[worker-models.md](docs/research/worker-models.md).
-
-`sandbox.image` replaces the released image with a Gondolin image of your own;
-it needs git and mise. From a clone of this repository:
-
-```bash
-npm run sandbox:image              # Debian (glibc) + git + mise → pi-lead:latest (Docker or Podman)
-npm run sandbox:image -- --alpine  # without Docker; musl, fewer prebuilt mise tools
-npm run sandbox:smoke              # boots a VM and checks the isolation claims
-```
-
-`allowedHosts` are trusted for downloads only (GET/HEAD and git fetch); any other request, including uploads to an allowlisted host, is
-judged by Jev per path, and when Jev is unsure the worker tab asks you.
-
-`sandbox.services` starts a Docker container per worker, reachable from its VM
-by name (needs Docker; a global or trusted project `.pi/pi-lead.json`):
-
-```json
-{
-  "sandbox": {
-    "services": [
-      { "name": "postgres", "image": "postgres:18-alpine", "port": 5432, "env": { "POSTGRES_PASSWORD": "postgres" } }
-    ]
-  }
-}
-```
-
-The worker reaches it at `postgres:5432` and sees `PI_LEAD_SERVICE_POSTGRES=postgres:5432`
-in its environment. Each worker gets one `--internal` Docker network shared by
-its services, which have no internet access and no published port; a socat
-relay bound to `127.0.0.1` on the host is the only way in, forwarded into the
-VM through Gondolin's `tcp.hosts` mapping,
-which the Lead resolves itself from trusted config only. Containers are
-labelled per worker and removed when its tab closes (or, for one an earlier
-Lead process left behind, on the next session's reconcile). A service can take
-a few seconds to accept connections after the worker starts: clients should retry.
+thinking level.
 
 `stuckDetection` watches a worker's shell commands and file changes: when the
 same command fails three times without succeeding, or six commands in a row
@@ -208,42 +162,26 @@ stopped automatically, and Jev is not involved.
 
 ### Web access for workers
 
-Workers load no host-side extensions, so web tools installed in your own Pi
-(pi-web-access, context-mode, an MCP server…) do not reach them. Two ways in
-stay within the sandbox policy.
+A worker has the same network access as the user running the Lead, so it can
+already reach npm, PyPI, GitHub, Context7 and the like directly. It loads no
+host-side extensions though, so web tools installed in your own Pi
+(pi-web-access, context-mode, an MCP server…) do not reach it.
 
 **`web_search` (built in).** Every worker has a `web_search` tool when you are
 logged in to Pi with a ChatGPT subscription (`/login` → OpenAI Codex). It sends
 one request with OpenAI's hosted web search through Pi's own Codex transport:
-the search runs at OpenAI, nothing is fetched from your machine or the VM, and
-the token never reaches the guest. It uses the worker's model when that is an
-`openai-codex` model, otherwise any `openai-codex` model you are logged in to;
-it never falls back to another provider (an OpenAI API key, OpenCode Go, a
-gateway), and a Codex provider pointed at a host other than `chatgpt.com` is
-refused. Without a Codex login the tool is hidden. The answer comes back
-wrapped in `<web-search-results untrusted>` with its source URLs, and each
-search counts against your ChatGPT usage. Queries do not go through the VM's
-egress policy: OpenAI already sees the worker's context, but the pages its
-search visits are chosen by the model, so a query written from untrusted code
-can carry text to a third-party site.
+the search runs at OpenAI, and the request carries the worker's own context.
+It uses the worker's model when that is an `openai-codex` model, otherwise any
+`openai-codex` model you are logged in to; it never falls back to another
+provider (an OpenAI API key, OpenCode Go, a gateway), and a Codex provider
+pointed at a host other than `chatgpt.com` is refused. Without a Codex login
+the tool is hidden. The answer comes back wrapped in
+`<web-search-results untrusted>` with its source URLs, and each search counts
+against your ChatGPT usage.
 
 **Context7 (up-to-date library docs).** [Context7](https://context7.com)'s API
-is plain HTTPS GET, so allowlisting it lets workers query it without asking
-Jev or you. `allowedHosts` replaces the default list, so keep the defaults:
-
-```json
-{
-  "sandbox": {
-    "allowedHosts": [
-      "registry.npmjs.org", "pypi.org", "files.pythonhosted.org",
-      "github.com", "codeload.github.com", "objects.githubusercontent.com",
-      "context7.com"
-    ]
-  }
-}
-```
-
-Then tell workers about it in the consuming project's `AGENTS.md` (workers
+is plain HTTPS GET, reachable from a worker without any extra configuration.
+Tell workers about it in the consuming project's `AGENTS.md` (workers
 read the same `AGENTS.md` as the Lead):
 
 ```markdown
@@ -262,9 +200,8 @@ Without Node, the same with curl (JSON):
     curl -s "https://context7.com/api/v2/context?libraryId=/prisma/prisma&query=one-to-many%20relations"
 ```
 
-`CTX7_TELEMETRY_DISABLED` stops the CLI's usage event, a POST that Jev would
-otherwise have to judge. Queries are anonymous and rate-limited; keep your
-Context7 API key out of the VM.
+`CTX7_TELEMETRY_DISABLED` stops the CLI's usage event. Queries are anonymous
+and rate-limited.
 
 Then ask the Lead in plain language:
 
@@ -287,8 +224,8 @@ cannot set it, and PI Lead warns when either tries):
 
 When an implement, prototype or debug worker calls `finish` with `done` or
 `partial`, PI Lead's worker extension (host-side code, not the model) commits
-what is left, then runs `verify` in the worker's VM at `/workspace`, with the
-bash tool's shell and environment, for at most `verifyTimeoutMinutes`. A
+what is left, then runs `verify` in the worker's worktree, with the bash tool's
+shell and environment, for at most `verifyTimeoutMinutes`. A
 non-zero exit (or a timeout) makes the result at most `partial`, whatever the
 worker or Jev says. The report states the command and exit code; the output's
 tail sits in the untrusted worker block and goes to Jev's verdict. Without
@@ -313,10 +250,8 @@ the Lead makes gets one dim line in the transcript, which the model never sees:
 ```
 
 `◆` Jev decided and its answer applied, `◇` Jev was unsure, failing or over
-budget and the default applied, `▲` Jev overrode the worker. Worker tabs
-notify only egress Jev denied or put to you; allowed egress is just counted.
-`/jev` lists today's calls and spend by kind and this session's last 20
-decisions.
+budget and the default applied, `▲` Jev overrode the worker. `/jev` lists
+today's calls and spend by kind and this session's last 20 decisions.
 
 ## Develop
 
@@ -336,9 +271,8 @@ on `main` (`fix:` → patch, `feat:` → minor, `feat!:` → minor while in 0.x)
 tags `vX.Y.Z` and publishes the GitHub release; never tag or bump by hand.
 Squash-merged pull requests need a conventional title.
 
-The previous implementation (Gondolin-hosted Pi, ChatGPT-only workers, task
-journals) is in git history before ADR 0005; its research notes under
-`docs/research/` remain valid references.
+The previous implementation (micro-VM-isolated workers, ChatGPT-only, task
+journals) predates [ADR 0005](docs/adr/0005-run-workers-on-the-host.md) and remains in git history.
 
 ## License
 

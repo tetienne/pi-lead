@@ -9,7 +9,7 @@ The user's persistent point of interaction and the coordinator of an engineering
 _Avoid_: Worker, background agent
 
 **Worker**:
-An agent assigned a bounded part of a task, with its own visible working session and isolated execution environment.
+An agent assigned a bounded part of a task, with its own visible working session and its own clone of the repository.
 _Avoid_: Lead
 
 **Consuming project**:

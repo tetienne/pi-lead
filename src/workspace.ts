@@ -5,9 +5,9 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 /**
- * Each worker gets a self-contained clone that is mounted into its VM. The
- * guest owns that clone completely, including `.git/config`, so the host never
- * runs git *inside* it: it only fetches from it into the real repository.
+ * Each worker gets a self-contained clone it runs in. The worker owns that
+ * clone completely, including `.git/config`, so the host never runs git
+ * *inside* it: it only fetches from it into the real repository.
  * `git-upload-pack` ignores repository-local hooks such as
  * `uploadpack.packObjectsHook`, which is what makes fetching safe.
  */
@@ -42,10 +42,10 @@ export const gitWorkspace: Workspace = {
 
   async create({ repoRoot, path, branch, startFrom }) {
     const base = await git(["rev-parse", startFrom ? `refs/heads/${startFrom}` : "HEAD"], repoRoot);
-    // --no-hardlinks: the guest must not be able to rewrite host object files.
+    // --no-hardlinks: the worker must not be able to rewrite host object files.
     await git(["clone", "--quiet", "--no-hardlinks", "--no-tags", repoRoot, path]);
     // Keep origin/* refs so reviews can compare branches, but point the remote
-    // nowhere: the host checkout is not reachable from the guest anyway.
+    // nowhere: the host checkout is not reachable from the clone anyway.
     await git(["remote", "set-url", "origin", "file:///nonexistent"], path);
     await git(["checkout", "--quiet", "-b", branch, startFrom ? `origin/${startFrom}` : base], path);
     await git(["config", "user.name", "PI Lead worker"], path);
@@ -66,7 +66,7 @@ export const gitWorkspace: Workspace = {
   },
 
   async fileAt({ repoRoot, rev, path }) {
-    // cat-file, not show: plumbing applies no textconv or other configured filter to the guest's blob.
+    // cat-file, not show: plumbing applies no textconv or other configured filter to the worker's blob.
     try {
       return await git(["cat-file", "blob", `${rev}:${path}`], repoRoot);
     } catch {

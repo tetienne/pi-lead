@@ -6,65 +6,47 @@ import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
 import worker, { COMMIT_LEFTOVERS } from "../src/worker/extension.ts";
-import { registerSandboxTools } from "../src/worker/sandbox-tools.ts";
 import { runVerification, shouldVerify, VERIFY_OUTPUT_TAIL } from "../src/worker/verify.ts";
 
-test("the host-side bash wrapper reports each command's exit code, -1 when it did not complete", async () => {
-  const vm: any = {
-    exec: (argv: string[]) => {
-      const command = argv[2]!;
-      const done = command.includes("hang")
-        ? Promise.reject(new Error("vm gone"))
-        : Promise.resolve({ exitCode: command.includes("fail") ? 1 : 0 });
-      return Object.assign(done, { output: async function* () { yield { data: Buffer.from("out\n") }; } });
-    },
-  };
-  const tools = new Map<string, any>();
-  const seen: Array<[string, number]> = [];
-  registerSandboxTools(
-    { registerTool: (tool: any) => tools.set(tool.name, tool), on: () => undefined } as any,
-    "/host/clone",
-    async () => ({ vm, shellPath: "/bin/sh", env: {}, root: "/host/clone" }),
-    (command, exitCode) => void seen.push([command, exitCode]),
-  );
-  const bash = tools.get("bash");
-  await bash.execute("1", { command: "npm test" }, undefined, undefined, {});
-  await assert.rejects(bash.execute("2", { command: "npm test -- fail" }, undefined, undefined, {}));
-  await assert.rejects(bash.execute("3", { command: "npm test -- hang" }, undefined, undefined, {}));
-  assert.deepEqual(seen, [["npm test", 0], ["npm test -- fail", 1], ["npm test -- hang", -1]]);
+/** A worker's `tool_result` event, as narrowed by `isBashToolResult`/`isWriteToolResult`. */
+const toolResult = (toolName: string, input: Record<string, unknown>, isError: boolean) => ({
+  type: "tool_result",
+  toolCallId: "1",
+  toolName,
+  input,
+  isError,
+  content: [],
 });
 
-test("a successful write or edit reports a file change; a failed one does not", async () => {
-  const files = new Map<string, string>([["/workspace/a.ts", "const a = 1;\n"]]);
-  const vm: any = {
-    fs: {
-      readFile: async (path: string) => {
-        if (!files.has(path)) throw new Error("ENOENT");
-        return Buffer.from(files.get(path)!);
-      },
-      writeFile: async (path: string, content: string) => void files.set(path, content),
-      mkdir: async () => undefined,
-      access: async (path: string) => {
-        if (!files.has(path)) throw new Error("ENOENT");
-      },
-    },
-  };
-  const tools = new Map<string, any>();
-  let changes = 0;
-  registerSandboxTools(
-    { registerTool: (tool: any) => tools.set(tool.name, tool), on: () => undefined } as any,
-    "/host/clone",
-    async () => ({ vm, shellPath: "/bin/sh", env: {}, root: "/host/clone" }),
-    undefined,
-    () => void changes++,
-  );
-  await tools.get("write").execute("1", { path: "b.ts", content: "b\n" }, undefined, undefined, {});
-  assert.equal(changes, 1);
-  await tools.get("edit").execute("2", { path: "a.ts", edits: [{ oldText: "1", newText: "2" }] }, undefined, undefined, {});
-  assert.equal(changes, 2);
-  assert.equal(files.get("/workspace/a.ts"), "const a = 2;\n");
-  await assert.rejects(tools.get("edit").execute("3", { path: "a.ts", edits: [{ oldText: "missing", newText: "x" }] }, undefined, undefined, {}));
-  assert.equal(changes, 2);
+test("stuck detection is fed by Pi's own tool_result event for bash, and cleared by a file change", async () => {
+  const handlers = new Map<string, (event: any, ctx?: any) => any>();
+  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
+  const taskPath = join(dir, "task.json");
+  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x" }));
+  const messages: any[] = [];
+  worker({
+    registerFlag: () => undefined,
+    getFlag: () => taskPath,
+    registerTool: () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
+    sendMessage: (message: unknown) => messages.push(message),
+    on: (event: string, handler: any) => handlers.set(event, handler),
+  } as any);
+  const ctx = { isIdle: () => false, ui: { setStatus: () => undefined } };
+  await handlers.get("session_start")!({}, ctx);
+
+  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
+  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
+  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
+  assert.equal(messages.length, 1, "steered after 3 identical failures");
+  assert.match(messages[0].content, /npm test.*3 times/);
+
+  messages.length = 0;
+  await handlers.get("tool_result")!(toolResult("write", {}, false), ctx);
+  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
+  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
+  assert.equal(messages.length, 0, "a file change resets the streak");
 });
 
 test("a worker result may carry a verification, which must be well formed", () => {
@@ -85,7 +67,7 @@ test("a worker result may carry a verification, which must be well formed", () =
   }
 });
 
-test("the worker replaces every file/shell tool with a sandboxed one and adds finish and web_search", async () => {
+test("the worker only adds finish and web_search; stock file/shell tools come from Pi itself", async () => {
   const tools: string[] = [];
   const handlers = new Map<string, (event: any, ctx?: any) => any>();
   const flags = new Map<string, unknown>();
@@ -100,13 +82,12 @@ test("the worker replaces every file/shell tool with a sandboxed one and adds fi
   } as any);
 
   assert.ok(flags.has("pi-lead-task"));
-  assert.deepEqual(tools.sort(), ["bash", "edit", "find", "finish", "grep", "ls", "read", "web_search", "write"]);
-  assert.ok(handlers.has("user_bash"), "! shell commands are sandboxed too");
+  assert.deepEqual(tools.sort(), ["finish", "web_search"]);
 
   const { systemPrompt } = await handlers.get("before_agent_start")!({
     systemPrompt: `BASE\nCurrent working directory: ${process.cwd()}`,
   });
-  assert.match(systemPrompt, /Current working directory: \/workspace \(Gondolin VM; branch pi-lead\/x-1\)/);
+  assert.match(systemPrompt, new RegExp(`Current working directory: ${process.cwd()}`));
   assert.match(systemPrompt, /call `finish` with an honest status/);
   assert.match(systemPrompt, /"\[PI Lead\]" come from the Lead/);
 });
@@ -116,7 +97,7 @@ test("a run that ends on a provider error reports it to the Lead instead of idli
   const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
   const taskPath = join(dir, "task.json");
   const resultPath = join(dir, "result.json");
-  // No sandbox config: the VM cannot start, so the leftover commit is skipped and the report still goes out.
+  // No clonePath in the task: the leftover commit is skipped and the report still goes out.
   await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", branch: "pi-lead/x-1", title: "x", resultPath }));
   worker({
     registerFlag: () => undefined,
@@ -164,26 +145,17 @@ test("finish runs the verify command only for code work that claims progress, wh
   assert.equal(shouldVerify({ kind: "implement", verify: "  " }, "done"), false);
 });
 
-test("the verify run uses the bash tool's shell and env at /workspace and keeps the exit code and an output tail", async () => {
-  const calls: Array<{ argv: string[]; options: any }> = [];
-  const vm: any = {
-    exec: (argv: string[], options: any) => {
-      calls.push({ argv, options });
-      return Object.assign(Promise.resolve({ exitCode: 3 }), {
-        output: async function* () {
-          yield { data: Buffer.from("y".repeat(3_000)) };
-          yield { data: Buffer.from("\n1 failing") };
-        },
-      });
-    },
-  };
+test("the verify run executes in the given cwd on the host and keeps the exit code and an output tail", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-lead-verify-"));
+  await writeFile(join(dir, "marker"), "");
   let clock = 1_000;
-  const result = await runVerification(vm, { command: "npm test", shellPath: "/bin/bash", env: { CI: "1" }, now: () => (clock += 500) });
-  assert.deepEqual(calls[0]!.argv, ["/bin/bash", "-lc", "npm test"]);
-  assert.equal(calls[0]!.options.cwd, "/workspace");
-  assert.deepEqual(calls[0]!.options.env, { CI: "1" });
-  assert.equal(result.command, "npm test");
-  assert.equal(result.exitCode, 3);
+  const result = await runVerification({
+    command: `test -f marker || exit 9; node -e "process.stdout.write('y'.repeat(3000) + '\\n1 failing')"; exit 3`,
+    cwd: dir,
+    now: () => (clock += 500),
+  });
+  assert.equal(result.command.startsWith("test -f marker"), true);
+  assert.equal(result.exitCode, 3, "ran in the given cwd, where marker exists");
   assert.equal(result.ms, 500);
   assert.equal(result.outputTail.length, VERIFY_OUTPUT_TAIL);
   assert.ok(result.outputTail.endsWith("\n1 failing"));
@@ -191,30 +163,20 @@ test("the verify run uses the bash tool's shell and env at /workspace and keeps 
 });
 
 test("a verify run that errors or times out has exit code -1 and never throws", async () => {
-  const failing: any = { exec: () => Object.assign(Promise.reject(new Error("vm gone")), { output: async function* () {} }) };
-  const failed = await runVerification(failing, { command: "npm test", shellPath: "/bin/sh", env: {} });
+  const failed = await runVerification({ command: "true", cwd: "/no/such/directory-pi-lead-test" });
   assert.equal(failed.exitCode, -1);
-  assert.match(failed.outputTail, /could not run: vm gone/);
+  assert.match(failed.outputTail, /could not run:/);
 
-  let aborted = false;
-  const hanging: any = {
-    exec: (_argv: string[], options: { signal: AbortSignal }) => {
-      options.signal.addEventListener("abort", () => (aborted = true));
-      return Object.assign(new Promise(() => undefined), { output: async function* () { yield { data: Buffer.from("running\n") }; } });
-    },
-  };
-  const timedOut = await runVerification(hanging, { command: "npm test", shellPath: "/bin/sh", env: {}, timeoutMinutes: 0.0005 });
+  const dir = await mkdtemp(join(tmpdir(), "pi-lead-verify-"));
+  const timedOut = await runVerification({ command: "sleep 5", cwd: dir, timeoutMinutes: 0.0005 });
   assert.equal(timedOut.exitCode, -1);
-  assert.ok(aborted, "the command is aborted");
-  assert.match(timedOut.outputTail, /^running\n\n\[PI Lead: stopped after 0\.0005 minutes\]$/);
+  assert.match(timedOut.outputTail, /\[PI Lead: stopped after 0\.0005 minutes\]$/);
 
-  aborted = false;
   const stop = new AbortController();
-  const stopping = runVerification(hanging, { command: "npm test", shellPath: "/bin/sh", env: {}, signal: stop.signal });
+  const stopping = runVerification({ command: "sleep 5", cwd: dir, signal: stop.signal });
   stop.abort();
   const stoppedByUser = await stopping;
   assert.equal(stoppedByUser.exitCode, -1);
-  assert.ok(aborted, "the user stopping finish aborts the command");
   assert.match(stoppedByUser.outputTail, /\[PI Lead: aborted\]$/);
 });
 

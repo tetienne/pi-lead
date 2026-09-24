@@ -67,8 +67,8 @@ function normalizeDomains(domains: readonly string[] | undefined): string[] | un
 /**
  * `web_search` for workers: one Responses call with OpenAI's hosted web search
  * tool, through Pi's own Codex transport and credentials. The search runs at
- * OpenAI; nothing is fetched from this host or from the VM, and the token
- * never reaches the guest. Results are web content, handed back as untrusted.
+ * OpenAI; nothing is fetched from this host, and the token
+ * never reaches the worker model. Results are web content, handed back as untrusted.
  */
 export function registerWebSearch(pi: ExtensionAPI): void {
   pi.registerTool({

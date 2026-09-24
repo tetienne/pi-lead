@@ -60,9 +60,7 @@ test("an unavailable configured model falls back to the first available fallback
 });
 
 test("config merging keeps defaults for unspecified fields", () => {
-  const config = mergeConfig(DEFAULT_CONFIG, { sandbox: { image: "pi-lead:latest" }, jev: { dailyBudgetUsd: 0.5 } });
-  assert.equal(config.sandbox.image, "pi-lead:latest");
-  assert.deepEqual(config.sandbox.allowedHosts, DEFAULT_CONFIG.sandbox.allowedHosts);
+  const config = mergeConfig(DEFAULT_CONFIG, { jev: { dailyBudgetUsd: 0.5 } });
   assert.equal(config.jev.dailyBudgetUsd, 0.5);
   assert.equal(config.jev.model, DEFAULT_CONFIG.jev.model);
   assert.equal(config.stuckDetection, true);

@@ -60,54 +60,6 @@ test("leadGuard in the project file is dropped with a notice", async () => {
   assert.deepEqual(ignored, ["PI Lead: `leadGuard` in .pi/pi-lead.json is ignored; only the global config can change it."]);
 });
 
-test("valid sandbox.services in the global config loads as is", async () => {
-  const service = { name: "postgres", image: "postgres:18-alpine", port: 5432, env: { POSTGRES_PASSWORD: "x" } };
-  const { agentDir, cwd } = await dirs({ sandbox: { services: [service] } });
-  const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
-  assert.deepEqual(ignored, []);
-  assert.deepEqual(config.sandbox.services, [service]);
-});
-
-test("valid sandbox.services in a trusted project config loads as is", async () => {
-  const service = { name: "redis", image: "redis:7-alpine", port: 6379 };
-  const { agentDir, cwd } = await dirs(undefined, { sandbox: { services: [service] } });
-  const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
-  assert.deepEqual(ignored, []);
-  assert.deepEqual(config.sandbox.services, [service]);
-});
-
-test("sandbox.services in an untrusted project config is ignored like the rest of the project file", async () => {
-  const service = { name: "redis", image: "redis:7-alpine", port: 6379 };
-  const { agentDir, cwd } = await dirs(undefined, { sandbox: { services: [service] } });
-  const { config } = await loadConfigWithNotices(cwd, { projectTrusted: false, agentDir });
-  assert.equal(config.sandbox.services, undefined);
-});
-
-for (const [label, service] of [
-  ["not an array", { name: "x" }],
-  ["unknown key", [{ name: "postgres", image: "postgres", port: 5432, extra: true }]],
-  ["invalid name (uppercase)", [{ name: "Postgres", image: "postgres", port: 5432 }]],
-  ["invalid name (empty)", [{ name: "", image: "postgres", port: 5432 }]],
-  ["invalid image (whitespace)", [{ name: "postgres", image: "postgres 18", port: 5432 }]],
-  ["invalid image (empty)", [{ name: "postgres", image: "", port: 5432 }]],
-  ["invalid image (leading dash)", [{ name: "postgres", image: "-postgres", port: 5432 }]],
-  ["invalid port (0)", [{ name: "postgres", image: "postgres", port: 0 }]],
-  ["invalid port (too big)", [{ name: "postgres", image: "postgres", port: 70_000 }]],
-  ["invalid port (not an integer)", [{ name: "postgres", image: "postgres", port: 5432.5 }]],
-  ["invalid env key", [{ name: "postgres", image: "postgres", port: 5432, env: { "bad key": "x" } }]],
-  ["invalid env value", [{ name: "postgres", image: "postgres", port: 5432, env: { K: 1 } }]],
-  ["duplicate name", [{ name: "postgres", image: "postgres", port: 5432 }, { name: "postgres", image: "postgres", port: 5433 }]],
-] as const) {
-  test(`sandbox.services is dropped with a notice: ${label}`, async () => {
-    const { agentDir, cwd } = await dirs({ sandbox: { services: service } });
-    const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
-    assert.equal(config.sandbox.services, undefined);
-    assert.equal(ignored.length, 1);
-    assert.match(ignored[0]!, /PI Lead: `sandbox\.services` in .* is ignored/);
-    assert.doesNotMatch(ignored[0]!, /postgres:|POSTGRES_PASSWORD/); // never echoes an unvalidated value
-  });
-}
-
 test("a config file that is not an object still loads without a notice", async () => {
   const { agentDir, cwd } = await dirs();
   await writeFile(join(agentDir, "pi-lead.json"), "5");

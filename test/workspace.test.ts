@@ -25,7 +25,7 @@ test("a worker clone is disposable and its branch comes back by fetch", async ()
   assert.equal(git(clone, "remote", "get-url", "origin"), "file:///nonexistent");
   assert.match(git(clone, "branch", "-r"), /origin\/feature/);
 
-  // What the guest does inside the VM.
+  // What the worker does inside its clone.
   await writeFile(join(clone, "a.txt"), "two\n");
   git(clone, "commit", "-qam", "change");
 

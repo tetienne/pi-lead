@@ -8,8 +8,8 @@ export const WORKER_REPORT_TYPE = "pi-lead-worker";
 /**
  * Tools the Lead may run without asking even while a worker report is in the
  * conversation: they only read the host (`git_read` validates its arguments
- * down to read-only git), or start / talk to sandboxed work (`worker` message
- * text goes into the VM, not to the host). Everything else —
+ * down to read-only git), or start / talk to a worker (`worker` message
+ * text goes to the worker's Pi process, not to the host). Everything else —
  * bash, powershell, write, edit, and any tool another extension registers — is
  * treated as able to execute or write on the host.
  */
@@ -61,9 +61,9 @@ export type ReportGuard = {
 
 /**
  * Deterministic host-side guard against a prompt-injected worker steering the
- * Lead. Worker reports are text written by a sandboxed model that read
- * untrusted code; the Lead's own tools run unsandboxed on the host. So from the
- * moment a report enters the conversation until the human sends a message of
+ * Lead. Worker reports are text written by a worker model that read
+ * untrusted code; the Lead's own tools run on the host too, with no isolation.
+ * So from the moment a report enters the conversation until the human sends a message of
  * their own, every Lead tool call that can execute or write on the host needs
  * an explicit confirmation (and is blocked when there is no UI to ask).
  *

@@ -1,28 +1,21 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SlashCommandInfo, type Theme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { loadConfigWithNotices, type LeadConfig } from "./config.ts";
+import { loadConfigWithNotices } from "./config.ts";
 import { createDelegator, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { registerGitRead } from "./git-read.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
-import { doctorReport, startupWarnings, type SetupFacts } from "./doctor.ts";
-import { createWorkerImage, hasReleasedImage, PACKAGE_VERSION, releaseImageRef } from "./image.ts";
-import { resolveRoute } from "./model-routing.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
 import { registerReportGuard, WORKER_REPORT_TYPE } from "./report-guard.ts";
-import { startServices, stopServices } from "./services.ts";
-import { createToolchains } from "./toolchains.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
 import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
 import { gitWorkspace } from "./workspace.ts";
@@ -30,6 +23,15 @@ import { gitWorkspace } from "./workspace.ts";
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SKILLS_DIR = join(PACKAGE_ROOT, ".agents", "skills");
 const WORKER_EXTENSION = join(PACKAGE_ROOT, "src", "worker", "extension.ts");
+
+/** One line per problem that stops workers or degrades them, for a warning at session start. */
+export function startupWarnings(facts: { herdr?: string; herdrPi: boolean }): string[] {
+  if (!facts.herdr) return ["PI Lead: this Pi is not inside Herdr, so it cannot start workers. Start it in a Herdr pane."];
+  if (!facts.herdrPi) {
+    return ["PI Lead: Herdr's Pi integration is missing (worker badges and messages to workers). Run `herdr integration install pi`."];
+  }
+  return [];
+}
 
 /** Same resolution as Pi's subagent example: re-run the Pi that runs us. */
 function piInvocation(): string[] {
@@ -42,7 +44,7 @@ function piInvocation(): string[] {
  * Herdr's own Pi integration (working/idle/blocked, session identity), written
  * by `herdr integration install pi`. It is trusted host code that only talks
  * to the Herdr socket; now that worker Pi runs on the host it works as is. The
- * guest never sees the socket.
+ * worker never sees the socket.
  */
 export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefined {
   const path = join(agentDir, "extensions", "herdr-agent-state.ts");
@@ -50,29 +52,11 @@ export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefin
 }
 
 /**
- * Folders of every skill Pi loaded for the Lead (settings, packages, global
- * dirs): the worker's host-side Pi loads the same ones, and its reads run in
- * the guest. Project skills are left out, workers get host copies of those.
- */
-export function skillMounts(commands: SlashCommandInfo[]): string[] {
-  const mounts = [SKILLS_DIR];
-  for (const command of commands) {
-    // A loose `.md` skill has no companion files; mounting its parent could expose all of $HOME.
-    if (command.source !== "skill" || command.sourceInfo.scope === "project" || basename(command.sourceInfo.path) !== "SKILL.md") continue;
-    const dir = dirname(command.sourceInfo.path);
-    if (!mounts.some((mount) => dir === mount || dir.startsWith(mount + sep))) mounts.push(dir);
-  }
-  // Each mount lands on the guest kernel command line, which is cut at 2048 bytes and
-  // silently loses Gondolin's MITM CA: siblings share one mount of their `skills/` folder.
-  const siblings = (dir: string) => mounts.filter((mount) => dirname(mount) === dirname(dir)).length;
-  return [...new Set(mounts.map((dir) => (basename(dirname(dir)) === "skills" && siblings(dir) > 1 ? dirname(dir) : dir)))];
-}
-
-/**
  * A worker is a Pi like the Lead: same package and global skills and prompts,
- * plus host copies of the repository's own (see context-snapshot.ts). Code is
- * the exception: project and global extensions would run on the host, outside
- * the VM, so only the worker extension and Herdr's Pi integration load.
+ * plus host copies of the repository's own (see context-snapshot.ts), reads
+ * running directly on the host. Code is the exception: project and global
+ * extensions are left out, so only the worker extension and Herdr's Pi
+ * integration load.
  */
 export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, resources }) => {
   const herdr = findHerdrPiExtension();
@@ -83,7 +67,6 @@ export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, r
     "-e",
     WORKER_EXTENSION,
     ...(herdr ? ["-e", herdr] : []),
-    "--no-builtin-tools",
     "--skill",
     SKILLS_DIR,
     ...resources.skills.flatMap((path) => ["--skill", path]),
@@ -104,15 +87,6 @@ export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, r
 
 const WORKER_ACTIONS = ["list", "message", "stop"] as const;
 
-const execFileAsync = promisify(execFile);
-
-/** Only run when sandbox.services is configured (/lead-doctor); nothing else in the Lead needs Docker. */
-const checkDocker = () =>
-  execFileAsync("docker", ["version"], { timeout: 5_000 }).then(
-    () => true,
-    () => false,
-  );
-
 const paint = (theme: Theme): Paint => (color, text) => theme.fg(color, text);
 
 /** The text a tool returned to the model, which the collapsed rendering summarizes. */
@@ -122,8 +96,6 @@ const resultText = (result: { content: ReadonlyArray<{ type: string; text?: stri
 export default function lead(pi: ExtensionAPI) {
   let delegator: Delegator | undefined;
   let ui: ExtensionContext["ui"] | undefined;
-  // One per Lead: parallel delegations share a single first-time download.
-  const workerImage = createWorkerImage();
   let closed = false;
   let hasUI = false;
   /** Set only when Jev is configured: the status segment and `/jev` read the shared ledger. */
@@ -134,35 +106,8 @@ export default function lead(pi: ExtensionAPI) {
   const recent: JevDecision[] = [];
   registerReportGuard(pi);
 
-  let leadConfig: LeadConfig | undefined;
   /** `delegate` calls in their start phase, which share Pi's working message. */
   let delegating = 0;
-
-  /** What `/lead-doctor` and the session-start warning look at. `dockerReachable` is checked only by the command (it needs a process call). */
-  const setupFacts = (ctx: ExtensionContext, config: LeadConfig, dockerReachable?: boolean): SetupFacts => {
-    const herdr = createHerdrCli();
-    const lead = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
-    const available = ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id }));
-    return {
-      version: PACKAGE_VERSION,
-      ...(herdr ? { herdr: herdr.workspace } : {}),
-      herdrPi: findHerdrPiExtension() !== undefined,
-      jev: {
-        configured: jev !== undefined,
-        via: config.jev.via,
-        keyEnv: config.jev.apiKeyEnv,
-        budgetUsd: config.jev.dailyBudgetUsd,
-        ...(jevUsage ? { calls: jevUsage.calls, usd: jevUsage.usd } : {}),
-      },
-      tiers: (["fast", "standard", "deep"] as const).map((tier) => ({ tier, route: resolveRoute(tier, config.tiers, lead, available) })),
-      maxWorkers: config.maxWorkers,
-      ...(config.verify ? { verify: config.verify } : {}),
-      image: config.sandbox.image
-        ? { custom: config.sandbox.image }
-        : { released: releaseImageRef(PACKAGE_VERSION), present: hasReleasedImage() },
-      ...(dockerReachable !== undefined ? { docker: { reachable: dockerReachable } } : {}),
-    };
-  };
 
   const status = () => {
     const parts: string[] = [];
@@ -186,11 +131,9 @@ export default function lead(pi: ExtensionAPI) {
     ui = ctx.ui;
     hasUI = ctx.hasUI;
     const agentDir = getAgentDir();
-    leadConfig = undefined; // `/lead-doctor` never reports a previous session's config
     const { config, ignored } = await loadConfigWithNotices(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     // A setting dropped by the global/project rules would otherwise vanish without a trace.
     if (ctx.hasUI) for (const notice of ignored) ctx.ui.notify(notice, "warning");
-    leadConfig = config;
     const ask = createAskJev(config.jev);
     const ledger = createLedger(join(agentDir, "pi-lead", "jev-usage.json"));
     jev = ask ? { ledger, budgetUsd: config.jev.dailyBudgetUsd } : undefined;
@@ -220,11 +163,6 @@ export default function lead(pi: ExtensionAPI) {
       herdr: createHerdrCli(),
       workspace: gitWorkspace,
       workerCommand,
-      toolchains: createToolchains({ root: join(agentDir, "pi-lead", "toolchains"), judge }),
-      services: { start: startServices, stop: stopServices },
-      image: workerImage,
-      // So a skill's own files (templates, scripts) resolve inside the VM too.
-      readonlyMounts: skillMounts(pi.getCommands()),
       stateRoot: join(agentDir, "pi-lead", "workers"),
       // Each result wakes the Lead, which tells the user and follows "Next".
       onOutcome(outcome) {
@@ -256,7 +194,6 @@ export default function lead(pi: ExtensionAPI) {
     closed = false;
     recent.length = 0;
     const current = await setup(ctx);
-    // Only what stops workers or degrades them; `/lead-doctor` shows the rest.
     if (ctx.hasUI) {
       try {
         const herdr = createHerdrCli();
@@ -307,16 +244,6 @@ export default function lead(pi: ExtensionAPI) {
     invalidate: () => undefined,
   }));
 
-  pi.registerCommand("lead-doctor", {
-    description: "Check PI Lead's setup: Herdr, Jev, worker image, verify command and the model behind each tier",
-    handler: async (_args, ctx) => {
-      if (!leadConfig) await setup(ctx);
-      if (jev) jevUsage = await jev.ledger.usage().catch(() => jevUsage);
-      const dockerReachable = leadConfig!.sandbox.services?.length ? await checkDocker() : undefined;
-      ctx.ui.notify(doctorReport(setupFacts(ctx, leadConfig!, dockerReachable)), "info");
-    },
-  });
-
   pi.registerCommand("jev", {
     description: "Jev's calls and spend today, and this session's last decisions",
     handler: async (_args, ctx) => {
@@ -336,8 +263,8 @@ export default function lead(pi: ExtensionAPI) {
     name: "delegate",
     label: "Delegate",
     description:
-      "Start one engineering task in a sandboxed worker (Gondolin VM, background Herdr tab, model chosen by Jev). Returns at once; the result arrives later as a message. Runs the execution skills: implement, prototype, diagnosing-bugs (debug), code-review (review), research. Never for questions you can answer yourself.",
-    promptSnippet: "delegate: start implement/prototype/debug/review/research work in a sandboxed background worker",
+      "Start one engineering task in a worker (background Herdr tab, model chosen by Jev). Returns at once; the result arrives later as a message. Runs the execution skills: implement, prototype, diagnosing-bugs (debug), code-review (review), research. Never for questions you can answer yourself.",
+    promptSnippet: "delegate: start implement/prototype/debug/review/research work in a background worker",
     promptGuidelines: [
       "Pass the complete ticket or request in `task`; the worker does not see this conversation.",
       "Only use kind implement for a ready ticket; shape vague ideas with the user first.",
@@ -364,7 +291,6 @@ export default function lead(pi: ExtensionAPI) {
           lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
           available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
           projectTrusted: ctx.isProjectTrusted(),
-          ...(ctx.hasUI ? { confirm: (question: string) => ctx.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) } : {}),
         });
       } finally {
         if (ctx.hasUI && --delegating === 0) ctx.ui.setWorkingMessage();

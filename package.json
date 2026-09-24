@@ -1,7 +1,7 @@
 {
   "name": "pi-lead",
   "version": "0.7.0",
-  "description": "A Pi package that turns one Pi session into an engineering lead delegating to sandboxed workers.",
+  "description": "A Pi package that turns one Pi session into an engineering lead delegating to worker Pi processes.",
   "license": "MIT",
   "author": "Thibaut Etienne",
   "type": "module",
@@ -17,15 +17,13 @@
     ".agents/skills/",
     "README.md",
     "src/",
-    "sandbox/",
     "LICENSE"
   ],
   "keywords": [
     "pi-package",
     "pi-extension",
     "pi",
-    "agents",
-    "sandbox"
+    "agents"
   ],
   "engines": {
     "node": ">=23.6.0"
@@ -33,9 +31,7 @@
   "packageManager": "npm@11.11.0",
   "scripts": {
     "test": "node --test test/*.test.ts",
-    "typecheck": "tsc --noEmit",
-    "sandbox:image": "node sandbox/build-image.ts",
-    "sandbox:smoke": "node sandbox/smoke.ts"
+    "typecheck": "tsc --noEmit"
   },
   "pi": {
     "extensions": [
@@ -43,7 +39,6 @@
     ]
   },
   "dependencies": {
-    "@earendil-works/gondolin": "0.12.0",
     "@typesafe-ai/sdk": "^0.6.0"
   },
   "devDependencies": {
