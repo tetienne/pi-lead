@@ -18,6 +18,10 @@ import { createStuckDetector } from "./stuck.ts";
 import { runVerification, shouldVerify } from "./verify.ts";
 import { registerWebSearch } from "./web-search.ts";
 
+/** The braces send `git add`'s stderr to stdout too, so a failure reaches the model. */
+export const COMMIT_LEFTOVERS =
+  '{ git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes"); } 2>&1';
+
 /**
  * Loaded only into worker Pi processes (`--no-extensions -e`). Pi and this
  * extension stay on the host; every model-driven action goes through the
@@ -133,14 +137,7 @@ export default function worker(pi: ExtensionAPI) {
    */
   const commitLeftovers = async (ctx?: ExtensionContext) => {
     const { vm, env } = await ensureVm(ctx);
-    return vm.exec(
-      [
-        "/bin/sh",
-        "-lc",
-        '{ git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes"); } 2>&1',
-      ],
-      { cwd: GUEST_WORKSPACE, env },
-    );
+    return vm.exec(["/bin/sh", "-lc", COMMIT_LEFTOVERS], { cwd: GUEST_WORKSPACE, env });
   };
 
   const writeResult = async (result: WorkerResult) => {
