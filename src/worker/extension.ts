@@ -11,7 +11,7 @@ import { decisionLine, shouldShow } from "../jev-display.ts";
 import { quotaError } from "../quota.ts";
 import { plainTitle } from "../worker-display.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
-import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
+import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, serviceEnv, serviceHosts, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
 import { registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
 import { createStuckDetector } from "./stuck.ts";
@@ -85,8 +85,14 @@ export default function worker(pi: ExtensionAPI) {
     if (current.toolchainCache) mounts[GUEST_MISE_DIR] = { host: current.toolchainCache, readonly: true };
     // Skill folders at their host paths, so a skill's templates and scripts resolve in the guest.
     for (const dir of current.readonlyMounts ?? []) mounts[dir] = { host: dir, readonly: true };
-    const vm = await createSandboxVm({ label: `pi-lead ${current.title}`, sandbox: current.sandbox, mounts, allowRequest: allow });
-    const env = guestEnv(current.toolchainCache !== undefined);
+    const vm = await createSandboxVm({
+      label: `pi-lead ${current.title}`,
+      sandbox: current.sandbox,
+      mounts,
+      allowRequest: allow,
+      ...(current.services?.length ? { tcpHosts: serviceHosts(current.services) } : {}),
+    });
+    const env = { ...guestEnv(current.toolchainCache !== undefined), ...(current.services?.length ? serviceEnv(current.services) : {}) };
     const probe = await vm.exec(["/bin/sh", "-lc", "command -v bash || true; command -v git || true"], { env });
     const [bash, gitPath] = probe.stdout.split("\n").map((line) => line.trim());
     if (!gitPath) {
@@ -228,7 +234,9 @@ export default function worker(pi: ExtensionAPI) {
     // A new prompt from the Lead or the user: a new cycle for stuck detection.
     stuck.reset();
     const localLine = `Current working directory: ${process.cwd()}`;
-    const guestLine = `Current working directory: ${GUEST_WORKSPACE} (Gondolin VM; branch ${current.branch})`;
+    const guestLine =
+      `Current working directory: ${GUEST_WORKSPACE} (Gondolin VM; branch ${current.branch})` +
+      (current.services?.length ? ` · services: ${current.services.map((service) => `${service.name}:${service.port}`).join(", ")}` : "");
     const prompt = event.systemPrompt.includes(localLine)
       ? event.systemPrompt.replace(localLine, guestLine)
       : `${event.systemPrompt}\n\n${guestLine}`;

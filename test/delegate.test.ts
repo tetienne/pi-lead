@@ -19,6 +19,7 @@ import {
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
 import { createJudge, createLedger, type Judge, type WorkerVerdict } from "../src/jev.ts";
 import type { WorkerResult, WorkerTask } from "../src/protocol.ts";
+import type { SandboxService } from "../src/config.ts";
 import type { Toolchains } from "../src/toolchains.ts";
 import type { Workspace } from "../src/workspace.ts";
 
@@ -52,7 +53,44 @@ function fakeWorkspace(log: Log): Workspace {
   };
 }
 
+test("sandbox.services started, then the tab fails to open: its containers are stopped", async (t) => {
+  const log: Log = [];
+  const { services, active } = fakeServices(log);
+  const herdr = fakeHerdr(log, [{ status: "done" }]);
+  herdr.openWorkerTab = async () => {
+    throw new Error("herdr unavailable");
+  };
+  const { delegator, nextOutcome } = await setup(t, { services, herdr, config: { sandbox: { services: ONE_SERVICE } } });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "No tab", task: "t" }, io);
+  assert.equal((await pending).status, "failed");
+  assert.ok(log.some((line) => line.startsWith("services start ")));
+  assert.equal(active.size, 0);
+});
+
 const scriptOf = (command: string) => /^\/bin\/sh '([^']+)'$/.exec(command)![1]!;
+
+/** A fake sandbox.services runtime: records start/stop calls by id, "started" containers by id. */
+function fakeServices(log: Log, options: { failStart?: boolean } = {}): { services: DelegateDeps["services"]; active: Set<string> } {
+  const active = new Set<string>();
+  return {
+    active,
+    services: {
+      async start(id, requested) {
+        log.push(`services start ${id}`);
+        if (options.failStart) throw new Error("docker not running");
+        active.add(id);
+        return requested.map((service, index) => ({ name: service.name, port: service.port, hostPort: 40_000 + index }));
+      },
+      async stop(id) {
+        log.push(`services stop ${id}`);
+        active.delete(id);
+      },
+    },
+  };
+}
+
+const ONE_SERVICE: SandboxService[] = [{ name: "postgres", image: "postgres:18-alpine", port: 5432 }];
 
 /**
  * A fake Herdr whose "worker" reads the task file from the launch script and
@@ -140,6 +178,7 @@ async function setup(t: TestContext, options: {
   herdr?: Herdr | false;
   maxWorkers?: number;
   toolchains?: Toolchains;
+  services?: DelegateDeps["services"];
   image?: DelegateDeps["image"];
   seen?: Seen;
   config?: Parameters<typeof mergeConfig>[1];
@@ -162,6 +201,7 @@ async function setup(t: TestContext, options: {
         : options.herdr ?? fakeHerdr(log, options.replies ?? [{ status: "done" }], options.seen, options.herdrOptions),
     workspace: options.workspace ?? fakeWorkspace(log),
     ...(options.toolchains ? { toolchains: options.toolchains } : {}),
+    ...(options.services ? { services: options.services } : {}),
     ...(options.image ? { image: options.image } : {}),
     ...(options.processAlive ? { processAlive: options.processAlive } : {}),
     workerCommand: ({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt],
@@ -823,6 +863,76 @@ test("reconcile never touches the task dirs of a Lead that is still running", as
   const other = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: { tabs: { w1: ["tab-1"] } } });
   assert.equal(await other.delegator.reconcile(), 0);
   assert.ok(!other.log.some((line) => line.startsWith("close")));
+});
+
+test("sandbox.services are started before task.json is written, with resolved ports in the task", async (t) => {
+  const log: Log = [];
+  const { services } = fakeServices(log);
+  const seen: Seen = {};
+  const { delegator, nextOutcome } = await setup(t, {
+    seen,
+    services,
+    config: { sandbox: { services: ONE_SERVICE } },
+    replies: [{ status: "done", delayMs: 30 }],
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Uses PG", task: "t" }, io);
+  await pending;
+  assert.ok(log[0]!.startsWith("services start "), "started before the worker's tab opens");
+  assert.deepEqual(seen.task!.services, [{ name: "postgres", port: 5432, hostPort: 40_000 }]);
+});
+
+test("sandbox.services are stopped once the worker's tab closes (done)", async (t) => {
+  const log: Log = [];
+  const { services, active } = fakeServices(log);
+  const { delegator, nextOutcome } = await setup(t, { services, config: { sandbox: { services: ONE_SERVICE } }, replies: [{ status: "done" }] });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Uses PG", task: "t" }, io);
+  await pending;
+  assert.equal(active.size, 0);
+  assert.ok(log.some((line) => line.startsWith("services stop ")));
+});
+
+test("sandbox.services stay up while a worker waits on a question, and stop once it is closed", async (t) => {
+  const log: Log = [];
+  const { services, active } = fakeServices(log);
+  const { delegator, nextOutcome } = await setup(t, {
+    services,
+    config: { sandbox: { services: ONE_SERVICE }, keepFailedWorkers: true },
+    replies: [{ status: "blocked" }],
+  });
+  const pending = nextOutcome();
+  const outcome = await delegator.start({ kind: "implement", title: "Blocked", task: "t" }, io);
+  assert.ok(outcome.status === "started");
+  await pending;
+  assert.equal(delegator.list()[0]!.state, "waiting");
+  assert.equal(active.size, 1, "still resumable: its services stay reachable");
+  await delegator.stop(outcome.worker.id);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(active.size, 0, "closing the tab stops its services");
+});
+
+test("sandbox.services fail to start: the worker fails and nothing leaks", async (t) => {
+  const log: Log = [];
+  const { services, active } = fakeServices(log, { failStart: true });
+  const { delegator, nextOutcome } = await setup(t, { services, config: { sandbox: { services: ONE_SERVICE } } });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "No Docker", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.text, /docker not running/);
+  assert.equal(active.size, 0);
+});
+
+test("reconcile stops an orphaned worker's sandbox.services even without Herdr", async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), "pi-lead-state-"));
+  await mkdir(join(stateRoot, "dead-task"));
+  await writeFile(join(stateRoot, "dead-task", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x" }));
+  const log: Log = [];
+  const { services } = fakeServices(log);
+  const { delegator } = await setup(t, { stateRoot, services, herdr: false, processAlive: () => false });
+  assert.equal(await delegator.reconcile(), 0);
+  assert.ok(log.includes("services stop dead-task"));
 });
 
 test("worker panes get Herdr metadata on every state and an agent name, best-effort", async (t) => {

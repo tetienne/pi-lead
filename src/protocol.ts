@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { LeadConfig } from "./config.ts";
 import type { WorkKind, WorkerVerdict } from "./jev.ts";
 import type { QuotaError } from "./quota.ts";
+import type { StartedService } from "./services.ts";
 
 /** Written by the Lead, read by the worker extension (`--pi-lead-task`). */
 export type WorkerTask = {
@@ -22,6 +23,8 @@ export type WorkerTask = {
   toolchainCache?: string;
   /** Host directories mounted read-only at the same path in the guest (skill folders). */
   readonlyMounts: string[];
+  /** Sidecar containers started for this worker, resolved to their host relay port. */
+  services?: StartedService[];
   /** Steer the worker when it keeps repeating a failing command. Absent means on. */
   stuckDetection?: boolean;
   /**
