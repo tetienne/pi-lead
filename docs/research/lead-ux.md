@@ -2,7 +2,9 @@
 
 Research date: 2026-09-24. Scope: what PI Lead shows today, what Pi 0.87.1's
 extension UI and Herdr 0.9.1 let it show, and what the most used Pi subagent
-extensions do. Research only; no code changed. Mockups are proposals.
+extensions do. Research only; no code changed. Mockups are proposals. The
+proposal below is the second version, after a skeptical review (see the
+review record at the end).
 
 ## What PI Lead shows today
 
@@ -53,17 +55,24 @@ Examples live in `examples/extensions/`.
 | `registerEntryRenderer` | Already used for Jev lines |
 | `ui.custom(factory, { overlay: true })` | A `/workers` inspector overlay with keyboard input. `overlay-test.ts` |
 | `ui.notify(text, level)` | Already used |
-| `pi.setSessionName(name)` | Name worker sessions after their ticket, so `/resume` in a worker tab lists `🔨 CSV export` instead of the first prompt |
+| `pi.setSessionName(name)` | Name worker sessions after their ticket, so `/resume` in a worker tab lists `CSV export` instead of the first prompt |
 
 Two constraints carry over from the existing code:
 
-- **Every line must fit the width.** Pi aborts on a line wider than the
-  terminal. `jev-display.ts` already has `safe()` and `fit()` for this. Emoji
-  are two columns wide, so width must be measured with `visibleWidth` from
-  `@earendil-works/pi-tui`, not with `.length`.
-- **Worker text is untrusted.** Summaries, titles and tool arguments come from
-  a model and can carry terminal escapes. They must go through `safePreview`
-  (`src/report-guard.ts`) or `safe()` before any renderer draws them.
+- **Every line must fit the width, or Pi aborts.** Pi aborts on a line wider
+  than the terminal, so a width bug is fatal, not cosmetic. `jev-display.ts`
+  has `safe()` and `fit()`, but neither fits the new renderers:
+  - `safe()` allows only printable ASCII plus a few symbols, and turns
+    anything else, emoji included, into `?`.
+  - `fit()` counts code points, not columns.
+
+  New renderers need a sanitizer that keeps multi-line text, drops zero-width
+  and bidi characters, and measures columns with `visibleWidth` from
+  `@earendil-works/pi-tui`. They need tests at fixed widths.
+- **Worker text is untrusted.** Summaries, titles, questions and tool
+  arguments come from a model, and so does `title`, which the Lead model
+  writes and a tainted Lead can shape. `safePreview` (`src/report-guard.ts`)
+  turns newlines into `⏎`, so it only fits one-line previews.
 
 ## What Herdr lets a program set
 
@@ -86,10 +95,10 @@ From Herdr's `docs/versions/0.9.1` CLI reference, via `github.com/herdrdev/herdr
   tokens show only when the user's rows reference them, but the built-in
   `state_text` shows a reported state label everywhere.
 
-PI Lead's `describe()` sends neither `--seq` nor `--ttl-ms`. Every report is
-fire-and-forget, so two quick reports can land out of order, and Herdr may keep
-the older one. nicobailon/pi-subagents sends `--seq Date.now()` and a TTL with
-every report.
+PI Lead's `describe()` already guards the presentation with `--agent pi`, but it
+sends no `--seq`. Every report is fire-and-forget, so two quick reports can land
+out of order, and Herdr may keep the older one. nicobailon/pi-subagents sends
+`--seq Date.now()` with every report. `herdr.ts` has no `tab rename` call yet.
 
 ## What the popular subagent extensions do
 
@@ -137,213 +146,179 @@ What they have in common:
   notification and a `⚠` or `✋`. A finished one just turns `✓`.
 - **Agents are named after the task**, with an emoji for kind or phase.
 
-## Proposal
+## Proposal (v2, after a skeptical review)
 
-Kind glyphs, used on tabs, rows and cards. Every emoji needs a one-column ASCII
-fallback (`"ui": { "emoji": false }`):
+The first draft proposed about 25 glyphs, kind emoji, a live fleet widget with
+a spinner, a replacement header, crew names and a terminal-title spinner. A
+skeptical review (below) cut it down. What remains is what gives most of the
+value without widening the trust surface.
 
-| kind | glyph | fallback |
-|---|---|---|
-| implement | 🔨 | `impl` |
-| prototype | 🧪 | `proto` |
-| debug | 🐛 | `debug` |
-| review | 🔍 | `review` |
-| research | 📚 | `research` |
+### Glyphs
 
-| state | glyph |
-|---|---|
-| queued | `…` |
-| starting | `◌` |
-| running | braille spinner `⠋⠙⠹…` (static `●` in a Herdr label) |
-| waiting on you | `✋` |
-| done | `✓` (success colour) |
-| partial | `◐` (warning colour) |
-| blocked / failed | `✗` (error colour) |
-| stopped | `■` (dim) |
+The set has no emoji at all:
 
-### 1. Tabs that say what they are doing
+- **Width is unreliable.** Emoji are two columns wide, and some (`✋`, `⚠`)
+  are one or two depending on the Unicode table and the U+FE0F variation
+  selector. Herdr, Pi and the outer terminal can each count differently, and
+  Pi aborts on an over-wide line.
+- **Coverage is patchy.** Emoji are missing on the Linux console and show as
+  tofu over some SSH fonts.
+- **Kind emoji add nothing.** They repeat what the title already says, in a
+  tab that shows only ~20 columns.
 
-The label becomes `<state><kind> <title>`, kept up to date with `herdr tab rename`
-on every `setState`, as `describe()` already runs on every state change:
+Every glyph below is one column in Western locales. Each pairs a shape with a
+colour, and the shape alone carries the meaning, so colour-blind users and
+monochrome terminals lose nothing.
 
-```
- lead   ●🔨 CSV export   ✋🔍 auth flow   ✓🐛 flaky login
-```
+| Glyph | Meaning | Why this one | Colour |
+|---|---|---|---|
+| `●` | running | A full dot: something is active. It is the same shape Herdr and most sidebars use | accent |
+| `○` | queued or starting | An empty dot: it will run but isn't running yet. Paired with `●`, it reads without a legend | dim |
+| `?` | needs you (`needs_human`, or waiting on an answer) | A question: the worker is waiting for your answer. Plain ASCII, can't be misread as "stop" (which `✋` can) | warning |
+| `✓` | done | Universal "OK" | success |
+| `~` | partial | "Roughly": some criteria are met, not all. `▲` is not used, since it already means "Jev overrode" | warning |
+| `✗` | blocked or failed | Universal "no". The text says which one | error |
+| `-` | stopped by you or by the timeout | Neutral on purpose: it was stopped, not a failure | dim |
+| `!` | host warning: sensitive files touched, a stuck worker | ASCII in place of `⚠`, whose width depends on U+FE0F | warning |
+| `└` | "current activity" line under a row | `⎿` has poor font coverage, while `└` is basic box drawing | dim |
+| `◆` `◇` `▲` | Jev: decided, default applied, overrode the worker | Already shipped (`jev-display.ts`), unchanged | dim |
 
-- **Label length:** drop the `lead:` prefix. Tabs already open in the Lead's
-  workspace, and the prefix costs 6 of the ~20 characters a tab shows. Clip
-  the title to 24 columns.
-- **Herdr pane metadata:**
-  - `--state-label working=🔨 sol·high · 4m`, `blocked=✋ needs you: which DB?`,
-    `done=✓ done · 3 commits`.
-  - Tokens `summary`, `model`, `tier`, `elapsed`, `cost`, `tests`, each capped
-    at 80 characters.
-  - Always send `--seq` and `--applies-to-source herdr:pi`.
-- **Notifications:** `herdr notification show "✋ auth flow needs you" --body "<question>" --sound request`
-  on `needs_human`, and for `partial`/`blocked` too. Nothing on `done`, since
-  the Lead's card is enough. A setting can turn on `--sound done`.
-- **Sidebar:** the README gets a copy-paste `[ui.sidebar.agents.rows_by_agent]`
-  snippet that shows `$summary` and `$cost`.
+`●`, `○` and `◆` are East Asian Ambiguous: two columns in CJK locales. The
+Jev lines already accept that, and renderers must measure columns with
+`visibleWidth` rather than assume one.
 
-### 2. A live fleet board above the editor
+What makes it pleasant is typography rather than pictograms:
 
-This needs a small heartbeat from the worker. The worker extension already sees
-every event in its own Pi, so it writes `activity.json` into its task directory,
-next to `result.json`, at most once per second:
+- bold titles;
+- theme colours on the glyphs;
+- the report card on Pi's `customMessageBg` background;
+- short friendly working messages.
 
-```json
-{ "seq": 41, "at": 1790000000000, "turns": 7, "tools": 23, "tool": "bash", "toolArg": "npm test",
-  "tokens": 48210, "contextPercent": 41, "usd": 0.18, "lastTest": { "command": "npm test", "exitCode": 1, "at": 1789999990000 },
-  "egress": { "allowed": 12, "denied": 1 }, "vm": "3f9a1c2e" }
-```
+### 1. Footer: counters only
 
-The Lead polls these files every second while any worker is live and draws a
-`setWidget("pi-lead-fleet", factory)` above the editor:
+`2 running · 1 needs you · ◆ 14 · $0.004/1.00`. The `needs you` segment
+uses the warning colour. `lastProgress` leaves the footer. The "started" and
+"queued" messages become dim transcript entries, like the Jev lines (a custom
+entry the model never sees).
 
-```
-╭─ crew · 2 working · 1 needs you ─────────────────────────────── ◆ 14 · $0.004 ─╮
-│ ⠹ 🔨 CSV export      sol·high   4m12  ↻7 · 23 tools · 48k (41%) · $0.18      │
-│      ⎿ bash npm test   ✗ tests failing (2 min ago)                            │
-│ ⠼ 📚 Postgres vs SQLite luna·med 1m03  ↻2 · 6 tools · 9k (7%) · $0.01        │
-│      ⎿ read docs/adr/0004-separate-task-records-from-conversations.md        │
-│ ✋ 🔍 auth flow        sol·high   waiting 3m — "Which session store?"         │
-│ ✓ 🐛 flaky login      done 2m ago · 2 commits · +41 −12 · pi-lead/flaky-l…    │
-╰───────────────────────────────────────────────────────────────── /workers ─╯
-```
+### 2. Tabs and Herdr metadata
 
-- **Row lifetime:** finished rows fade out after 30 s; waiting and failed
-  rows stay.
-- **Stalls:** a worker whose heartbeat stops for 3 minutes shows `stalled 3m`
-  in warning colour. This is the HazAT watchdog pattern, and it is only a
-  hint: stopping stays the user's call.
-- **Context colour:** dim, then warning at 70%, error at 85%.
-- **Narrow terminals:** drop the columns in this order: cost, tokens,
-  context, branch.
-- **When the board is hidden:** it is gone when no worker is live, and
-  `"ui": { "fleet": "off" | "compact" | "full" }` turns it off. `compact` is one line:
-  `crew ⠹🔨 CSV export 4m · ⠼📚 Postgres… 1m · ✋🔍 auth flow`.
-- **Footer:** keeps only counters, which also shows up in powerline footers:
-  `⚒ 2 · ✋ 1 · ◆ 14 · $0.004/1.00`. `lastProgress` leaves the footer. The
-  "started" and "queued" messages become Jev-style dim transcript lines (a
-  custom entry, never sent to the model).
+- **Tab label:** becomes `<glyph> <title>`, e.g. `● CSV export`,
+  `? auth flow`, `✓ flaky login`. It is renamed on every `setState`, which
+  needs a new `tab rename` call in `herdr.ts` (one more fire-and-forget
+  process per state change).
+- **What goes into the label:** the title passes an allowlist filter
+  (letters, digits, space, `-_.:/()`) and is clipped by columns. The `lead:`
+  prefix goes.
+- **Every metadata report carries `--seq`.**
+- **State labels are fixed host strings.** For example `working=implement ·
+  sol·high`, `blocked=needs your answer`, `done=done`. They never contain
+  the worker's question or summary.
+- **`needs_human` notification:** `herdr notification show "<title> needs
+  your answer" --sound request`, with no body taken from the worker. The
+  question is read in the Lead, where the report guard applies. There is no
+  notification on `done`.
 
-### 3. Worker reports as cards
+### 3. Readable tool calls
 
-A `registerMessageRenderer("pi-lead-worker", …)`, fed from `details` (extended
-with elapsed time, commit count, diff totals, cost, last test). The model's
-`content` is untouched.
-
-Collapsed:
+`renderCall` / `renderResult` for `delegate` and `worker`. The kind is shown
+as a word, and the task preview goes through `safePreview`:
 
 ```
-✓ 🔨 CSV export — done in 12m · sol·high · $0.42
-  3 commits · +214 −37 in 9 files · tests ✓ npm test
-  branch pi-lead/csv-export-a1b2c3 (local, not pushed)
-  ⚠ touches package.json, .github/workflows/ci.yml — review before merging
-```
-
-```
-▲ 🔨 CSV export — partial (worker said done; Jev: criterion 2 not met) · 18m
-✋ 🔍 auth flow — needs you: "Which session store should the tokens live in?"
-✗ 🐛 flaky login — failed: gondolin image download timed out · kept in its tab
-```
-
-Expanded (`Ctrl+O`) adds the sanitized summary, commits, diff stat, findings and
-the Jev review severity. The `Next:` lines stay model-only, since you see the
-Lead act on them. The host-generated sensitive-file warning always shows, in
-warning colour.
-
-### 4. Readable tool calls
-
-`renderCall` / `renderResult` on `delegate` and `worker`:
-
-```
-delegate 🔨 implement  CSV export
-  └ Add a CSV export to the reports page (first 80 chars, dim)
-→ standard tier · gpt-6-sol (high) · difficulty 2.1/4 · starting in its tab
-→ queued: waits for "auth flow" (overlaps src/session/)
+delegate implement  CSV export
+  └ Add a CSV export to the reports page…
+→ standard · gpt-6-sol (high) · difficulty 2.1/4 · starting in its tab
 
 worker list
-  ⠹ 🔨 CSV export   a1b2c3d4  running 4m   sol·high
-  ✋ 🔍 auth flow    9f8e7d6c  waiting 3m   sol·high
-worker message → auth flow   "Use the Redis store"   ✓ sent
+  ● CSV export   a1b2c3d4  running 4m   sol·high
+  ? auth flow    9f8e7d6c  waiting 3m   sol·high
 ```
 
-### 5. A header that is also a health check
+### 4. Report card, which never hides the worker's words
 
-`setHeader` at startup in TUI mode, with `/lead-header builtin` to get Pi's
-header back:
+This needs `lead.ts` to pass `outcome.details` through (today it keeps only
+`{ status, worker }`, so `sensitive`, `jevVerdict` and `review` are lost) and
+`settle()` to add elapsed time, commit count and diff totals.
+
+The report guard clears its taint as soon as the user sends a message, on the
+assumption that the user has seen every report (`report-guard.ts:128-138`). The
+collapsed card must therefore show part of the worker's own text, labelled as
+such, and never only host-picked fields:
 
 ```
- π▸ lead  v0.5.0 · pi-lead@main
-   crew   fast luna·med · standard sol·high · deep astra·xhigh · max 2 workers
-   jev    ◆ openrouter · $0.004 of $1.00 today
-   box    gondolin image ✓ 0.5.0 · mise cache ✓ · egress 2 hosts
-   herdr  ✓ workspace w3 · pi integration ✓
+✓ implement · CSV export: done in 12m · sol·high
+  3 commits · +214 −37 in 9 files · tests passed (npm test)
+  worker says (untrusted): Added CsvExporter and a /reports/export route;
+  streaming for large reports, tests for quoting and empty reports.
+  … 6 more lines (Ctrl+O)
+  ! touches package.json, .github/workflows/ci.yml: review before merging
+  next: work is on local branch pi-lead/csv-export-a1b2c3; nothing was pushed
 ```
 
-Every missing piece turns into a warning line with the fix: `herdr  ✗ not inside
-Herdr — workers need a Herdr pane`, `jev ◇ no key — defaults apply
-(PI_LEAD_JEV_API_KEY)`, `box ◌ image downloads on first delegate (~300 MB)`.
-That catches the setup problems before the first `delegate`, not at it.
+The `next:` lines show dimmed. They are host-written and say what the Lead is
+about to do. Expanded, the card shows everything the model receives. A report
+stored by an older version, without the new `details`, falls back to the
+current plain text.
 
-### 6. Titles, loaders, and a bit of fun
+### 5. Startup check, without replacing the header
 
-- **Terminal title:** `π lead ⠹ 2⚒ 1✋ · pi-lead` via `setTitle`. It animates
-  only while a worker runs. Inside Herdr it feeds `terminal_title`.
-- **Working messages** while the Lead waits on something slow:
-  `Jev sizes up the ticket…`, `Cloning into a fresh sandbox…`,
-  `Fetching mise toolchains (first worker only)…`.
-- **Worker tab:**
-  - `setHeader` shows the ticket: kind, title, tier/model, branch, and the
-    reminder "you are in a sandbox; typing here talks to this worker".
-  - The Gondolin footer becomes `▣ vm 3f9a · ⇅ 12 ok 1 denied · tests ✗ 2m ago`.
-  - `pi.setSessionName("🔨 CSV export")`.
-- **Crew names (opt-in, `"ui": { "crew": true }`):** a deterministic nickname
-  per worker id (`Ada`, `Grace`, `Linus`, …), shown next to the title in rows
-  and tabs: `✋🔍 Grace · auth flow`. This follows pi-messenger's SwiftRaven.
-  It is off by default, since it adds characters.
-- **A closing line:** when the last worker settles with everything `done`, one
-  dim transcript line such as `✓ crew idle · 3 done today · $1.12`. There is
-  no confetti.
+Pi's header stays, because its keybinding hints matter to new users and only
+one extension can own it. At `session_start`, a missing Herdr, a missing Herdr
+Pi integration or a missing Jev key gives one `notify` warning with the fix.
+`/lead-doctor` prints the full check: tiers → models, Jev, image, Herdr.
 
-### 7. `/workers` inspector (later)
+### Deferred, maybe never
 
-A `ui.custom` overlay over the fleet board:
-
-- `j/k` moves between rows.
-- `Enter` focuses the worker's Herdr tab (`herdr tab focus`).
-- `m` messages the worker, `x x` stops it.
-- `l` shows the tail of its session.
-
-The same actions exist in the `worker` tool today, so this is purely UX.
+- **Fleet widget with a worker heartbeat (`activity.json`).** It mostly
+  repeats what Herdr and the renamed tabs already show. A spinner above the
+  editor would redraw about 12 times a second over SSH, and the current tool
+  argument can show secrets. If it is ever built:
+  - a static `●` with elapsed time, redrawn every 5 s;
+  - no tool arguments;
+  - an atomic write;
+  - validated fields;
+  - stall hints from Herdr agent state first.
+- **`/workers` overlay:** the `worker` tool already has the actions.
+- **Cut:**
+  - crew names: a fourth identifier after title, id and agent name;
+  - the terminal-title spinner;
+  - the "idle" closing line;
+  - the `▣ ⇅` worker footer;
+  - the `ui.emoji` / `fleet` / `crew` config matrix.
+- **Kept:** worker `pi.setSessionName(title)` and friendly working messages
+  (`Jev sizes up the ticket…`, `Cloning into a fresh sandbox…`), both cheap.
 
 ## Order of work
 
-1. **Quick wins, no new protocol:**
-   - tab labels and renames;
-   - `--seq`, `--applies-to-source` and state labels in `describe()`;
-   - footer counters only;
-   - `renderCall`/`renderResult` for `delegate` and `worker`;
-   - the message renderer for reports, from `details` fields the Lead already
-     has.
-2. **Worker heartbeat:** `activity.json`, the fleet widget, the worker tab
-   header/footer/session name, and `needs_human` notifications.
-3. **Header health check, terminal title, working messages, `ui` config**
-   (`emoji`, `fleet`, `crew`).
-4. **`/workers` overlay.**
+1. Footer, tab glyphs and renames, `--seq` plus fixed state labels, and the
+   `needs_human` notification.
+2. `renderCall` / `renderResult` for `delegate` and `worker`.
+3. The report card, with `details` passed through.
+4. The startup warning and `/lead-doctor`, working messages, worker session
+   names.
 
-Each step keeps rendering pure, as `jev-display.ts` does: formatting functions
-from data to lines, width-fitted and sanitized, unit-tested with fixed widths,
-including emoji widths. `lead.ts` and the worker extension only wire them to Pi.
+Each step keeps rendering pure, as `jev-display.ts` does: functions from data
+to width-fitted, sanitized lines, unit-tested at fixed widths. `lead.ts` and
+the worker extension only wire them to Pi.
+
+## Review record
+
+A skeptical reviewer read the first draft against the code. What changed:
+
+| Severity | Objection | Outcome |
+|---|---|---|
+| high | A collapsed card that shows only host fields lets an injected report pass: the user types "ok" and the taint clears (`report-guard.ts:128-138`) | Card always shows the worker's text, labelled untrusted |
+| high | The worker's question in Herdr state labels and OS notifications puts model text in trusted-looking places | Fixed host strings only; allowlisted titles |
+| high | A fleet widget with a spinner and 1 s polling repeats Herdr, redraws constantly and can show secrets | Deferred with constraints |
+| high | Wrong claims: `details` already available, reusing `safe()`/`fit()`, `--applies-to-source` missing | Corrected above |
+| medium | Replacing the header hides keybinding hints and duplicates existing errors | Header kept; `notify` + `/lead-doctor` |
+| medium | Too many glyphs, clashing meanings (`▲`, `…`, `⚒` vs `🔨`, `✋` vs `■`) | Set of 10, no emoji |
+| medium | Crew names, title spinner, config matrix are noise | Cut |
 
 ## Still to verify
 
 - Herdr 0.9.1 `tab rename` and `notification show` on the Herdr version the
-  README asks for; how many columns the tab bar gives a label; how a tab
-  label renders emoji.
-- Whether Pi's `visibleWidth` and Herdr agree on emoji widths in common
-  terminals (Ghostty, iTerm2, WezTerm). This decides whether `emoji` defaults
-  to on.
+  README asks for; how many columns the tab bar gives a label.
+- How `●`, `○` and `✓` render in Herdr's tab bar under a CJK locale.
 - What a message renderer shows for reports stored by older versions (no new
   `details` fields): fall back to the current plain text.
