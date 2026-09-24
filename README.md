@@ -98,10 +98,13 @@ Two files, both optional:
   and is the only place for `verify`. It cannot set `leadGuard`, and it is
   read only when Pi trusts the project.
 
-Pi trusts a project whose `.pi` holds only `pi-lead.json` on its own. When the
-project also has `.pi/settings.json`, `.pi/extensions`, skills, prompts or
-similar, Pi asks at startup; to trust it later, run `/trust` and restart Pi,
-or start Pi with `--approve` for one run (see Pi's `docs/security.md`). A
+Pi trusts a project on its own when nothing in it needs trust: its `.pi` holds
+only `pi-lead.json` and there is no `.agents/skills` in it or a parent folder.
+Otherwise (`.pi/settings.json`, `.pi/extensions`, `.pi/skills`, prompts,
+`.agents/skills` and similar) Pi asks at startup, unless a saved decision or
+`defaultProjectTrust` decides, and print and RPC modes never ask. To trust it
+later, run `/trust` and restart Pi, or start Pi with `--approve` for one run
+(see Pi's `docs/security.md`). A
 setting that is ignored (`verify` in the global file, `leadGuard` in the
 project file, or the whole project file of an untrusted project) is reported
 with a warning when the session starts.

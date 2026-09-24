@@ -65,3 +65,20 @@ test("a config file that is not an object still loads without a notice", async (
   await writeFile(join(agentDir, "pi-lead.json"), "5");
   assert.deepEqual((await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir })).ignored, []);
 });
+
+test("a notice shows a path under the home directory with ~", async () => {
+  const home = await mkdtemp(join(tmpdir(), "pi-lead-config-home-"));
+  const agentDir = join(home, ".pi", "agent");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "pi-lead.json"), JSON.stringify({ verify: "npm test" }));
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const { cwd } = await dirs();
+    const { ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
+    assert.deepEqual(ignored, ["PI Lead: `verify` in ~/.pi/agent/pi-lead.json is ignored; set it in the project's .pi/pi-lead.json."]);
+  } finally {
+    if (previous === undefined) delete process.env.HOME;
+    else process.env.HOME = previous;
+  }
+});
