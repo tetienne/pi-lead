@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0](https://github.com/tetienne/pi-lead/compare/v0.6.1...v0.7.0) (2026-09-24)
+
+
+### Features
+
+* add git_read tool exempt from the Lead guard ([#32](https://github.com/tetienne/pi-lead/issues/32)) ([fe5007f](https://github.com/tetienne/pi-lead/commit/fe5007fc13a9c4a27e336f6fb6491e3517e31677))
+* give workers a web_search tool through the Codex subscription ([#30](https://github.com/tetienne/pi-lead/issues/30)) ([9b0db4d](https://github.com/tetienne/pi-lead/commit/9b0db4d1d869d59a022daadda40d1c235b24d245))
+* show worker state in tabs, readable tool calls, report cards and /lead-doctor ([#29](https://github.com/tetienne/pi-lead/issues/29)) ([04c83c4](https://github.com/tetienne/pi-lead/commit/04c83c426ddb3dd023cd7b96ffe5b5889ba9b758))
+
 ## [0.6.1](https://github.com/tetienne/pi-lead/compare/v0.6.0...v0.6.1) (2026-09-24)
 
 
