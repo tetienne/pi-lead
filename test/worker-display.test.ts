@@ -24,6 +24,8 @@ test("titles reaching Herdr keep letters and plain punctuation only", () => {
   assert.equal(plainTitle("rtl‮txt.exe zero​width"), "rtl txt.exe zero width");
   assert.equal(plainTitle("🔨 ship 界 it"), "ship it");
   assert.equal(plainTitle("   "), "worker");
+  assert.equal(plainTitle("--help me"), "help me", "never read as a flag");
+  assert.equal(plainTitle("---"), "worker");
   const long = plainTitle("A very long title that goes on and on and on");
   assert.ok([...long].length <= 32);
   assert.ok(long.endsWith("…"));
@@ -35,7 +37,8 @@ test("the tab label is the state glyph and the clean title", () => {
 });
 
 test("Herdr state labels are host strings: kind and route while working, the reason once idle", () => {
-  assert.deepEqual(stateLabels(worker(), route), { working: "implement · gpt-6-sol · high", idle: "idle" });
+  assert.deepEqual(stateLabels(worker(), route), { working: "implement · gpt-6-sol · high", idle: "idle", blocked: "asks you in its tab" });
+  assert.equal(stateLabels(worker({ state: "waiting", verdict: "needs_human" }), route).blocked, "needs your answer");
   assert.equal(stateLabels(worker({ state: "waiting", verdict: "needs_human" }), route).idle, "needs your answer");
   assert.equal(stateLabels(worker({ state: "waiting", verdict: "partial" }), route).idle, "partly done, needs you");
   assert.equal(stateLabels(worker({ state: "done", verdict: "done" }), route).idle, "done");
@@ -66,6 +69,8 @@ test("progress lines fit the width and replace what could be wider than one colu
   assert.equal(renderProgress('"Réservations" started on openai-codex/gpt-6-sol (high)', 80), '→ "Réservations" started on openai-codex/gpt-6-sol (high)');
   assert.equal(renderProgress("界 \x1b[31mred", 80), "→ ? ?[31mred");
   assert.equal(renderProgress(42, 80), "→ ");
+  assert.equal(renderProgress("Re\u0301servations", 80), "→ Réservations", "decomposed accents are composed first");
+  assert.equal(renderProgress("x", 0), "");
   const fitted = renderProgress("x".repeat(100), 20);
   assert.equal([...fitted].length, 20);
   assert.ok(fitted.endsWith("…"));

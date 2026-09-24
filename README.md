@@ -63,6 +63,9 @@ you ─► Lead (Pi, your tab)
   line counts live workers (`● 2 running · 1 needs you`, in the warning colour
   while one waits on you), and events such as "started on…" or "waits for a
   free worker slot" appear as dim transcript lines that the model never sees.
+  Tab glyphs, state labels and notifications need Herdr 0.9.1 or later
+  (`tab rename`, `notification show`, `--seq`); on an older Herdr, tabs keep
+  their plain title and the pane keeps its title, tokens and working label.
 - **Toolchains** come from the project's mise config: the first worker runs
   `mise install` in a sandbox into a per-project cache, later workers mount it
   read-only and start instantly. (Your Mac's own mise cache holds macOS

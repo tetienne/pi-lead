@@ -32,9 +32,10 @@ export type PaneMetadata = {
   title: string;
   displayAgent: string;
   tokens: Record<string, string>;
-  /** Shown instead of "working" while the agent works, and instead of "idle" once it stopped. */
+  /** Shown instead of "working" while the agent works, "idle" and "done" once it stopped, "blocked" on a dialog. */
   workingLabel: string;
   idleLabel: string;
+  blockedLabel: string;
   /** Orders reports: Herdr ignores one older than the last it applied. */
   seq: number;
 };
@@ -74,10 +75,12 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     const { stdout } = await execFileAsync("herdr", args, { encoding: "utf8", timeout: 10_000, maxBuffer: 1 << 20 });
     return stdout.trim() ? (JSON.parse(stdout) as unknown) : undefined;
   };
+  /** Set once a full metadata report failed and the older form went through. */
+  let legacyMetadata = false;
   return {
     workspace,
     async openWorkerTab({ label, cwd, command }) {
-      const created = await herdr(["tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus"]);
+      const created = await herdr(["tab", "create", "--workspace", workspace, "--cwd", cwd, `--label=${label}`, "--no-focus"]);
       const tabId = findString(created, "tab_id");
       const paneId = findString(created, "pane_id");
       if (!tabId || !paneId) throw new Error("herdr did not return tab_id and pane_id");
@@ -96,37 +99,53 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     async listTabs(inWorkspace) {
       return collectStrings(await herdr(["tab", "list", "--workspace", inWorkspace]), "tab_id");
     },
-    async reportMetadata(paneId, { title, displayAgent, tokens, workingLabel, idleLabel, seq }) {
-      // argv, never a shell: titles and branches are user/model text.
-      await herdr([
+    async reportMetadata(paneId, { title, displayAgent, tokens, workingLabel, idleLabel, blockedLabel, seq }) {
+      // argv, never a shell: titles and branches are user/model text; `=` keeps a value from reading as a flag.
+      const base = [
         "pane",
         "report-metadata",
-        paneId,
         "--source",
         METADATA_SOURCE,
         "--agent",
         "pi",
-        "--title",
-        title,
-        "--display-agent",
-        displayAgent,
-        ...Object.entries(tokens).flatMap(([name, value]) => ["--token", `${name}=${value}`]),
-        "--state-label",
-        `working=${workingLabel}`,
-        "--state-label",
-        `idle=${idleLabel}`,
-        "--seq",
-        String(seq),
-      ]);
+        `--title=${title}`,
+        `--display-agent=${displayAgent}`,
+        ...Object.entries(tokens).map(([name, value]) => `--token=${name}=${value}`),
+        `--state-label=working=${workingLabel}`,
+      ];
+      const full = [
+        ...base,
+        `--state-label=idle=${idleLabel}`,
+        `--state-label=done=${idleLabel}`,
+        `--state-label=blocked=${blockedLabel}`,
+        `--seq=${seq}`,
+        "--",
+        paneId,
+      ];
+      if (!legacyMetadata) {
+        try {
+          return void (await herdr(full));
+        } catch (error) {
+          // A Herdr without `--seq` or these state labels rejects the whole report: keep what it knows.
+          try {
+            await herdr([...base, "--", paneId]);
+          } catch {
+            throw error;
+          }
+          legacyMetadata = true;
+          return;
+        }
+      }
+      await herdr([...base, "--", paneId]);
     },
     async renameAgent(paneId, name) {
       await herdr(["agent", "rename", paneId, name]);
     },
     async renameTab(tabId, label) {
-      await herdr(["tab", "rename", tabId, label]);
+      await herdr(["tab", "rename", "--", tabId, label]);
     },
     async notify(title, sound) {
-      await herdr(["notification", "show", title, "--sound", sound]);
+      await herdr(["notification", "show", `--sound=${sound}`, "--", title]);
     },
   };
 }

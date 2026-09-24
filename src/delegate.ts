@@ -166,8 +166,10 @@ type Worker = WorkerInfo & {
   createdAt?: string;
   /** When the worker started waiting on a question (waitingTimeoutMinutes). */
   waitingSince?: number;
-  /** The tab's current label, so a state change renames it only when the label changes. */
+  /** The label Herdr last took for the tab, so a state change renames it only when it changes. */
   tabLabel?: string;
+  /** The worker's pending tab renames, in order. */
+  renaming?: Promise<void>;
   /** Herdr agent name: set once, tried at most twice per tab. */
   named: boolean;
   renameTries: number;
@@ -304,16 +306,38 @@ export function createDelegator(deps: DelegateDeps) {
   let metadataSeq = 0;
   const nextSeq = () => (metadataSeq = Math.max(metadataSeq + 1, now()));
 
+  /** Cleared after a first failed `tab rename` (e.g. an older Herdr): later tabs open without a state glyph. */
+  let tabRenames = true;
+  const openingLabel = (worker: Worker) => (tabRenames ? tabLabel(worker) : plainTitle(worker.title));
+
+  /**
+   * Renames run one after another per worker, each with the label of the
+   * state at that moment, so a late one never brings back an older glyph.
+   * The label counts as shown only once Herdr took it.
+   */
+  const relabel = (worker: Worker) => {
+    worker.renaming = (worker.renaming ?? Promise.resolve()).then(async () => {
+      const tabId = worker.tabId;
+      const label = tabLabel(worker);
+      if (!tabRenames || !tabId || label === worker.tabLabel) return;
+      try {
+        await deps.herdr?.renameTab(tabId, label);
+        worker.tabLabel = label;
+      } catch {
+        tabRenames = false;
+      }
+    });
+  };
+
+  /** The tab closes right after these states: describing it again would only race the close. */
+  const closing = (worker: Worker) =>
+    worker.state === "done" || worker.state === "stopped" || (worker.state === "failed" && !deps.config.keepFailedWorkers);
+
   /** Title, sidebar name, tokens and tab label of the worker's pane, reported on every state change. */
   const describe = (worker: Worker) => {
     const paneId = worker.paneId;
-    if (!paneId) return;
-    const tabId = worker.tabId;
-    const label = tabLabel(worker);
-    if (tabId && label !== worker.tabLabel) {
-      worker.tabLabel = label;
-      bestEffort(() => deps.herdr?.renameTab(tabId, label));
-    }
+    if (!paneId || closing(worker)) return;
+    relabel(worker);
     const labels = stateLabels(worker, worker.route);
     bestEffort(() =>
       deps.herdr?.reportMetadata(paneId, {
@@ -328,6 +352,7 @@ export function createDelegator(deps: DelegateDeps) {
         },
         workingLabel: labels.working,
         idleLabel: labels.idle,
+        blockedLabel: labels.blocked,
         seq: nextSeq(),
       }),
     );
@@ -397,7 +422,9 @@ export function createDelegator(deps: DelegateDeps) {
   /** FIFO: each worker takes its slot in turn and is `starting` before the next one checks. */
   const takeSlot = (worker: Worker) => {
     const turn = scheduler.then(() => waitForSlot(worker)).then(() => {
+      // Not setState: there is no tab to describe yet. A rerouted waiting worker no longer waits on the user.
       worker.state = "starting";
+      worker.verdict = undefined;
     });
     scheduler = turn.catch(() => undefined);
     // A stopped worker leaves the queue at once, not when its turn comes.
@@ -571,7 +598,7 @@ export function createDelegator(deps: DelegateDeps) {
     // `herdr pane run` types one command line into the tab's shell. That
     // shell's cwd is the task directory, never the clone: a prompt running
     // `git status` must not execute guest-planted git config on the host.
-    worker.tabLabel = tabLabel(worker);
+    worker.tabLabel = openingLabel(worker);
     ({ tabId: worker.tabId, paneId: worker.paneId } = await deps.herdr!.openWorkerTab({
       label: worker.tabLabel,
       cwd: worker.taskDir,

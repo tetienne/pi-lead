@@ -55,7 +55,9 @@ export function plainTitle(title: string, columns = TITLE_COLUMNS): string {
     .normalize("NFC")
     .replace(/[^A-Za-z0-9À-ÖØ-öø-ɏ _.,:/()'-]+/g, " ")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    // Never read as a command-line flag.
+    .replace(/^-+\s*/, "");
   const chars = [...clean];
   const clipped = chars.length <= columns ? clean : `${chars.slice(0, columns - 1).join("").trimEnd()}…`;
   return clipped || "worker";
@@ -71,10 +73,11 @@ function waitingPhrase(verdict: WorkerVerdict | undefined): string {
 
 /**
  * Herdr's state labels for the pane (shown by the sidebar's `state_text`):
- * `working` while the worker's Pi runs, `idle` once it stopped on a finish.
- * Host strings only: kind, model and thinking come from the config.
+ * `working` while the worker's Pi runs; `idle` (also used for `done`) once it
+ * stopped; `blocked` while its Pi waits on a dialog in its tab. Host strings
+ * only: kind, model and thinking come from the config.
  */
-export function stateLabels(worker: WorkerView, route: { model: string; thinking: string }): Record<"working" | "idle", string> {
+export function stateLabels(worker: WorkerView, route: { model: string; thinking: string }): Record<"working" | "idle" | "blocked", string> {
   const model = route.model.slice(route.model.indexOf("/") + 1);
   const idle =
     worker.state === "waiting"
@@ -86,7 +89,11 @@ export function stateLabels(worker: WorkerView, route: { model: string; thinking
           : worker.state === "stopped"
             ? "stopped"
             : "idle"; // live, but its Pi stopped without a finish: nothing more to say than Herdr's own
-  return { working: `${worker.kind} · ${model} · ${route.thinking}`, idle };
+  return {
+    working: `${worker.kind} · ${model} · ${route.thinking}`,
+    idle,
+    blocked: worker.state === "waiting" ? idle : "asks you in its tab",
+  };
 }
 
 /**
@@ -128,7 +135,8 @@ export const PROGRESS_ENTRY = "pi-lead-progress";
  * since Pi aborts on a line wider than the terminal.
  */
 export function renderProgress(text: unknown, width: number): string {
-  const line = `→ ${typeof text === "string" ? text : ""}`.replace(/[^\x20-\x7eÀ-ÖØ-öø-ɏ○●✓✗→…·]/gu, "?");
+  if (width <= 0) return "";
+  const line = `→ ${typeof text === "string" ? text.normalize("NFC") : ""}`.replace(/[^\x20-\x7eÀ-ÖØ-öø-ɏ○●✓✗→…·]/gu, "?");
   const chars = [...line];
   return chars.length <= width ? line : `${chars.slice(0, Math.max(0, width - 1)).join("")}…`;
 }

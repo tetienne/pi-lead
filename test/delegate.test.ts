@@ -227,7 +227,9 @@ test("a worker waiting on a question gets the relayed answer and reports again",
   assert.equal(delegator.list()[0]!.state, "waiting");
   assert.ok(!log.some((line) => line.startsWith("close")), "tab stays open");
   // The tab says it waits on the user, and a toast with a fixed phrase (never the question) calls them.
-  assert.deepEqual(log.filter((line) => /^(label|notify)/.test(line)), ["label tab-1 ● Dates", "label tab-1 ? Dates", "notify ? Dates: needs your answer (request)"]);
+  await until(() => log.includes("label tab-1 ? Dates"));
+  assert.deepEqual(log.filter((line) => line.startsWith("label")), ["label tab-1 ● Dates", "label tab-1 ? Dates"]);
+  assert.deepEqual(log.filter((line) => line.startsWith("notify")), ["notify ? Dates: needs your answer (request)"]);
 
   const second = nextOutcome();
   assert.match(await delegator.message(started.worker.id.slice(0, 8), "ISO 8601, please"), /Sent to "Dates"/);
@@ -236,6 +238,45 @@ test("a worker waiting on a question gets the relayed answer and reports again",
   assert.equal(answer.status, "done");
   assert.match(answer.text, /Used ISO 8601/);
   assert.ok(log.includes("close tab-1"));
+  // Done closes the tab: no rename or metadata races the close, and no toast.
+  assert.ok(!log.includes("label tab-1 ✓ Dates"));
+  assert.equal(log.filter((line) => line.startsWith("notify")).length, 1);
+});
+
+test("a question asked again after a relayed answer calls the user again", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    replies: [{ status: "needs_human", summary: "Which format?" }, { status: "needs_human", summary: "And the separator?" }],
+  });
+  const first = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Dates", task: "t" }, io);
+  assert.ok(started.status === "started");
+  await first;
+  const second = nextOutcome();
+  await delegator.message(started.worker.id.slice(0, 8), "ISO 8601");
+  await second;
+  assert.equal(log.filter((line) => line.startsWith("notify")).length, 2);
+  await until(() => log.filter((line) => line === "label tab-1 ? Dates").length === 2);
+  assert.deepEqual(log.filter((line) => line.startsWith("label")), ["label tab-1 ● Dates", "label tab-1 ? Dates", "label tab-1 ● Dates", "label tab-1 ? Dates"]);
+});
+
+test("a stopped worker raises no toast, and a failed rename stops the glyphs for later tabs", async (t) => {
+  const log: Log = [];
+  const herdr = fakeHerdr(log, ["silent"]);
+  herdr.renameTab = async (tabId, label) => {
+    log.push(`label ${tabId} ${label}`);
+    throw new Error("unrecognized subcommand 'rename'");
+  };
+  const { delegator } = await setup(t, { herdr });
+  const started = await delegator.start({ kind: "implement", title: "One", task: "t" }, io);
+  assert.ok(started.status === "started");
+  await until(() => log.includes("label tab-1 ● One"));
+  await delegator.stop(started.worker.id.slice(0, 8));
+  await until(() => log.includes("close tab-1"));
+  await delegator.start({ kind: "implement", title: "Two", task: "t" }, io);
+  await until(() => log.some((line) => line.startsWith("open") && line.includes("Two")));
+  assert.ok(log.includes("open Two"), "no state glyph once Herdr cannot rename tabs");
+  assert.ok(!log.some((line) => line.startsWith("label tab-2")));
+  assert.ok(!log.some((line) => line.startsWith("notify")));
 });
 
 test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t) => {
@@ -765,10 +806,9 @@ test("worker panes get Herdr metadata on every state and an agent name, best-eff
     `rename pane-1 ${name}`,
     "meta pane-1 state=running",
     `rename pane-1 ${name}`,
-    "meta pane-1 state=done",
     "close tab-1",
   ]);
-  assert.deepEqual(log.filter((line) => /^(open|label|notify)/.test(line)), ["open ○ Add CSV export", "label tab-1 ● Add CSV export", "label tab-1 ✓ Add CSV export"]);
+  assert.deepEqual(log.filter((line) => /^(open|label|notify)/.test(line)), ["open ○ Add CSV export", "label tab-1 ● Add CSV export"]);
   const seqs = seen.metadata!.map((metadata) => metadata.seq);
   assert.deepEqual(seqs, [...seqs].sort((a, b) => a - b));
   assert.equal(new Set(seqs).size, seqs.length, "every report carries a newer seq");
@@ -785,8 +825,8 @@ test("worker panes get Herdr metadata on every state and an agent name, best-eff
     },
     workingLabel: "implement · claude-sonnet-5 · medium",
     idleLabel: "idle",
+    blockedLabel: "asks you in its tab",
   });
-  assert.equal(seen.metadata!.at(-1)!.idleLabel, "done");
 });
 
 test("failing Herdr metadata never affects the worker", async (t) => {
