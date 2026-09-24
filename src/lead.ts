@@ -3,18 +3,24 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SlashCommandInfo } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SlashCommandInfo, type Theme } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { loadConfigWithNotices } from "./config.ts";
-import { createDelegator, type Delegator, type WorkerCommand } from "./delegate.ts";
+import { loadConfigWithNotices, type LeadConfig } from "./config.ts";
+import { createDelegator, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
-import { createWorkerImage } from "./image.ts";
+import { doctorReport, startupWarnings, type SetupFacts } from "./doctor.ts";
+import { createWorkerImage, hasReleasedImage, PACKAGE_VERSION, releaseImageRef } from "./image.ts";
+import { resolveRoute } from "./model-routing.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
-import { registerReportGuard } from "./report-guard.ts";
+import { gutterBlock, renderCard } from "./report-card.ts";
+import { registerReportGuard, WORKER_REPORT_TYPE } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
+import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
+import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
 import { gitWorkspace } from "./workspace.ts";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -91,12 +97,17 @@ export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, r
 
 const WORKER_ACTIONS = ["list", "message", "stop"] as const;
 
+const paint = (theme: Theme): Paint => (color, text) => theme.fg(color, text);
+
+/** The text a tool returned to the model, which the collapsed rendering summarizes. */
+const resultText = (result: { content: ReadonlyArray<{ type: string; text?: string }> }) =>
+  result.content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
+
 export default function lead(pi: ExtensionAPI) {
   let delegator: Delegator | undefined;
   let ui: ExtensionContext["ui"] | undefined;
   // One per Lead: parallel delegations share a single first-time download.
   const workerImage = createWorkerImage();
-  let lastProgress = "";
   let closed = false;
   let hasUI = false;
   /** Set only when Jev is configured: the status segment and `/jev` read the shared ledger. */
@@ -107,14 +118,39 @@ export default function lead(pi: ExtensionAPI) {
   const recent: JevDecision[] = [];
   registerReportGuard(pi);
 
+  let leadConfig: LeadConfig | undefined;
+  /** `delegate` calls in their start phase, which share Pi's working message. */
+  let delegating = 0;
+
+  /** What `/lead-doctor` and the session-start warning look at. */
+  const setupFacts = (ctx: ExtensionContext, config: LeadConfig): SetupFacts => {
+    const herdr = createHerdrCli();
+    const lead = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
+    const available = ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id }));
+    return {
+      version: PACKAGE_VERSION,
+      ...(herdr ? { herdr: herdr.workspace } : {}),
+      herdrPi: findHerdrPiExtension() !== undefined,
+      jev: {
+        configured: jev !== undefined,
+        via: config.jev.via,
+        keyEnv: config.jev.apiKeyEnv,
+        budgetUsd: config.jev.dailyBudgetUsd,
+        ...(jevUsage ? { calls: jevUsage.calls, usd: jevUsage.usd } : {}),
+      },
+      tiers: (["fast", "standard", "deep"] as const).map((tier) => ({ tier, route: resolveRoute(tier, config.tiers, lead, available) })),
+      maxWorkers: config.maxWorkers,
+      ...(config.verify ? { verify: config.verify } : {}),
+      image: config.sandbox.image
+        ? { custom: config.sandbox.image }
+        : { released: releaseImageRef(PACKAGE_VERSION), present: hasReleasedImage() },
+    };
+  };
+
   const status = () => {
-    const workers = delegator?.list() ?? [];
-    const running = workers.filter((w) => w.state === "queued" || w.state === "starting" || w.state === "running").length;
-    const waiting = workers.filter((w) => w.state === "waiting").length;
     const parts: string[] = [];
-    if (running || waiting) {
-      parts.push(`workers: ${running} running${waiting ? ` · ${waiting} waiting for you` : ""}${lastProgress ? ` · ${lastProgress}` : ""}`);
-    }
+    const counts = workerCounts(delegator?.list() ?? []);
+    if (counts) parts.push(hasUI && ui && counts.needsYou ? ui.theme.fg("warning", counts.text) : counts.text);
     if (hasUI && ui && jev && jevUsage) {
       const segment = jevStatus(jevUsage, jev.budgetUsd);
       parts.push(ui.theme.fg(segment.level, segment.text));
@@ -133,9 +169,11 @@ export default function lead(pi: ExtensionAPI) {
     ui = ctx.ui;
     hasUI = ctx.hasUI;
     const agentDir = getAgentDir();
+    leadConfig = undefined; // `/lead-doctor` never reports a previous session's config
     const { config, ignored } = await loadConfigWithNotices(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     // A setting dropped by the global/project rules would otherwise vanish without a trace.
     if (ctx.hasUI) for (const notice of ignored) ctx.ui.notify(notice, "warning");
+    leadConfig = config;
     const ask = createAskJev(config.jev);
     const ledger = createLedger(join(agentDir, "pi-lead", "jev-usage.json"));
     jev = ask ? { ledger, budgetUsd: config.jev.dailyBudgetUsd } : undefined;
@@ -176,12 +214,14 @@ export default function lead(pi: ExtensionAPI) {
         if (closed) return;
         status();
         pi.sendMessage(
-          { customType: "pi-lead-worker", content: outcome.text, display: true, details: { status: outcome.status, worker: outcome.worker } },
+          { customType: WORKER_REPORT_TYPE, content: outcome.text, display: true, details: { status: outcome.status, worker: outcome.worker, ...outcome.details } },
           { triggerTurn: true, deliverAs: "followUp" },
         );
       },
       onProgress(text) {
-        lastProgress = text;
+        if (closed) return;
+        // A transcript line, not the footer: the footer only counts.
+        pi.appendEntry(PROGRESS_ENTRY, { text });
         status();
       },
     });
@@ -198,6 +238,17 @@ export default function lead(pi: ExtensionAPI) {
     closed = false;
     recent.length = 0;
     const current = await setup(ctx);
+    // Only what stops workers or degrades them; `/lead-doctor` shows the rest.
+    if (ctx.hasUI) {
+      try {
+        const herdr = createHerdrCli();
+        for (const warning of startupWarnings({ ...(herdr ? { herdr: herdr.workspace } : {}), herdrPi: findHerdrPiExtension() !== undefined })) {
+          ctx.ui.notify(warning, "warning");
+        }
+      } catch {
+        // A check must never keep the session from starting or skip the reconcile below.
+      }
+    }
     // Close tabs a crashed or killed Lead left open; in the background, never blocking the session.
     void current.reconcile().catch(() => undefined);
   });
@@ -218,6 +269,33 @@ export default function lead(pi: ExtensionAPI) {
       render: (width: number) => [theme.fg("dim", renderDecision(decision, width))],
       invalidate: () => undefined,
     };
+  });
+
+  // A card for the user; the model still reads the report's full text.
+  pi.registerMessageRenderer(WORKER_REPORT_TYPE, (message, { expanded, outputPad }, theme) => {
+    const content = typeof message.content === "string" ? message.content : resultText({ content: message.content });
+    const card = renderCard(message.details, content, expanded, paint(theme));
+    if (card === undefined) return undefined;
+    const box = new Box(outputPad, 1, (line) => theme.bg("customMessageBg", line));
+    box.addChild(new Text(card.head, 0, 0));
+    const said = card.said;
+    if (said !== undefined) box.addChild(gutterBlock(said, paint(theme)));
+    if (card.tail) box.addChild(new Text(card.tail, 0, 0));
+    return box;
+  });
+
+  pi.registerEntryRenderer<{ text?: unknown }>(PROGRESS_ENTRY, (entry, _options, theme) => ({
+    render: (width: number) => [theme.fg("dim", renderProgress(entry.data?.text, width))],
+    invalidate: () => undefined,
+  }));
+
+  pi.registerCommand("lead-doctor", {
+    description: "Check PI Lead's setup: Herdr, Jev, worker image, verify command and the model behind each tier",
+    handler: async (_args, ctx) => {
+      if (!leadConfig) await setup(ctx);
+      if (jev) jevUsage = await jev.ledger.usage().catch(() => jevUsage);
+      ctx.ui.notify(doctorReport(setupFacts(ctx, leadConfig!)), "info");
+    },
   });
 
   pi.registerCommand("jev", {
@@ -257,16 +335,27 @@ export default function lead(pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
-      const started = await current.start(params, {
-        cwd: ctx.cwd,
-        lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-        available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
-        projectTrusted: ctx.isProjectTrusted(),
-        ...(ctx.hasUI ? { confirm: (question: string) => ctx.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) } : {}),
-      });
+      // Jev's intake and difficulty call can take a few seconds: say what the wait is.
+      // One shared slot: the last of parallel delegations restores Pi's default.
+      if (ctx.hasUI && delegating++ === 0) ctx.ui.setWorkingMessage("Sizing up the ticket and picking a model…");
+      let started: StartResult;
+      try {
+        started = await current.start(params, {
+          cwd: ctx.cwd,
+          lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+          available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
+          projectTrusted: ctx.isProjectTrusted(),
+          ...(ctx.hasUI ? { confirm: (question: string) => ctx.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) } : {}),
+        });
+      } finally {
+        if (ctx.hasUI && --delegating === 0) ctx.ui.setWorkingMessage();
+      }
       status();
       return { content: [{ type: "text", text: started.text }], details: started };
     },
+    renderCall: (args, theme) => new Text(delegateCall(args, paint(theme)), 0, 0),
+    renderResult: (result, { expanded, isPartial }, theme) =>
+      new Text(isPartial ? theme.fg("dim", "delegating…") : delegateResult(result.details, resultText(result), expanded, paint(theme)), 0, 0),
   });
 
   pi.registerTool({
@@ -283,8 +372,10 @@ export default function lead(pi: ExtensionAPI) {
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
       let text: string;
+      let details: { workers: WorkerInfo[] } | undefined;
       if (params.action === "list") {
         const workers = current.list();
+        details = { workers };
         text = workers.length
           ? workers
               .map((w) => `- [${w.id.slice(0, 8)}] ${w.title} · ${w.kind} · ${w.state}${w.branch ? ` · ${w.branch}` : ""} · ${w.route.model}`)
@@ -298,7 +389,10 @@ export default function lead(pi: ExtensionAPI) {
         text = await current.stop(params.id);
       }
       status();
-      return { content: [{ type: "text", text }], details: undefined };
+      return { content: [{ type: "text", text }], details };
     },
+    renderCall: (args, theme) => new Text(workerCall(args, paint(theme)), 0, 0),
+    renderResult: (result, { isPartial }, theme) =>
+      new Text(isPartial ? theme.fg("dim", "…") : workerResult(result.details, resultText(result), paint(theme)), 0, 0),
   });
 }

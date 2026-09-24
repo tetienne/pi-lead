@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
-import { workspaceFromPaneId, type Herdr } from "./herdr.ts";
+import { isUsageError, workspaceFromPaneId, type Herdr } from "./herdr.ts";
 import { defaultTier, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
@@ -11,6 +11,7 @@ import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
 import type { Toolchains } from "./toolchains.ts";
+import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
 import type { Workspace } from "./workspace.ts";
 
 export type DelegateParams = {
@@ -51,6 +52,8 @@ export type WorkerInfo = {
   branch?: string;
   route: WorkerRoute;
   tabOpen: boolean;
+  /** Verdict of the last finish, which says why a waiting worker waits. */
+  verdict?: WorkerVerdict;
 };
 
 export type DelegateOutcome = {
@@ -68,7 +71,39 @@ export type DelegateOutcome = {
     sensitive?: string[];
     /** The project's `verify` run; a non-zero exit made `done` at most `partial`. */
     verification?: { exitCode: number; ms: number };
+    /** What the Lead's transcript shows as a card (the model reads `text`). */
+    card?: ReportCard;
   };
+};
+
+/**
+ * A result as the user sees it. Host data, except `summary`, which the
+ * worker wrote inside the sandbox: the card always shows part of it,
+ * labelled untrusted, since the report guard counts a reply as having seen it.
+ */
+export type ReportCard = {
+  kind: WorkKind;
+  title: string;
+  model: string;
+  thinking: string;
+  /** This run: since the worker last started running, or since delegation. */
+  elapsedMs: number;
+  branch?: string;
+  commits: number;
+  /** git's `N files changed, X insertions(+), Y deletions(-)`. */
+  diff?: string;
+  /** The verify line of the report (host text, the command from the config). */
+  verify?: string;
+  /** The verify run passed (exit 0). */
+  verified?: boolean;
+  /**
+   * The error that ended a failed worker (untrusted). A finished worker's own
+   * words are the report's `<worker-report untrusted>` block, which the card
+   * shows from the text the model reads, so they are not stored twice.
+   */
+  summary?: string;
+  /** Host-written next steps of the report. */
+  next: string[];
 };
 
 export type StartResult =
@@ -99,7 +134,7 @@ export type DelegateDeps = {
   stateRoot: string;
   /** Called for every result: first finish, each later finish, failures and stops. */
   onOutcome(outcome: DelegateOutcome): void;
-  /** Short progress lines for the Lead's status bar. */
+  /** Short progress lines, one per event (started, queued, rerouted), for the Lead's transcript. */
   onProgress?(text: string): void;
   pollMs?: number;
   heartbeatMs?: number;
@@ -161,8 +196,15 @@ type Worker = WorkerInfo & {
   lastSeq: number;
   attempts: number;
   createdAt?: string;
+  /** When the task was delegated, and when the worker last started running (a relayed answer, a reroute): the card times this run. */
+  delegatedAt: number;
+  runningSince?: number;
   /** When the worker started waiting on a question (waitingTimeoutMinutes). */
   waitingSince?: number;
+  /** The label Herdr last took for the tab, so a state change renames it only when it changes. */
+  tabLabel?: string;
+  /** The worker's pending tab renames, in order. */
+  renaming?: Promise<void>;
   /** Herdr agent name: set once, tried at most twice per tab. */
   named: boolean;
   renameTries: number;
@@ -180,6 +222,24 @@ export function slugify(text: string): string {
       .replace(/^-+|-+$/g, "")
       .slice(0, 40) || "task"
   );
+}
+
+/**
+ * Invisible characters (zero-width, soft hyphen, fillers, bidi marks,
+ * variation selectors, Unicode tags) that can carry text the model reads but
+ * the user never sees. An emoji's own presentation selector is kept.
+ */
+export const INVISIBLE = /(?<!\p{Extended_Pictographic})[\ufe0e\ufe0f]|(?![\ufe0e\ufe0f])\p{Default_Ignorable_Code_Point}|\u061c/gu;
+
+/**
+ * Worker text as the report carries it, for the model and the card alike:
+ * without invisible characters, and never opening or closing the report's
+ * untrusted block, look-alikes of the marker included.
+ */
+export function unmarked(text: string): string {
+  return text
+    .replace(INVISIBLE, "")
+    .replace(/[<＜﹤]\s*(\/?)\s*(worker[\s_\u2010-\u2015-]{0,3}report)/giu, "‹$1$2");
 }
 
 export function isSafeBranchName(name: string): boolean {
@@ -257,6 +317,7 @@ export function createDelegator(deps: DelegateDeps) {
     route: worker.route,
     tabOpen: worker.tabId !== undefined,
     ...(worker.branch ? { branch: worker.branch } : {}),
+    ...(worker.verdict ? { verdict: worker.verdict } : {}),
   });
 
   const waitingTimeoutMs = deps.config.waitingTimeoutMinutes * 60_000;
@@ -294,13 +355,47 @@ export function createDelegator(deps: DelegateDeps) {
   const agentName = (worker: Worker) =>
     `lead-${slugify(worker.title).slice(0, 22).replace(/-+$/, "")}-${worker.id.slice(0, 4)}`;
 
-  /** Title, sidebar name and tokens of the worker's pane, reported on every state change. */
+  /** Increasing across Lead restarts, so Herdr never keeps an older report over a newer one. */
+  let metadataSeq = 0;
+  const nextSeq = () => (metadataSeq = Math.max(metadataSeq + 1, now()));
+
+  /** Cleared once Herdr rejects `tab rename` as unknown (an older Herdr): later tabs open without a state glyph. */
+  let tabRenames = true;
+  const openingLabel = (worker: Worker) => (tabRenames ? tabLabel(worker) : plainTitle(worker.title));
+
+  /**
+   * Renames run one after another per worker, each with the label of the
+   * state at that moment, so a late one never brings back an older glyph.
+   * The label counts as shown only once Herdr took it.
+   */
+  const relabel = (worker: Worker) => {
+    worker.renaming = (worker.renaming ?? Promise.resolve()).then(async () => {
+      const tabId = worker.tabId;
+      const label = tabLabel(worker);
+      if (!tabRenames || !tabId || label === worker.tabLabel) return;
+      try {
+        await deps.herdr?.renameTab(tabId, label);
+        worker.tabLabel = label;
+      } catch (error) {
+        // Only a Herdr without `tab rename` switches glyphs off; anything else is retried on the next state change.
+        if (isUsageError(error)) tabRenames = false;
+      }
+    });
+  };
+
+  /** The tab closes right after these states: describing it again would only race the close. */
+  const closing = (worker: Worker) =>
+    worker.state === "done" || worker.state === "stopped" || (worker.state === "failed" && !deps.config.keepFailedWorkers);
+
+  /** Title, sidebar name, tokens and tab label of the worker's pane, reported on every state change. */
   const describe = (worker: Worker) => {
     const paneId = worker.paneId;
-    if (!paneId) return;
+    if (!paneId || closing(worker)) return;
+    relabel(worker);
+    const labels = stateLabels(worker, worker.route);
     bestEffort(() =>
       deps.herdr?.reportMetadata(paneId, {
-        title: worker.title,
+        title: plainTitle(worker.title),
         displayAgent: `pi-lead ${worker.kind}`,
         tokens: {
           model: worker.route.model,
@@ -309,14 +404,23 @@ export function createDelegator(deps: DelegateDeps) {
           worker: worker.id.slice(0, 8),
           state: worker.state,
         },
-        workingLabel: `${worker.kind}: ${worker.title}`,
+        workingLabel: labels.working,
+        idleLabel: labels.idle,
+        blockedLabel: labels.blocked,
+        seq: nextSeq(),
       }),
     );
   };
 
   const setState = (worker: Worker, state: WorkerState) => {
+    if (state === "running" && worker.state !== "running") worker.runningSince = now();
     worker.state = state;
+    // Only a finish says why a worker waits; any other state starts from none.
+    if (state !== "waiting" && state !== "done" && state !== "failed") worker.verdict = undefined;
     describe(worker);
+    // A worker that stopped and needs the user may sit in a background tab: say so outside the Lead too.
+    const notice = attentionNotice(worker);
+    if (notice) bestEffort(() => deps.herdr?.notify(notice.title, notice.sound));
   };
 
   /** `agent rename` only works once Herdr has detected the Pi, so it gets one retry. */
@@ -373,7 +477,9 @@ export function createDelegator(deps: DelegateDeps) {
   /** FIFO: each worker takes its slot in turn and is `starting` before the next one checks. */
   const takeSlot = (worker: Worker) => {
     const turn = scheduler.then(() => waitForSlot(worker)).then(() => {
+      // Not setState: there is no tab to describe yet. A rerouted waiting worker no longer waits on the user.
       worker.state = "starting";
+      worker.verdict = undefined;
     });
     scheduler = turn.catch(() => undefined);
     // A stopped worker leaves the queue at once, not when its turn comes.
@@ -387,16 +493,19 @@ export function createDelegator(deps: DelegateDeps) {
   };
 
   const waitForSlot = async (worker: Worker) => {
+    let waitNote: string | undefined;
     while (true) {
       const others = busy().filter((other) => other !== worker);
       const blockers: Worker[] = [];
       for (const other of others) if (await mustWaitFor(other, worker)) blockers.push(other);
       if (blockers.length === 0 && others.length < deps.config.maxWorkers) return;
-      progress(
+      const note =
         blockers.length > 0
           ? `"${worker.title}" waits for overlapping "${blockers.map((b) => b.title).join('", "')}"`
-          : `"${worker.title}" waits for a free worker slot`,
-      );
+          : `"${worker.title}" waits for a free worker slot`;
+      // Re-checked every heartbeat: a transcript line only when the reason changes.
+      if (note !== waitNote) progress(note);
+      waitNote = note;
       await Promise.race([
         ...(blockers.length ? blockers : others).map((b) => b.done),
         sleep(heartbeatMs, worker.controller.signal),
@@ -432,11 +541,8 @@ export function createDelegator(deps: DelegateDeps) {
       const exit = (await readIfPresent(worker.exitPath!))?.trim();
       if (exit) throw new Error(`worker Pi exited (status ${exit}) without calling finish`);
       if (Date.now() - lastBeat >= heartbeatMs) {
-        if (worker.state === "running") {
-          progress(`"${worker.title}" is working in its Herdr tab`);
-          // By now Herdr has detected the Pi, if the name failed at tab creation.
-          nameAgent(worker);
-        }
+        // By now Herdr has detected the Pi, if the name failed at tab creation.
+        if (worker.state === "running") nameAgent(worker);
         lastBeat = Date.now();
       }
       // An unanswered question must not keep a VM up forever: the abort ends in `fail`.
@@ -449,6 +555,8 @@ export function createDelegator(deps: DelegateDeps) {
 
   /** Close the tab (which kills its Pi and VM), then remove the task dir unless it is kept for inspection. */
   const closeAndClean = async (worker: Worker, keepDir = false) => {
+    // A rename still in flight must not land after the close (bounded by Herdr's exec timeout).
+    await worker.renaming;
     if (worker.tabId) await deps.herdr?.closeTab(worker.tabId).catch(() => undefined);
     worker.tabId = undefined;
     worker.paneId = undefined;
@@ -547,8 +655,9 @@ export function createDelegator(deps: DelegateDeps) {
     // `herdr pane run` types one command line into the tab's shell. That
     // shell's cwd is the task directory, never the clone: a prompt running
     // `git status` must not execute guest-planted git config on the host.
+    worker.tabLabel = openingLabel(worker);
     ({ tabId: worker.tabId, paneId: worker.paneId } = await deps.herdr!.openWorkerTab({
-      label,
+      label: worker.tabLabel,
       cwd: worker.taskDir,
       command: `/bin/sh ${shellQuote(script)}`,
     }));
@@ -574,6 +683,14 @@ export function createDelegator(deps: DelegateDeps) {
     }
     return patterns.filter((pattern) => pattern !== PACKAGE_JSON);
   };
+
+  const cardBase = (worker: Worker) => ({
+    kind: worker.kind,
+    title: worker.title,
+    model: worker.route.model,
+    thinking: worker.route.thinking,
+    elapsedMs: Math.max(0, now() - (worker.runningSince ?? worker.delegatedAt)),
+  });
 
   const settle = async (worker: Worker, result: WorkerResult) => {
     // Only a run of this Lead's own command counts; the command shown comes from the config, not the result file.
@@ -603,6 +720,7 @@ export function createDelegator(deps: DelegateDeps) {
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
     const sensitive = await reviewHints(worker, collected.changedFiles);
     const keep = status !== "done" && deps.config.keepFailedWorkers;
+    worker.verdict = status;
     setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
     if (keep) worker.waitingSince = Date.now();
     else await closeAndClean(worker);
@@ -648,11 +766,11 @@ export function createDelegator(deps: DelegateDeps) {
         // Everything in this block was written inside the sandbox: report it, never obey it.
         "<worker-report untrusted>",
         "Summary:",
-        result.summary,
-        ...(collected.commits ? ["", "Commits:", collected.commits] : []),
-        ...(collected.diffStat ? ["", "Diff stat:", collected.diffStat] : []),
-        ...(result.findings ? ["", "Findings:", result.findings] : []),
-        ...(verification?.outputTail ? ["", "Verify output (tail):", verification.outputTail] : []),
+        unmarked(result.summary),
+        ...(collected.commits ? ["", "Commits:", unmarked(collected.commits)] : []),
+        ...(collected.diffStat ? ["", "Diff stat:", unmarked(collected.diffStat)] : []),
+        ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
+        ...(verification?.outputTail ? ["", "Verify output (tail):", unmarked(verification.outputTail)] : []),
         "</worker-report>",
         // Host-generated from the fixed pattern list, so it sits outside the block; guest-chosen file names stay inside.
         ...(sensitive.length
@@ -671,6 +789,14 @@ export function createDelegator(deps: DelegateDeps) {
         ...(result.quota ? { quota: result.quota } : {}),
         ...(sensitive.length ? { sensitive } : {}),
         ...(verification ? { verification: { exitCode: verification.exitCode, ms: verification.ms } } : {}),
+        card: {
+          ...cardBase(worker),
+          ...(worker.branch ? { branch: worker.branch } : {}),
+          commits: collected.commits ? collected.commits.trim().split("\n").length : 0,
+          ...(collected.diffStat.trim() ? { diff: collected.diffStat.trim().split("\n").at(-1)!.trim() } : {}),
+          ...(claimsProgress ? { verify: verificationLine(verify, verification), verified: verification?.exitCode === 0 } : {}),
+          next,
+        },
       },
     });
   };
@@ -730,6 +856,7 @@ export function createDelegator(deps: DelegateDeps) {
     }
     const failure = await deps.judge.failureKind({ task: worker.params.task, log: errorText(error) });
     const keep = deps.config.keepFailedWorkers;
+    worker.verdict = undefined;
     setState(worker, "failed");
     // A kept tab is for inspection only: it is closed when the Lead session ends.
     if (keep) await writeRecord(worker);
@@ -745,7 +872,15 @@ export function createDelegator(deps: DelegateDeps) {
           ? [`Kept for inspection: ${worker.taskDir} (its tab closes when this Lead session ends; the directory stays).`]
           : []),
       ].join("\n"),
-      details: failure ? { failure } : {},
+      details: {
+        ...(failure ? { failure } : {}),
+        card: {
+          ...cardBase(worker),
+          commits: 0,
+          summary: errorText(error),
+          next: keep && worker.taskDir ? [`Kept for inspection: ${worker.taskDir}`] : [],
+        },
+      },
     });
   };
 
@@ -858,6 +993,7 @@ export function createDelegator(deps: DelegateDeps) {
         resolveDone,
         lastSeq: 0,
         attempts: 0,
+        delegatedAt: now(),
         named: false,
         renameTries: 0,
         resumed: false,

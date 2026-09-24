@@ -56,6 +56,24 @@ you ─► Lead (Pi, your tab)
   [Web access for workers](#web-access-for-workers)). When the project names a
   `verify` command, PI Lead runs it itself when code work finishes (see
   [Verify](#verify)).
+- **Seeing workers.** Each worker tab's label starts with its state:
+  `○` queued or starting, `●` running, `?` waiting for your answer, `~` partly
+  done, `✗` blocked or failed, `✓` done, `-` stopped (e.g. `? Add CSV export`).
+  A worker that stops and needs you also raises a Herdr notification; only a
+  question plays a sound. Titles are reduced to letters, digits and plain
+  punctuation, and notifications never quote the worker. The Lead's status
+  line counts live workers (`● 2 running · 1 needs you`, in the warning colour
+  while one waits on you), and events such as "started on…" or "waits for a
+  free worker slot" appear as dim transcript lines that the model never sees.
+  Each result shows in the Lead as a card: verdict, time, model, commits and
+  diff, the verify line, the branch, review hints and next steps, with every
+  line the worker wrote behind a `│` gutter, marked untrusted. Expand it to
+  read the full report the model received. `/lead-doctor` checks the setup
+  (Herdr and its Pi integration, Jev, the worker image, `verify`, the model
+  behind each tier); the Lead warns at start only when workers cannot run.
+  Tab glyphs, state labels and notifications need Herdr 0.9.1 or later
+  (`tab rename`, `notification show`, `--seq`); on an older Herdr, tabs keep
+  their plain title and the pane keeps its title, tokens and working label.
 - **Toolchains** come from the project's mise config: the first worker runs
   `mise install` in a sandbox into a per-project cache, later workers mount it
   read-only and start instantly. (Your Mac's own mise cache holds macOS
