@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
-import worker from "../src/worker/extension.ts";
+import worker, { COMMIT_LEFTOVERS } from "../src/worker/extension.ts";
 import { registerSandboxTools } from "../src/worker/sandbox-tools.ts";
 import { runVerification, shouldVerify, VERIFY_OUTPUT_TAIL } from "../src/worker/verify.ts";
 
@@ -216,4 +216,16 @@ test("a verify run that errors or times out has exit code -1 and never throws", 
   assert.equal(stoppedByUser.exitCode, -1);
   assert.ok(aborted, "the user stopping finish aborts the command");
   assert.match(stoppedByUser.outputTail, /\[PI Lead: aborted\]$/);
+});
+
+test("the leftovers commit reports git add's own error on stdout", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-lead-not-a-repo-"));
+  const { execFile } = await import("node:child_process");
+  const result = await new Promise<{ code: number | null; stdout: string }>((resolve) => {
+    const child = execFile("/bin/sh", ["-c", COMMIT_LEFTOVERS], { cwd: dir, env: { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() } }, (_error, stdout) =>
+      resolve({ code: child.exitCode, stdout }),
+    );
+  });
+  assert.notEqual(result.code, 0);
+  assert.match(result.stdout, /not a git repository/);
 });

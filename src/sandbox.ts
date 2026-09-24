@@ -16,6 +16,11 @@ export const BASE_GUEST_ENV: Readonly<Record<string, string>> = {
   LANG: "C.UTF-8",
   TERM: "xterm-256color",
   CI: "1",
+  // /workspace is owned by the host uid, not guest root; env config is command-line
+  // scope, which git honors for safe.directory.
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "safe.directory",
+  GIT_CONFIG_VALUE_0: "*",
 };
 
 /** mise inside the guest: tools live in the per-project cache at /opt/mise. */

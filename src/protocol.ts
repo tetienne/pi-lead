@@ -127,7 +127,9 @@ opens your tab.
 
 - Your tools run in a Gondolin VM. The repository is a disposable clone at
   /workspace, on the branch you were given. Branches from the original
-  checkout are available as \`origin/<name>\`.
+  checkout are available as \`origin/<name>\`. This clone already is your
+  isolated worktree: never create another worktree, clone or branch, even if
+  the project's instructions say to; only /workspace is kept.
 - Network access is filtered; if a request is refused, work without it or
   report it.
 - Project toolchains (mise) are preinstalled and read-only; if one is missing,
