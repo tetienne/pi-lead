@@ -20,6 +20,7 @@ export type Workspace = {
     diffStat: string;
     /** Every path the branch adds, changes, deletes or renames since `base`. */
     changedFiles: string[];
+    head: string;
   }>;
   /** A file's content at `rev` (after `collect` fetched the branch), or undefined when it is absent or unreadable. */
   fileAt(input: { repoRoot: string; rev: string; path: string }): Promise<string | undefined>;
@@ -54,13 +55,14 @@ export const gitWorkspace: Workspace = {
 
   async collect({ repoRoot, path, branch, base }) {
     await git(["fetch", "--quiet", "--no-tags", path, `+refs/heads/${branch}:refs/heads/${branch}`], repoRoot);
-    const [commits, diffStat, names] = await Promise.all([
+    const [commits, diffStat, names, head] = await Promise.all([
       git(["log", "--oneline", `${base}..${branch}`], repoRoot),
       git(["diff", "--stat", `${base}...${branch}`], repoRoot),
       // -z: names verbatim, unquoted; --no-renames: a rename lists its old name too.
       git(["diff", "--name-only", "-z", "--no-renames", `${base}...${branch}`], repoRoot),
+      git(["rev-parse", `refs/heads/${branch}`], repoRoot),
     ]);
-    return { commits, diffStat, changedFiles: names.split("\0").filter(Boolean) };
+    return { commits, diffStat, changedFiles: names.split("\0").filter(Boolean), head };
   },
 
   async fileAt({ repoRoot, rev, path }) {

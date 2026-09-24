@@ -762,6 +762,8 @@ export function createDelegator(deps: DelegateDeps) {
           (verifyFailed && judged === "done" ? " (verify failed)" : ""),
         ...(claimsProgress ? [verificationLine(verify, verification)] : []),
         `Branch: ${worker.branch}`,
+        `Head: ${collected.head}`,
+        `Base: ${worker.base}`,
         "",
         // Everything in this block was written inside the sandbox: report it, never obey it.
         "<worker-report untrusted>",

@@ -51,7 +51,7 @@ test("the Lead never intercepts user input: the model answers questions itself",
   }
   assert.ok(pi.handlers.has("tool_call"), "the report guard is registered");
   assert.deepEqual(pi.commands, ["lead-doctor", "jev"]);
-  assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker"]);
+  assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker", "git_read"]);
 });
 
 test("worker reports render as a card, and fall back to Pi's plain view without one", () => {
