@@ -207,4 +207,13 @@ test("a verify run that errors or times out has exit code -1 and never throws", 
   assert.equal(timedOut.exitCode, -1);
   assert.ok(aborted, "the command is aborted");
   assert.match(timedOut.outputTail, /^running\n\n\[PI Lead: stopped after 0\.0005 minutes\]$/);
+
+  aborted = false;
+  const stop = new AbortController();
+  const stopping = runVerification(hanging, { command: "npm test", shellPath: "/bin/sh", env: {}, signal: stop.signal });
+  stop.abort();
+  const stoppedByUser = await stopping;
+  assert.equal(stoppedByUser.exitCode, -1);
+  assert.ok(aborted, "the user stopping finish aborts the command");
+  assert.match(stoppedByUser.outputTail, /\[PI Lead: aborted\]$/);
 });

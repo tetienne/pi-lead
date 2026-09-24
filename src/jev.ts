@@ -491,7 +491,7 @@ export function createJudge(options: {
                 outputTail: clip(verification.outputTail, 2_000),
                 note: "the project's verify command, run by PI Lead in the worker's sandbox after its last commit; -1 means it did not complete",
               }
-            : "none: the project configures no verify command",
+            : "none: no run of the project's verify command for this result",
         },
         questions,
       );

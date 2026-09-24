@@ -150,7 +150,7 @@ export default function worker(pi: ExtensionAPI) {
       summary: Type.String({ description: "What changed, how it was verified, what is left" }),
       findings: Type.Optional(Type.String({ description: "Full review findings, for review tasks" })),
     }),
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const current = await loadTask();
       const { vm, shellPath, env } = await ensureVm(ctx);
       // A failed commit (hook, identity) must not lose work: report it to the
@@ -169,8 +169,11 @@ export default function worker(pi: ExtensionAPI) {
           shellPath,
           env,
           ...(current.verifyTimeoutMinutes ? { timeoutMinutes: current.verifyTimeoutMinutes } : {}),
+          ...(signal ? { signal } : {}),
         });
         ctx?.ui.setStatus("pi-lead", `Gondolin: ${vm.id.slice(0, 8)} · ${current.branch}`);
+        // Stopped by the user: nothing is reported, `finish` can be called again.
+        if (signal?.aborted) throw new Error("aborted");
       }
       const result: WorkerResult = {
         version: 1,

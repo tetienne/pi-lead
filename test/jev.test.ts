@@ -141,7 +141,6 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
   assert.equal(calls[0]!.state.commits, "abc feat: export");
   assert.equal(calls[0]!.state.changedFiles, "src/a.ts");
   assert.deepEqual({ ...calls[0]!.state.verification, note: undefined }, { command: "npm test", exitCode: 1, outputTail: "1 failing", note: undefined });
-  assert.equal(calls[0]!.state.lastTestRun, undefined);
 
   const ledger = await ledgerIn();
   const unmet = (verdict: string | undefined) =>
@@ -159,7 +158,7 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
   const single = createJudge({ ask: fakeAsk({ verdict: { choice: "done", confidence: 0.9 }, criterion1: { noul: 0 } }, plain), config: DEFAULT_CONFIG.jev, ledger });
   assert.equal(await single.verdict({ ...evidence, task: "Add CSV export. AC: test passes.", verification: undefined }), "done");
   assert.deepEqual(Object.keys(plain[0]!.questions), ["verdict"]);
-  assert.match(plain[0]!.state.verification, /^none: the project configures no verify command/);
+  assert.match(plain[0]!.state.verification, /^none: no run of the project's verify command/);
 });
 
 test("intake asks readiness and difficulty in one call", async () => {
