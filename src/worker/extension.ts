@@ -6,27 +6,15 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge, type WorkerVerdict } from "../jev.ts";
+import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge } from "../jev.ts";
 import { decisionLine, shouldShow } from "../jev-display.ts";
 import { quotaError } from "../quota.ts";
-import { readJsonFile, WORKER_RULES, WORKER_STATUSES, WRITES_CODE, type LastTest, type WorkerResult, type WorkerTask } from "../protocol.ts";
+import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
-import { isTestCommand, registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
+import { registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
 import { createStuckDetector } from "./stuck.ts";
-
-/**
- * Why a `done` finish is not backed by a passing test run, or undefined when
- * it is (or needs none). Deterministic: the Lead's Jev verdict comes later.
- */
-export function unverifiedDone(task: Pick<WorkerTask, "kind" | "steerUnverifiedDone">, status: WorkerVerdict, lastTest: LastTest | undefined): string | undefined {
-  if (status !== "done" || task.steerUnverifiedDone === false || !WRITES_CODE.includes(task.kind)) return undefined;
-  if (lastTest && lastTest.exitCode === 0) return undefined;
-  const why = lastTest
-    ? `the last test run \`${lastTest.command}\` ${lastTest.exitCode === -1 ? "did not complete" : `exited ${lastTest.exitCode}`}`
-    : "no test run was recorded";
-  return `Not finished: you report done but ${why}. Run the project's tests (or the command that verifies the acceptance criteria) and finish again, or finish with status partial and say what is unverified.`;
-}
+import { runVerification, shouldVerify } from "./verify.ts";
 
 /**
  * Loaded only into worker Pi processes (`--no-extensions -e`). Pi and this
@@ -42,10 +30,6 @@ export default function worker(pi: ExtensionAPI) {
   let seq = 0;
   /** Error of the last assistant message of the run, until Pi settles. */
   let runError: string | undefined;
-  /** Evidence for the Lead's verdict, recorded here rather than reported by the model. */
-  let lastTest: LastTest | undefined;
-  /** An unverified `done` was already sent back since the last result: the next one goes through. */
-  let steered = false;
 
   const loadTask = async () => {
     if (task) return task;
@@ -128,7 +112,6 @@ export default function worker(pi: ExtensionAPI) {
     process.cwd(),
     ensureVm,
     (command, exitCode) => {
-      if (isTestCommand(command)) lastTest = { command: command.slice(0, 500), exitCode };
       if (task && task.stuckDetection !== false) stuck.record(command, exitCode);
     },
     () => stuck.progress(),
@@ -151,8 +134,6 @@ export default function worker(pi: ExtensionAPI) {
     const temporary = `${current.resultPath}.tmp`;
     await writeFile(temporary, JSON.stringify(result));
     await rename(temporary, current.resultPath);
-    // A new cycle starts: the Lead's next message may lead to another unverified done.
-    steered = false;
     // A late steer must not reach a worker that already reported: a steer
     // queued now would restart its run after `finish`.
     stuck.reset();
@@ -168,20 +149,30 @@ export default function worker(pi: ExtensionAPI) {
       summary: Type.String({ description: "What changed, how it was verified, what is left" }),
       findings: Type.Optional(Type.String({ description: "Full review findings, for review tasks" })),
     }),
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const current = await loadTask();
-      // Once per cycle, so a project without tests cannot deadlock the worker.
-      const unverified = steered ? undefined : unverifiedDone(current, params.status, lastTest);
-      if (unverified) {
-        steered = true;
-        return { content: [{ type: "text", text: unverified }], details: undefined };
-      }
-      const { vm } = await ensureVm(ctx);
+      const { vm, shellPath, env } = await ensureVm(ctx);
       // A failed commit (hook, identity) must not lose work: report it to the
       // model instead of finishing.
       const commit = await commitLeftovers(ctx);
       if (commit.exitCode !== 0) {
         throw new Error(`Could not commit the remaining changes; fix this, commit, then call finish again:\n${commit.stdout.slice(-2_000)}`);
+      }
+      // The project's own check, chosen by the trusted config and run here
+      // rather than by the model: the Lead's evidence that the work holds.
+      let verification: WorkerResult["verification"];
+      if (shouldVerify(current, params.status)) {
+        ctx?.ui.setStatus("pi-lead", `Verifying: ${current.verify}`);
+        verification = await runVerification(vm, {
+          command: current.verify,
+          shellPath,
+          env,
+          ...(current.verifyTimeoutMinutes ? { timeoutMinutes: current.verifyTimeoutMinutes } : {}),
+          ...(signal ? { signal } : {}),
+        });
+        ctx?.ui.setStatus("pi-lead", `Gondolin: ${vm.id.slice(0, 8)} · ${current.branch}`);
+        // Stopped by the user: nothing is reported, `finish` can be called again.
+        if (signal?.aborted) throw new Error("aborted");
       }
       const result: WorkerResult = {
         version: 1,
@@ -190,7 +181,7 @@ export default function worker(pi: ExtensionAPI) {
         status: params.status,
         summary: params.summary,
         ...(params.findings ? { findings: params.findings } : {}),
-        ...(lastTest ? { lastTest } : {}),
+        ...(verification ? { verification } : {}),
       };
       if (params.status === "done") {
         // The Lead usually closes a finished worker's tab: stop the VM first

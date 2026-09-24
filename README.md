@@ -51,10 +51,9 @@ you ─► Lead (Pi, your tab)
   any Pi provider or subscription works. A worker is a Pi like the Lead: same
   skills, prompts and `AGENTS.md`, plus the repository's own skills when you
   trust the project, but no host-side extensions except Herdr's Pi
-  integration (working/idle badges). When an implement, prototype or debug
-  worker finishes `done` with no recorded test run, or a failing last one,
-  `finish` sends it back once to run the tests or report `partial`; the next
-  `finish` goes through (`"steerUnverifiedDone": false` disables this).
+  integration (working/idle badges). When the project names a `verify`
+  command, PI Lead runs it itself when code work finishes (see
+  [Verify](#verify)).
 - **Toolchains** come from the project's mise config: the first worker runs
   `mise install` in a sandbox into a per-project cache, later workers mount it
   read-only and start instantly. (Your Mac's own mise cache holds macOS
@@ -64,7 +63,8 @@ you ─► Lead (Pi, your tab)
   answer to an action. Without a key, documented defaults apply.
 
 Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
-[ADR 0006](docs/adr/0006-workers-mirror-the-lead.md) and
+[ADR 0006](docs/adr/0006-workers-mirror-the-lead.md),
+[ADR 0007](docs/adr/0007-verify-with-a-host-chosen-command.md) and
 [spec v2](.scratch/pi-lead/spec-v2.md).
 
 ## Requirements
@@ -111,7 +111,7 @@ pi install -l git:github.com/tetienne/pi-lead@v0.5.0
   "leadGuard": "confirm",
   "waitingTimeoutMinutes": 120,
   "stuckDetection": true,
-  "steerUnverifiedDone": true
+  "verifyTimeoutMinutes": 15
 }
 ```
 
@@ -145,6 +145,30 @@ same command fails three times without succeeding, or six commands in a row
 fail, with no file changed through its `write` or `edit` tools in between, the
 worker is told once per prompt to step back or finish as `blocked`. A test-first loop (edit, tests fail, edit) never counts. It is never
 stopped automatically, and Jev is not involved.
+
+### Verify
+
+A trusted project names the command that proves its work in
+`.pi/pi-lead.json` (only there: the global config and untrusted projects
+cannot set it):
+
+```json
+{ "verify": "npm run typecheck && npm test" }
+```
+
+When an implement, prototype or debug worker calls `finish` with `done` or
+`partial`, PI Lead's worker extension (host-side code, not the model) commits
+what is left, then runs `verify` in the worker's VM at `/workspace`, with the
+bash tool's shell and environment, for at most `verifyTimeoutMinutes`. A
+non-zero exit (or a timeout) makes the result at most `partial`, whatever the
+worker or Jev says. The report states the command and exit code; the output's
+tail sits in the untrusted worker block and goes to Jev's verdict. Without
+`verify`, the report says the work is unverified.
+
+The worker controls the repository, so it can change what `verify` runs (a
+`package.json` script, a test file): `verify` catches honest mistakes, and the
+sensitive-path review hint (changed `package.json` scripts, CI, `.pi` and
+similar) points at the dishonest ones. Review both before merging.
 
 ### Seeing Jev
 

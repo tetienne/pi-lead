@@ -56,10 +56,14 @@ export type LeadConfig = {
    */
   stuckDetection: boolean;
   /**
-   * A worker that finishes code work as `done` without a passing test run is
-   * sent back once to run the tests, or to finish as `partial`.
+   * Shell command run in the worker's VM (cwd /workspace) when code work
+   * finishes `done` or `partial`; a non-zero exit makes the result at most
+   * `partial`. Read only from a trusted project's `.pi/pi-lead.json`: it is
+   * per project, and the global config cannot set it.
    */
-  steerUnverifiedDone: boolean;
+  verify?: string;
+  /** The `verify` run is stopped after this long and counts as failed. */
+  verifyTimeoutMinutes: number;
 };
 
 export type LeadGuardMode = "confirm" | "off";
@@ -93,7 +97,7 @@ export const DEFAULT_CONFIG: LeadConfig = {
   leadGuard: "confirm",
   waitingTimeoutMinutes: 120,
   stuckDetection: true,
-  steerUnverifiedDone: true,
+  verifyTimeoutMinutes: 15,
 };
 
 type PartialConfig = {
@@ -105,7 +109,8 @@ type PartialConfig = {
   leadGuard?: LeadGuardMode;
   waitingTimeoutMinutes?: number;
   stuckDetection?: boolean;
-  steerUnverifiedDone?: boolean;
+  verify?: string;
+  verifyTimeoutMinutes?: number;
 };
 
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
@@ -122,7 +127,15 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     leadGuard: override.leadGuard === "off" || override.leadGuard === "confirm" ? override.leadGuard : base.leadGuard,
     waitingTimeoutMinutes: override.waitingTimeoutMinutes ?? base.waitingTimeoutMinutes,
     stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
-    steerUnverifiedDone: override.steerUnverifiedDone ?? base.steerUnverifiedDone,
+    ...(typeof override.verify === "string" && override.verify.trim()
+      ? { verify: override.verify.trim() }
+      : base.verify !== undefined
+        ? { verify: base.verify }
+        : {}),
+    verifyTimeoutMinutes:
+      typeof override.verifyTimeoutMinutes === "number" && override.verifyTimeoutMinutes > 0
+        ? override.verifyTimeoutMinutes
+        : base.verifyTimeoutMinutes,
   };
 }
 
@@ -141,6 +154,8 @@ async function readJson(path: string): Promise<PartialConfig | undefined> {
  * egress, so it is read only for trusted projects, and it can never turn the
  * Lead guard off: a repository (or a worker's branch merged into it) must not
  * be able to disable the check that protects the host from worker reports.
+ * `verify` is the reverse: a command for one project, so only the project
+ * file sets it (it runs in the worker's VM, never on the host).
  */
 export async function loadConfig(
   cwd: string,
@@ -154,6 +169,7 @@ export async function loadConfig(
     const override = await readJson(path);
     if (!override) continue;
     if (path !== globalPath) delete override.leadGuard;
+    else delete override.verify;
     config = mergeConfig(config, override);
   }
   return config;

@@ -24,8 +24,12 @@ export type WorkerTask = {
   readonlyMounts: string[];
   /** Steer the worker when it keeps repeating a failing command. Absent means on. */
   stuckDetection?: boolean;
-  /** Send an unverified `done` back to the worker once (config `steerUnverifiedDone`); unset means true. */
-  steerUnverifiedDone?: boolean;
+  /**
+   * The project's `verify` command (trusted project config only), run by the
+   * worker extension on the host's behalf when code work finishes.
+   */
+  verify?: string;
+  verifyTimeoutMinutes?: number;
 };
 
 /** Written by the worker's `finish` tool. */
@@ -46,16 +50,17 @@ export type WorkerResult = {
   quota?: QuotaError;
   /** Changes left in the clone because committing them failed. */
   uncommitted?: boolean;
-  /** Written by the worker extension: the last test-like shell command and its exit code. */
-  lastTest?: LastTest;
+  /** Written by the worker extension, not by `finish`: the run of `WorkerTask.verify`. */
+  verification?: Verification;
 };
 
 /**
- * Recorded by the host-side bash wrapper, so the model cannot make it up; but
- * the guest controls the repository, so it is a signal, not proof. `exitCode`
- * is -1 when the command did not complete (timeout, abort).
+ * The task's `verify` command, run by the worker extension (host-side code)
+ * in the VM after the model's last commit; the model cannot choose or skip
+ * it. `exitCode` is -1 when it did not complete (timeout, error). The guest
+ * controls the repository, so `outputTail` is guest-produced text.
  */
-export type LastTest = { command: string; exitCode: number };
+export type Verification = { command: string; exitCode: number; outputTail: string; ms: number };
 
 /** Work kinds whose worker changes code, and so should run its tests. */
 export const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debug"];
@@ -78,8 +83,11 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
     (result.findings !== undefined && typeof result.findings !== "string") ||
     (result.modelError !== undefined && typeof result.modelError !== "string") ||
     (result.uncommitted !== undefined && typeof result.uncommitted !== "boolean") ||
-    (result.lastTest !== undefined &&
-      (typeof result.lastTest?.command !== "string" || !Number.isInteger(result.lastTest.exitCode))) ||
+    (result.verification !== undefined &&
+      (typeof result.verification?.command !== "string" ||
+        !Number.isInteger(result.verification.exitCode) ||
+        typeof result.verification.outputTail !== "string" ||
+        !(Number.isFinite(result.verification.ms) && result.verification.ms >= 0))) ||
     (result.quota !== undefined &&
       (typeof result.quota?.message !== "string" ||
         (result.quota.retryAfterMinutes !== undefined &&
