@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import type { LeadConfig } from "./config.ts";
 import type { WorkKind, WorkerVerdict } from "./jev.ts";
 import type { QuotaError } from "./quota.ts";
-import type { StartedService } from "./services.ts";
 
 /** Written by the Lead, read by the worker extension (`--pi-lead-task`). */
 export type WorkerTask = {
@@ -13,18 +12,11 @@ export type WorkerTask = {
   title: string;
   task: string;
   branch: string;
-  /** Host path of the disposable clone mounted at /workspace. */
-  clonePath: string;
-  /** Host path the worker writes its `WorkerResult` to (outside the clone). */
+  /** Host path of the worker's own git worktree; its tools run there. */
+  worktreePath: string;
+  /** Host path the worker writes its `WorkerResult` to (outside the worktree). */
   resultPath: string;
-  sandbox: LeadConfig["sandbox"];
   jev: LeadConfig["jev"];
-  /** Host directory with the project's mise toolchains, mounted read-only at /opt/mise. */
-  toolchainCache?: string;
-  /** Host directories mounted read-only at the same path in the guest (skill folders). */
-  readonlyMounts: string[];
-  /** Sidecar containers started for this worker, resolved to their host relay port. */
-  services?: StartedService[];
   /** Steer the worker when it keeps repeating a failing command. Absent means on. */
   stuckDetection?: boolean;
   /**
@@ -51,7 +43,7 @@ export type WorkerResult = {
    */
   modelError?: string;
   quota?: QuotaError;
-  /** Changes left in the clone because committing them failed. */
+  /** Changes left in the worktree because committing them failed. */
   uncommitted?: boolean;
   /** Written by the worker extension, not by `finish`: the run of `WorkerTask.verify`. */
   verification?: Verification;
@@ -59,9 +51,10 @@ export type WorkerResult = {
 
 /**
  * The task's `verify` command, run by the worker extension (host-side code)
- * in the VM after the model's last commit; the model cannot choose or skip
- * it. `exitCode` is -1 when it did not complete (timeout, error). The guest
- * controls the repository, so `outputTail` is guest-produced text.
+ * in the worker's worktree after the model's last commit; the model cannot
+ * choose or skip it. `exitCode` is -1 when it did not complete (timeout,
+ * error). The worker controls the repository, so `outputTail` is
+ * worker-produced text.
  */
 export type Verification = { command: string; exitCode: number; outputTail: string; ms: number };
 
@@ -128,15 +121,11 @@ export const WORKER_RULES = `
 You are a worker delegated by the PI Lead. You run unattended unless a human
 opens your tab.
 
-- Your tools run in a Gondolin VM. The repository is a disposable clone at
-  /workspace, on the branch you were given. Branches from the original
-  checkout are available as \`origin/<name>\`. This clone already is your
-  isolated worktree: never create another worktree, clone or branch, even if
-  the project's instructions say to; only /workspace is kept.
-- Network access is filtered; if a request is refused, work without it or
-  report it.
-- Project toolchains (mise) are preinstalled and read-only; if one is missing,
-  report it instead of working around it.
+- Your working directory is your own git worktree of the repository, on the
+  branch you were given. Other local branches stay visible for reference:
+  never switch, reset, rebase or delete them, and never touch git config.
+  Never create another worktree, clone or branch, even if the project's
+  instructions say to; only your own worktree is kept.
 - Commit your work on the current branch. Do not push, merge or rebase other
   branches.
 - When you are done, or cannot continue, call \`finish\` with an honest status

@@ -1,17 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
-import type { LeadConfig, SandboxService, Tier } from "./config.ts";
-import { isUsageError, workspaceFromPaneId, type Herdr } from "./herdr.ts";
+import type { LeadConfig, Tier } from "./config.ts";
+import { isUsageError, type Herdr } from "./herdr.ts";
 import { defaultTier, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
-import type { StartedService } from "./services.ts";
-import type { Toolchains } from "./toolchains.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -32,8 +30,6 @@ export type DelegateIO = {
   available: readonly ModelRef[];
   /** Whether the Lead trusts this project; workers then get its skills and prompts too. */
   projectTrusted: boolean;
-  /** Ask the human in the Lead's UI (egress during toolchain installation). */
-  confirm?: (question: string) => Promise<boolean>;
 };
 
 export type WorkerState =
@@ -52,6 +48,7 @@ export type WorkerInfo = {
   state: WorkerState;
   branch?: string;
   route: WorkerRoute;
+  /** A worktree workspace open in Herdr for this worker. */
   tabOpen: boolean;
   /** Verdict of the last finish, which says why a waiting worker waits. */
   verdict?: WorkerVerdict;
@@ -79,7 +76,7 @@ export type DelegateOutcome = {
 
 /**
  * A result as the user sees it. Host data, except `summary`, which the
- * worker wrote inside the sandbox: the card always shows part of it,
+ * worker wrote: the card always shows part of it,
  * labelled untrusted, since the report guard counts a reply as having seen it.
  */
 export type ReportCard = {
@@ -127,17 +124,6 @@ export type DelegateDeps = {
   herdr: Herdr | undefined;
   workspace: Workspace;
   workerCommand: WorkerCommand;
-  toolchains?: Toolchains;
-  /** Docker sidecar services (sandbox.services); absent when the host has no way to run them. */
-  services?: {
-    start(id: string, services: readonly SandboxService[]): Promise<StartedService[]>;
-    /** Never rejects; resolves to what is still there after cleanup (empty when everything is gone). */
-    stop(id: string): Promise<string[]>;
-  };
-  /** The Gondolin image selector for workers when the config names none (downloads it the first time). */
-  image?(progress: (text: string) => void): Promise<string>;
-  /** Host directories the guest may read at the same path (skill folders, so skills can reference their files). */
-  readonlyMounts?: readonly string[];
   stateRoot: string;
   /** Called for every result: first finish, each later finish, failures and stops. */
   onOutcome(outcome: DelegateOutcome): void;
@@ -152,13 +138,13 @@ export type DelegateDeps = {
 
 /**
  * `tab.json` in each task dir, written by the Lead that owns it. A later Lead
- * uses it to close the tabs of a Lead that crashed or was killed.
+ * uses it to remove the worktrees of a Lead that crashed or was killed.
  */
 type TabRecord = {
   version: 1;
   leadPid: number;
   createdAt: string;
-  tabId?: string;
+  workspaceId?: string;
   paneId?: string;
   /** A failed worker whose task dir is kept for inspection (keepFailedWorkers). */
   failed?: boolean;
@@ -193,10 +179,10 @@ type Worker = WorkerInfo & {
   done: Promise<void>;
   resolveDone(): void;
   taskDir?: string;
-  clonePath?: string;
+  worktreePath?: string;
   repoRoot?: string;
   base?: string;
-  tabId?: string;
+  workspaceId?: string;
   paneId?: string;
   resultPath?: string;
   exitPath?: string;
@@ -208,9 +194,9 @@ type Worker = WorkerInfo & {
   runningSince?: number;
   /** When the worker started waiting on a question (waitingTimeoutMinutes). */
   waitingSince?: number;
-  /** The label Herdr last took for the tab, so a state change renames it only when it changes. */
+  /** The label Herdr last took for the worktree workspace, so a state change renames it only when it changes. */
   tabLabel?: string;
-  /** The worker's pending tab renames, in order. */
+  /** The worker's pending worktree renames, in order. */
   renaming?: Promise<void>;
   /** Herdr agent name: set once, tried at most twice per tab. */
   named: boolean;
@@ -322,7 +308,7 @@ export function createDelegator(deps: DelegateDeps) {
     kind: worker.kind,
     state: worker.state,
     route: worker.route,
-    tabOpen: worker.tabId !== undefined,
+    tabOpen: worker.workspaceId !== undefined,
     ...(worker.branch ? { branch: worker.branch } : {}),
     ...(worker.verdict ? { verdict: worker.verdict } : {}),
   });
@@ -377,14 +363,14 @@ export function createDelegator(deps: DelegateDeps) {
    */
   const relabel = (worker: Worker) => {
     worker.renaming = (worker.renaming ?? Promise.resolve()).then(async () => {
-      const tabId = worker.tabId;
+      const workspaceId = worker.workspaceId;
       const label = tabLabel(worker);
-      if (!tabRenames || !tabId || label === worker.tabLabel) return;
+      if (!tabRenames || !workspaceId || label === worker.tabLabel) return;
       try {
-        await deps.herdr?.renameTab(tabId, label);
+        await deps.herdr?.renameWorktree(workspaceId, label);
         worker.tabLabel = label;
       } catch (error) {
-        // Only a Herdr without `tab rename` switches glyphs off; anything else is retried on the next state change.
+        // Only a Herdr without `workspace rename` switches glyphs off; anything else is retried on the next state change.
         if (isUsageError(error)) tabRenames = false;
       }
     });
@@ -449,7 +435,7 @@ export function createDelegator(deps: DelegateDeps) {
       version: 1,
       leadPid: process.pid,
       createdAt: worker.createdAt ?? new Date().toISOString(),
-      ...(worker.tabId ? { tabId: worker.tabId } : {}),
+      ...(worker.workspaceId ? { workspaceId: worker.workspaceId } : {}),
       ...(worker.paneId ? { paneId: worker.paneId } : {}),
       ...(worker.state === "failed" ? { failed: true } : {}),
     };
@@ -466,7 +452,7 @@ export function createDelegator(deps: DelegateDeps) {
     }
   };
 
-  /** Workers holding a slot. A waiting worker's VM idles on a question, so it does not count. */
+  /** Workers holding a slot. A waiting worker idles on a question, so it does not count. */
   const busy = () => [...workers.values()].filter((w) => w.state === "starting" || w.state === "running");
 
   /** Two code-writing tickets that Jev thinks overlap (or can't tell) run one after the other. */
@@ -552,7 +538,7 @@ export function createDelegator(deps: DelegateDeps) {
         if (worker.state === "running") nameAgent(worker);
         lastBeat = Date.now();
       }
-      // An unanswered question must not keep a VM up forever: the abort ends in `fail`.
+      // An unanswered question must not keep a worker running forever: the abort ends in `fail`.
       if (worker.state === "waiting" && waitingTimeoutMs > 0 && Date.now() - (worker.waitingSince ?? 0) >= waitingTimeoutMs) {
         worker.controller.abort(new WaitingTimeout(`no answer within ${deps.config.waitingTimeoutMinutes} minutes`));
       }
@@ -560,28 +546,19 @@ export function createDelegator(deps: DelegateDeps) {
     }
   };
 
-  /** Stop this worker's sandbox containers, if any were started (best-effort, never throws). */
-  const stopServices = async (worker: Worker) => {
-    // Nothing to stop, and no configured services means no reason to call Docker on hosts that don't run it.
-    if (!worker.taskDir || !deps.services || !deps.config.sandbox.services?.length) return;
-    const leftover = await deps.services.stop(basename(worker.taskDir)).catch(() => []);
-    if (leftover.length) progress(`could not remove Docker resources for "${worker.title}": ${leftover.join(", ")}`);
-  };
-
   /**
-   * Close the tab (which kills its Pi and VM), stop any sandbox containers, then
-   * remove the task dir unless it is kept for inspection. Services stop even when
-   * the dir is kept: the tab (and so any VM using them) is gone either way.
+   * Remove the worktree (which kills its Pi and deletes the checkout; the
+   * branch is kept), then remove the task dir unless it is kept for
+   * inspection.
    */
   const closeAndClean = async (worker: Worker, keepDir = false) => {
-    // A rename still in flight must not land after the close (bounded by Herdr's exec timeout).
+    // A rename still in flight must not land after the remove (bounded by Herdr's exec timeout).
     await worker.renaming;
-    if (worker.tabId) await deps.herdr?.closeTab(worker.tabId).catch(() => undefined);
-    worker.tabId = undefined;
+    if (worker.workspaceId) await deps.herdr?.removeWorktree(worker.workspaceId).catch(() => undefined);
+    worker.workspaceId = undefined;
     worker.paneId = undefined;
-    await stopServices(worker);
     if (!worker.taskDir) return;
-    if (keepDir) await writeRecord(worker); // no tab left to close
+    if (keepDir) await writeRecord(worker); // no worktree left to remove
     else await deps.workspace.remove(worker.taskDir).catch(() => undefined);
   };
 
@@ -596,42 +573,32 @@ export function createDelegator(deps: DelegateDeps) {
     worker.taskDir = await mkdtemp(join(deps.stateRoot, `${worker.id.slice(0, 8)}-`));
     // Owned from the start, so a later Lead never mistakes it for an orphan while this one lives.
     await writeRecord(worker);
-    worker.clonePath = join(worker.taskDir, "repo");
+    worker.worktreePath = join(worker.taskDir, "worktree");
     worker.resultPath = join(worker.taskDir, "result.json");
     worker.exitPath = join(worker.taskDir, "exit");
     worker.repoRoot = await deps.workspace.repoRoot(io.cwd);
     worker.branch = `pi-lead/${slugify(params.title)}-${worker.id.slice(0, 6)}${worker.attempts > 1 ? `-${worker.attempts}` : ""}`;
-    const created = await deps.workspace.create({
+    // A resumed attempt starts from the previous branch; its report still covers everything since the first base.
+    worker.base ??= await deps.workspace.resolveBase({
       repoRoot: worker.repoRoot,
-      path: worker.clonePath,
-      branch: worker.branch,
       ...(params.startFrom ? { startFrom: params.startFrom } : {}),
     });
-    // A resumed attempt starts from the previous branch; its report still covers everything since the first base.
-    worker.base ??= created.base;
-    // Before any guest touches the clone: copy what the host-side Pi will read.
-    const workDir = join(worker.taskDir, "cwd");
+    worker.tabLabel = openingLabel(worker);
+    ({ workspaceId: worker.workspaceId, paneId: worker.paneId } = await deps.herdr!.createWorktree({
+      cwd: worker.repoRoot,
+      branch: worker.branch,
+      base: worker.base,
+      path: worker.worktreePath,
+      label: worker.tabLabel,
+    }));
+    await writeRecord(worker);
+    // Host copies of the repository's own skills, prompts and APPEND_SYSTEM.md.
     const resourceDir = join(worker.taskDir, "resources");
     const resources = await snapshotProjectResources({
-      clonePath: worker.clonePath,
-      workDir,
+      worktreePath: worker.worktreePath,
       resourceDir,
       projectTrusted: io.projectTrusted,
     });
-    const sandbox =
-      deps.config.sandbox.image || !deps.image ? deps.config.sandbox : { ...deps.config.sandbox, image: await deps.image(progress) };
-    const toolchainCache = await deps.toolchains?.prepare({
-      repoRoot: worker.repoRoot,
-      clonePath: worker.clonePath,
-      sandbox,
-      progress,
-      ...(io.confirm ? { confirm: io.confirm } : {}),
-    });
-    const configuredServices = deps.config.sandbox.services;
-    if (configuredServices?.length && !deps.services) {
-      throw new Error("sandbox.services is configured but Docker services support is unavailable");
-    }
-    const services = configuredServices?.length ? await deps.services!.start(basename(worker.taskDir), configuredServices) : undefined;
     const task: WorkerTask = {
       version: 1,
       id: worker.id,
@@ -639,18 +606,11 @@ export function createDelegator(deps: DelegateDeps) {
       title: params.title,
       task: params.task,
       branch: worker.branch,
-      clonePath: worker.clonePath,
+      worktreePath: worker.worktreePath,
       resultPath: worker.resultPath,
-      sandbox,
       jev: deps.config.jev,
       stuckDetection: deps.config.stuckDetection,
       ...(deps.config.verify ? { verify: deps.config.verify, verifyTimeoutMinutes: deps.config.verifyTimeoutMinutes } : {}),
-      readonlyMounts: [
-        ...(deps.readonlyMounts ?? []),
-        ...(resources.skills.length || resources.prompts.length || resources.appendSystem ? [resourceDir] : []),
-      ],
-      ...(toolchainCache ? { toolchainCache } : {}),
-      ...(services ? { services } : {}),
     };
     const taskPath = join(worker.taskDir, "task.json");
     await writeFile(taskPath, JSON.stringify(task, null, 2));
@@ -667,9 +627,11 @@ export function createDelegator(deps: DelegateDeps) {
       script,
       [
         "#!/bin/sh",
-        // Pi's cwd is outside the clone: host-side Pi (footer, context files)
-        // never reads guest-writable files or git config.
-        `cd ${shellQuote(workDir)} || exit 1`,
+        // The worker's tools run in its own git worktree: no isolation from the host.
+        `cd ${shellQuote(worker.worktreePath!)} || exit 1`,
+        // Author commits as the worker, without touching the repo's shared git config.
+        "export GIT_AUTHOR_NAME='PI Lead worker' GIT_AUTHOR_EMAIL='pi-lead-worker@localhost'",
+        "export GIT_COMMITTER_NAME='PI Lead worker' GIT_COMMITTER_EMAIL='pi-lead-worker@localhost'",
         // Lets Herdr recognise the Pi behind the node process as a Pi agent.
         "export HERDR_AGENT=pi",
         argv.map(shellQuote).join(" "),
@@ -678,16 +640,8 @@ export function createDelegator(deps: DelegateDeps) {
       ].join("\n"),
       { mode: 0o700 },
     );
-    // `herdr pane run` types one command line into the tab's shell. That
-    // shell's cwd is the task directory, never the clone: a prompt running
-    // `git status` must not execute guest-planted git config on the host.
-    worker.tabLabel = openingLabel(worker);
-    ({ tabId: worker.tabId, paneId: worker.paneId } = await deps.herdr!.openWorkerTab({
-      label: worker.tabLabel,
-      cwd: worker.taskDir,
-      command: `/bin/sh ${shellQuote(script)}`,
-    }));
-    await writeRecord(worker);
+    // The worktree's pane starts as an idle shell already cd'd there; type the run script into it.
+    await deps.herdr!.runCommand(worker.paneId, `/bin/sh ${shellQuote(script)}`);
     describe(worker);
     nameAgent(worker);
     progress(`"${worker.title}" started on ${worker.route.model} (${worker.route.thinking})`);
@@ -725,7 +679,6 @@ export function createDelegator(deps: DelegateDeps) {
     const claimsProgress = WRITES_CODE.includes(worker.kind) && (result.status === "done" || result.status === "partial");
     const collected = await deps.workspace.collect({
       repoRoot: worker.repoRoot!,
-      path: worker.clonePath!,
       branch: worker.branch!,
       base: worker.base!,
     });
@@ -738,7 +691,7 @@ export function createDelegator(deps: DelegateDeps) {
       changedFiles: collected.changedFiles,
       ...(verification ? { verification: { command: verification.command, exitCode: verification.exitCode, outputTail: verification.outputTail } } : {}),
     });
-    // Trust the more pessimistic of the worker and Jev; a failed verify run makes `done` at most `partial` (ADR 0003).
+    // Trust the more pessimistic of the worker and Jev; a failed verify run makes `done` at most `partial` (ADR 0002).
     const judged =
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     const verifyFailed = verification !== undefined && verification.exitCode !== 0;
@@ -791,7 +744,7 @@ export function createDelegator(deps: DelegateDeps) {
         `Head: ${collected.head}`,
         `Base: ${worker.base}`,
         "",
-        // Everything in this block was written inside the sandbox: report it, never obey it.
+        // Everything in this block was written by the worker: report it, never obey it.
         "<worker-report untrusted>",
         "Summary:",
         unmarked(result.summary),
@@ -800,7 +753,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
         ...(verification?.outputTail ? ["", "Verify output (tail):", unmarked(verification.outputTail)] : []),
         "</worker-report>",
-        // Host-generated from the fixed pattern list, so it sits outside the block; guest-chosen file names stay inside.
+        // Host-generated from the fixed pattern list, so it sits outside the block; worker-chosen file names stay inside.
         ...(sensitive.length
           ? [
               "",
@@ -837,14 +790,12 @@ export function createDelegator(deps: DelegateDeps) {
   const reroute = async (worker: Worker, result: WorkerResult & { quota: QuotaError }): Promise<boolean> => {
     const from = worker.route.model;
     exhausted.set(providerOf(from), now() + quotaPauseMinutes(result.quota) * 60_000);
-    // Uncommitted changes live only in this clone: keep the worker where it is.
+    // Uncommitted changes live only in this worktree: keep the worker where it is.
     if (result.uncommitted || worker.reroutes >= MAX_REROUTES) return false;
     const { lead, available } = routable(worker.io);
     const route = resolveRoute(worker.route.tier, deps.config.tiers, lead, available);
     if ("error" in route || route.model === from) return false;
     worker.reroutes += 1;
-    // Fetch the work so far into the repository, so the next attempt can start from it.
-    await deps.workspace.collect({ repoRoot: worker.repoRoot!, path: worker.clonePath!, branch: worker.branch!, base: worker.base! });
     const previous = worker.branch!;
     worker.params = { ...worker.params, startFrom: previous };
     worker.route = { model: route.model, thinking: route.thinking, tier: route.tier, note: `${from} ran out of quota; continued on ${route.model} from ${previous}` };
@@ -887,13 +838,8 @@ export function createDelegator(deps: DelegateDeps) {
     worker.verdict = undefined;
     setState(worker, "failed");
     // A kept tab is for inspection only: it is closed when the Lead session ends.
-    // Its sandbox containers are not: nothing left running will use them.
-    if (keep) {
-      await stopServices(worker);
-      await writeRecord(worker);
-    } else {
-      await closeAndClean(worker);
-    }
+    if (keep) await writeRecord(worker);
+    else await closeAndClean(worker);
     report({
       worker: info(worker),
       status: "failed",
@@ -1071,10 +1017,10 @@ export function createDelegator(deps: DelegateDeps) {
       const worker = find(ref);
       if ("error" in worker) return worker.error;
       if (worker.state === "done" || worker.state === "failed" || worker.state === "stopped") {
-        if (worker.tabId) await closeAndClean(worker);
+        if (worker.workspaceId) await closeAndClean(worker);
         return `Worker "${worker.title}" is already ${worker.state}; its tab is closed.`;
       }
-      // The watcher sees the abort, closes the tab, removes the clone and reports.
+      // The watcher sees the abort, removes the worktree and reports.
       worker.controller.abort(new Error("stopped by the Lead"));
       return `Stopping "${worker.title}".`;
     },
@@ -1083,7 +1029,7 @@ export function createDelegator(deps: DelegateDeps) {
      * The Lead session ends: stop every worker that has not ended (waiting ones
      * included) and wait for their cleanup, then close every tab still open.
      * Only the Lead's own pane outlives it; a failed worker keeps its directory
-     * (keepFailedWorkers) but never its tab, whose Pi may still run a VM.
+     * (keepFailedWorkers) but never its tab.
      */
     async shutdown(): Promise<void> {
       const live = [...workers.values()].filter((worker) => !["done", "failed", "stopped"].includes(worker.state));
@@ -1091,23 +1037,16 @@ export function createDelegator(deps: DelegateDeps) {
       await Promise.race([Promise.all(live.map((worker) => worker.done)), sleep(10_000)]);
       await Promise.all(
         [...workers.values()]
-          .filter((worker) => worker.tabId)
+          .filter((worker) => worker.workspaceId)
           .map((worker) => closeAndClean(worker, worker.state === "failed" && deps.config.keepFailedWorkers)),
-      );
-      // Still inside launch() when the race timed out: no tab, but its services may already run.
-      // Its taskDir is left alone so a later reconcile still finds the record if a docker run lands after this.
-      await Promise.all(
-        [...workers.values()]
-          .filter((worker) => !["done", "failed", "stopped"].includes(worker.state) && !worker.tabId && worker.taskDir)
-          .map((worker) => stopServices(worker)),
       );
     },
 
     /**
-     * On Lead start: close the tabs that earlier Lead processes, now dead
-     * (crash, kill), left open, and remove their task dirs. Records of live
-     * Leads (other sessions, or this process) are left alone. Returns how
-     * many tabs were closed.
+     * On Lead start: remove the worktrees that earlier Lead processes, now
+     * dead (crash, kill), left open, and remove their task dirs. Records of
+     * live Leads (other sessions, or this process) are left alone. Returns
+     * how many worktrees were removed.
      */
     async reconcile(): Promise<number> {
       let names: string[];
@@ -1122,48 +1061,30 @@ export function createDelegator(deps: DelegateDeps) {
         const record = await readRecord(dir);
         if (record && record.leadPid !== process.pid && !processAlive(record.leadPid)) orphans.push({ dir, record });
       }
-      // The old Lead may have started services even if this session's config no longer declares them.
-      const stopOrphanServices = async (dir: string) => {
-        if (!deps.services) return;
-        const leftover = await deps.services.stop(basename(dir)).catch(() => []);
-        if (leftover.length) progress(`could not remove Docker resources for "${basename(dir)}": ${leftover.join(", ")}`);
-      };
-      // A task with no tab cannot still have a VM using its services, even without Herdr.
-      for (const { dir, record } of orphans) if (!record.tabId) await stopOrphanServices(dir);
       const herdr = deps.herdr;
-      // Nothing can be closed outside Herdr: keep the records for a Lead inside it.
+      // Nothing can be removed outside Herdr: keep the records for a Lead inside it.
       if (!herdr || orphans.length === 0) return 0;
-      // If Herdr does not answer for the Lead's own workspace, try again on the next start.
-      const listings = new Map<string, Promise<string[] | undefined>>();
-      const tabsIn = (workspace: string) => {
-        if (!listings.has(workspace)) listings.set(workspace, herdr.listTabs(workspace).catch(() => undefined));
-        return listings.get(workspace)!;
-      };
-      if (!(await tabsIn(herdr.workspace))) return 0;
+      const workspaces = await herdr.listWorkspaces().catch(() => undefined);
+      // If Herdr does not answer, or not even for the Lead's own workspace, try again on the next start.
+      if (!workspaces || !workspaces.includes(herdr.workspace)) return 0;
       let closed = 0;
       for (const { dir, record } of orphans) {
-        if (record.tabId) {
-          // Herdr answered for our workspace, so a workspace it cannot list is gone with its tabs.
-          const tabs = (await tabsIn(workspaceFromPaneId(record.tabId) ?? herdr.workspace)) ?? [];
-          if (tabs.includes(record.tabId)) {
-            try {
-              await herdr.closeTab(record.tabId);
-              closed += 1;
-            } catch {
-              continue; // keep the record: the tab may still run a VM
-            }
+        if (record.workspaceId && workspaces.includes(record.workspaceId)) {
+          try {
+            await herdr.removeWorktree(record.workspaceId);
+            closed += 1;
+          } catch {
+            continue; // keep the record: the worktree may still be running
           }
-          // Stop services only after the tab is confirmed gone. A failed close keeps its VM alive.
-          await stopOrphanServices(dir);
         }
         if (record.failed && deps.config.keepFailedWorkers) {
-          const { tabId: _tab, paneId: _pane, ...kept } = record;
+          const { workspaceId: _workspace, paneId: _pane, ...kept } = record;
           await writeFile(join(dir, RECORD), JSON.stringify(kept, null, 2)).catch(() => undefined);
         } else {
           await deps.workspace.remove(dir).catch(() => undefined);
         }
       }
-      if (closed) progress(`closed ${closed} worker tab${closed === 1 ? "" : "s"} left by an earlier Lead`);
+      if (closed) progress(`removed ${closed} worker worktree${closed === 1 ? "" : "s"} left by an earlier Lead`);
       return closed;
     },
   };

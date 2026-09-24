@@ -69,7 +69,7 @@ export type Judge = {
     changedFiles: string[];
     /**
      * The project's `verify` command, run by host-side code after the last
-     * commit; the guest controls the repository, so its output is guest text.
+     * commit; the worker controls the repository, so its output is worker text.
      */
     verification?: Pick<Verification, "command" | "exitCode" | "outputTail">;
   }): Promise<WorkerVerdict | undefined>;
@@ -290,7 +290,7 @@ export function describeJevProblem(problem: JevProblem): string {
     : `Jev is configured but failing (${problem.message}); PI Lead falls back to its defaults.`;
 }
 
-/** Method and host + path of a guest request, safe to show: no query, no control characters, at most `max` characters. */
+/** Method and host + path of a worker's request, safe to show: no query, no control characters, at most `max` characters. */
 export function describeRequest(method: string, url: string, max = 80): string {
   let target: string;
   try {
@@ -467,13 +467,13 @@ export function createJudge(options: {
           commits: clip(commits, 3_000),
           changedFiles: clip(changedFiles.join("\n"), 3_000),
           diffStat: clip(diffStat, 3_000),
-          // The command and exit code are the host's; the output was produced in the guest.
+          // The command and exit code are the host's; the output was produced by the worker.
           verification: verification
             ? {
                 command: clip(verification.command, 500),
                 exitCode: verification.exitCode,
                 outputTail: clip(verification.outputTail, 2_000),
-                note: "the project's verify command, run by PI Lead in the worker's sandbox after its last commit; -1 means it did not complete",
+                note: "the project's verify command, run by PI Lead in the worker's worktree after its last commit; -1 means it did not complete",
               }
             : "none: no run of the project's verify command for this result",
         },
@@ -524,7 +524,7 @@ export function createJudge(options: {
         {
           kind: choice("Why did this coding worker fail?", {
             transient: "A flaky network, rate limit, timeout or crash unrelated to the task; retrying may work.",
-            environment: "Missing tool, dependency, image or permission in the sandbox.",
+            environment: "Missing tool, dependency or permission in the worker's environment.",
             task_bug: "The code or tests are genuinely wrong and need diagnosis.",
             needs_info: "The ticket is unclear or a human decision is missing.",
           }),

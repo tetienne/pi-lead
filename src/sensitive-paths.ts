@@ -120,7 +120,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
- * The patterns (from the fixed list, never the guest-chosen file names) that
+ * The patterns (from the fixed list, never the worker-chosen file names) that
  * any of `files` matches, in list order. File names are repository-relative,
  * as `git diff --name-only` prints them.
  */

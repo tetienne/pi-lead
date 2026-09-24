@@ -9,27 +9,22 @@ import { snapshotProjectResources } from "../src/context-snapshot.ts";
 
 async function repo() {
   const root = await mkdtemp(join(tmpdir(), "pi-lead-snap-"));
-  const clone = join(root, "repo");
-  await mkdir(join(clone, ".agents", "skills", "house-style"), { recursive: true });
-  await mkdir(join(clone, ".pi", "prompts"), { recursive: true });
-  await writeFile(join(clone, "AGENTS.md"), "Use tabs.\n");
-  await writeFile(join(clone, ".agents", "skills", "house-style", "SKILL.md"), "---\nname: house-style\n---\n");
-  await writeFile(join(clone, ".pi", "prompts", "fix.md"), "Fix it\n");
-  await writeFile(join(clone, ".pi", "APPEND_SYSTEM.md"), "Be terse.\n");
+  const worktree = join(root, "worktree");
+  await mkdir(join(worktree, ".agents", "skills", "house-style"), { recursive: true });
+  await mkdir(join(worktree, ".pi", "prompts"), { recursive: true });
+  await writeFile(join(worktree, ".agents", "skills", "house-style", "SKILL.md"), "---\nname: house-style\n---\n");
+  await writeFile(join(worktree, ".pi", "prompts", "fix.md"), "Fix it\n");
+  await writeFile(join(worktree, ".pi", "APPEND_SYSTEM.md"), "Be terse.\n");
   const secret = join(root, "secret.json");
   await writeFile(secret, "{\"token\":\"sk-live\"}");
-  await symlink(secret, join(clone, "CLAUDE.md"));
-  await symlink(secret, join(clone, ".agents", "skills", "house-style", "leak.md"));
-  return { root, clone };
+  await symlink(secret, join(worktree, ".agents", "skills", "house-style", "leak.md"));
+  return { root, worktree };
 }
 
-test("context files and trusted resources are copied out of the clone, never through symlinks", async () => {
-  const { root, clone } = await repo();
-  const workDir = join(root, "cwd");
+test("trusted resources are copied out of the worktree, never through symlinks", async () => {
+  const { root, worktree } = await repo();
   const resourceDir = join(root, "resources");
-  const resources = await snapshotProjectResources({ clonePath: clone, workDir, resourceDir, projectTrusted: true });
-  assert.equal(await readFile(join(workDir, "AGENTS.md"), "utf8"), "Use tabs.\n");
-  assert.ok(!existsSync(join(workDir, "CLAUDE.md")), "a symlinked context file is skipped");
+  const resources = await snapshotProjectResources({ worktreePath: worktree, resourceDir, projectTrusted: true });
   assert.deepEqual(resources.skills, [join(resourceDir, "agents-skills")]);
   assert.ok(existsSync(join(resourceDir, "agents-skills", "house-style", "SKILL.md")));
   assert.ok(!existsSync(join(resourceDir, "agents-skills", "house-style", "leak.md")), "symlinks inside skills are skipped");
@@ -37,9 +32,9 @@ test("context files and trusted resources are copied out of the clone, never thr
   assert.equal(await readFile(resources.appendSystem!, "utf8"), "Be terse.\n");
 });
 
-test("untrusted projects only get their context files, as Pi loads them regardless of trust", async () => {
-  const { root, clone } = await repo();
-  const resources = await snapshotProjectResources({ clonePath: clone, workDir: join(root, "cwd"), resourceDir: join(root, "res"), projectTrusted: false });
+test("untrusted projects get no resources; Pi loads AGENTS.md from the worktree itself", async () => {
+  const { root, worktree } = await repo();
+  const resources = await snapshotProjectResources({ worktreePath: worktree, resourceDir: join(root, "res"), projectTrusted: false });
   assert.deepEqual(resources, { skills: [], prompts: [] });
-  assert.ok(existsSync(join(root, "cwd", "AGENTS.md")));
+  assert.ok(!existsSync(join(root, "res")), "nothing is written for an untrusted project");
 });

@@ -1,19 +1,13 @@
+import { execFile } from "node:child_process";
 import { readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 
-import type { VM } from "@earendil-works/gondolin";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isBashToolResult, isEditToolResult, isWriteToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge } from "../jev.ts";
-import { decisionLine, shouldShow } from "../jev-display.ts";
 import { quotaError } from "../quota.ts";
 import { plainTitle } from "../worker-display.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
-import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, serviceEnv, serviceHosts, type Mount } from "../sandbox.ts";
-import { createEgressPolicy } from "./egress.ts";
-import { registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
 import { createStuckDetector } from "./stuck.ts";
 import { runVerification, shouldVerify } from "./verify.ts";
 import { registerWebSearch } from "./web-search.ts";
@@ -22,17 +16,26 @@ import { registerWebSearch } from "./web-search.ts";
 export const COMMIT_LEFTOVERS =
   '{ git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes"); } 2>&1';
 
+/** Run a shell command on the host, in `cwd`. Never rejects: a non-zero exit is just a result. */
+function runShell(command: string, cwd: string): Promise<{ exitCode: number; stdout: string }> {
+  return new Promise((resolve) => {
+    execFile("/bin/sh", ["-lc", command], { cwd, encoding: "utf8", maxBuffer: 16 << 20 }, (error, stdout) => {
+      const code = (error as (NodeJS.ErrnoException & { code?: unknown }) | null)?.code;
+      resolve({ exitCode: error ? (typeof code === "number" ? code : 1) : 0, stdout });
+    });
+  });
+}
+
 /**
- * Loaded only into worker Pi processes (`--no-extensions -e`). Pi and this
- * extension stay on the host; every model-driven action goes through the
- * sandboxed tools.
+ * Loaded only into worker Pi processes (`--no-extensions -e`). The worker runs
+ * on the host, cwd its own git worktree (`task.worktreePath`): its tools are
+ * Pi's own built-in ones, with no isolation from the host.
  */
 export default function worker(pi: ExtensionAPI) {
   pi.registerFlag("pi-lead-task", { type: "string", description: "PI Lead worker task file" });
 
   let task: WorkerTask | undefined;
   let latestContext: ExtensionContext | undefined;
-  let running: Promise<SandboxHandle> | undefined;
   let seq = 0;
   /** Error of the last assistant message of the run, until Pi settles. */
   let runError: string | undefined;
@@ -52,72 +55,6 @@ export default function worker(pi: ExtensionAPI) {
     return task;
   };
 
-  let judge: Judge | undefined;
-  const getJudge = async () => {
-    const current = await loadTask();
-    judge ??= createJudge({
-      ask: createAskJev(current.jev),
-      config: current.jev,
-      ledger: createLedger(join(getAgentDir(), "pi-lead", "jev-usage.json")),
-      onProblem: (problem) => latestContext?.ui.notify(describeJevProblem(problem), "warning"),
-      // In the worker's own tab only (egress checks); allowed egress is just counted.
-      onDecision: (decision) => {
-        if (shouldShow(decision)) latestContext?.ui.notify(decisionLine(decision), decision.outcome === "deny" ? "warning" : "info");
-      },
-    });
-    return judge;
-  };
-
-  const startVm = async (ctx?: ExtensionContext) => {
-    const current = await loadTask();
-    const judge = await getJudge();
-    const allow = createEgressPolicy({
-      allowedHosts: current.sandbox.allowedHosts,
-      task: current.task,
-      judge,
-      askHuman: async (question) =>
-        latestContext?.hasUI ? latestContext.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) : false,
-      log: (line) => latestContext?.ui.notify(line, "info"),
-    });
-    ctx?.ui.setStatus("pi-lead", "Gondolin: starting");
-    const mounts: Record<string, Mount> = { [GUEST_WORKSPACE]: { host: current.clonePath } };
-    // Read-only: a worker must not be able to poison the toolchains of the next one.
-    if (current.toolchainCache) mounts[GUEST_MISE_DIR] = { host: current.toolchainCache, readonly: true };
-    // Skill folders at their host paths, so a skill's templates and scripts resolve in the guest.
-    for (const dir of current.readonlyMounts ?? []) mounts[dir] = { host: dir, readonly: true };
-    const vm = await createSandboxVm({
-      label: `pi-lead ${current.title}`,
-      sandbox: current.sandbox,
-      mounts,
-      allowRequest: allow,
-      ...(current.services?.length ? { tcpHosts: serviceHosts(current.services) } : {}),
-    });
-    const env = { ...guestEnv(current.toolchainCache !== undefined), ...(current.services?.length ? serviceEnv(current.services) : {}) };
-    const probe = await vm.exec(["/bin/sh", "-lc", "command -v bash || true; command -v git || true"], { env });
-    const [bash, gitPath] = probe.stdout.split("\n").map((line) => line.trim());
-    if (!gitPath) {
-      await vm.close();
-      throw new Error("the Gondolin image has no git; use PI Lead's default image or add git to yours");
-    }
-    // Gondolin's init writes this bundle only when its MITM CA was mounted at boot; without it every HTTPS call fails x509.
-    const trust = await vm.exec(["/bin/sh", "-c", "test -r /run/gondolin/ca-certificates.crt"], { env });
-    if (trust.exitCode !== 0) {
-      await vm.close();
-      throw new Error("the Gondolin guest booted without its MITM CA (too many mounts for the kernel command line); HTTPS would fail");
-    }
-    ctx?.ui.setStatus("pi-lead", `Gondolin: ${vm.id.slice(0, 8)} · ${current.branch}`);
-    return { vm, shellPath: bash || "/bin/sh", env, root: current.clonePath };
-  };
-
-  const ensureVm = (ctx?: ExtensionContext) => {
-    if (ctx) latestContext = ctx;
-    running ??= startVm(ctx).catch((error) => {
-      running = undefined;
-      throw error;
-    });
-    return running;
-  };
-
   const stuck = createStuckDetector({
     // Queued into the running turn; skipped when the run is already over.
     steer: (text) => {
@@ -125,25 +62,24 @@ export default function worker(pi: ExtensionAPI) {
     },
   });
 
-  registerSandboxTools(
-    pi,
-    process.cwd(),
-    ensureVm,
-    (command, exitCode) => {
-      if (task && task.stuckDetection !== false) stuck.record(command, exitCode);
-    },
-    () => stuck.progress(),
-  );
+  // Fed by Pi's own tool events instead of a re-registered bash tool: a
+  // failing shell command counts against the streak, a file change clears it.
+  pi.on("tool_result", async (event) => {
+    if (isBashToolResult(event) && typeof event.input.command === "string") {
+      if (task && task.stuckDetection !== false) stuck.record(event.input.command, event.isError ? 1 : 0);
+    } else if ((isWriteToolResult(event) || isEditToolResult(event)) && !event.isError) {
+      stuck.progress();
+    }
+  });
 
   registerWebSearch(pi);
 
-  /**
-   * Commit anything left in the tree, inside the guest, so the host only ever
-   * fetches from the clone.
-   */
-  const commitLeftovers = async (ctx?: ExtensionContext) => {
-    const { vm, env } = await ensureVm(ctx);
-    return vm.exec(["/bin/sh", "-lc", COMMIT_LEFTOVERS], { cwd: GUEST_WORKSPACE, env });
+  /** Commit anything left in the tree, so the branch fetched back holds every change. */
+  const commitLeftovers = async () => {
+    const current = await loadTask();
+    // Without it, execFile would commit in whatever repo Pi was started from.
+    if (!current.worktreePath) throw new Error("the task names no worktree to commit in");
+    return runShell(COMMIT_LEFTOVERS, current.worktreePath);
   };
 
   const writeResult = async (result: WorkerResult) => {
@@ -168,10 +104,9 @@ export default function worker(pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const current = await loadTask();
-      const { vm, shellPath, env } = await ensureVm(ctx);
       // A failed commit (hook, identity) must not lose work: report it to the
       // model instead of finishing.
-      const commit = await commitLeftovers(ctx);
+      const commit = await commitLeftovers();
       if (commit.exitCode !== 0) {
         throw new Error(`Could not commit the remaining changes; fix this, commit, then call finish again:\n${commit.stdout.slice(-2_000)}`);
       }
@@ -180,14 +115,13 @@ export default function worker(pi: ExtensionAPI) {
       let verification: WorkerResult["verification"];
       if (shouldVerify(current, params.status)) {
         ctx?.ui.setStatus("pi-lead", `Verifying: ${current.verify}`);
-        verification = await runVerification(vm, {
+        verification = await runVerification({
           command: current.verify,
-          shellPath,
-          env,
+          cwd: current.worktreePath,
           ...(current.verifyTimeoutMinutes ? { timeoutMinutes: current.verifyTimeoutMinutes } : {}),
           ...(signal ? { signal } : {}),
         });
-        ctx?.ui.setStatus("pi-lead", `Gondolin: ${vm.id.slice(0, 8)} · ${current.branch}`);
+        ctx?.ui.setStatus("pi-lead", `${current.kind} · ${current.branch}`);
         // Stopped by the user: nothing is reported, `finish` can be called again.
         if (signal?.aborted) throw new Error("aborted");
       }
@@ -200,13 +134,6 @@ export default function worker(pi: ExtensionAPI) {
         ...(params.findings ? { findings: params.findings } : {}),
         ...(verification ? { verification } : {}),
       };
-      if (params.status === "done") {
-        // The Lead usually closes a finished worker's tab: stop the VM first
-        // so no guest outlives it. Pi stays up in case the Lead disagrees and
-        // relays more work; the next tool call starts a fresh VM on the clone.
-        running = undefined;
-        await vm.close();
-      }
       await writeResult(result);
       return {
         content: [
@@ -226,21 +153,13 @@ export default function worker(pi: ExtensionAPI) {
     const current = await loadTask();
     // `/resume` in the worker's tab lists it by its ticket rather than its long first prompt.
     if (!pi.getSessionName()) pi.setSessionName(`${current.kind}: ${plainTitle(current.title)}`);
-    void ensureVm(ctx).catch((error) => ctx.ui.notify(`PI Lead sandbox: ${error instanceof Error ? error.message : String(error)}`, "error"));
+    ctx.ui.setStatus("pi-lead", `${current.kind} · ${current.branch}`);
   });
 
   pi.on("before_agent_start", async (event) => {
-    const current = await loadTask();
     // A new prompt from the Lead or the user: a new cycle for stuck detection.
     stuck.reset();
-    const localLine = `Current working directory: ${process.cwd()}`;
-    const guestLine =
-      `Current working directory: ${GUEST_WORKSPACE} (Gondolin VM; branch ${current.branch})` +
-      (current.services?.length ? ` · services: ${current.services.map((service) => `${service.name}:${service.port}`).join(", ")}` : "");
-    const prompt = event.systemPrompt.includes(localLine)
-      ? event.systemPrompt.replace(localLine, guestLine)
-      : `${event.systemPrompt}\n\n${guestLine}`;
-    return { systemPrompt: `${prompt}\n${WORKER_RULES}` };
+    return { systemPrompt: `${event.systemPrompt}\n${WORKER_RULES}` };
   });
 
   // A run that ends on a provider error (exhausted quota, or anything Pi
@@ -261,24 +180,15 @@ export default function worker(pi: ExtensionAPI) {
     const summary = `${quota ? "The model's quota is exhausted" : "The model stopped on a provider error"}: ${error.slice(0, 500)}`;
     try {
       const current = await loadTask();
-      // Keep the work so far on the branch for whoever continues it, then stop
-      // the VM: the worker now waits, and its next tool call starts a new one.
-      // No VM means no tool ran, so there is nothing to commit.
-      let uncommitted = false;
-      const active = running;
-      if (active) {
-        const handle = await active.catch(() => undefined);
-        const commit = handle ? await commitLeftovers(ctx).catch(() => undefined) : undefined;
-        uncommitted = handle !== undefined && commit?.exitCode !== 0;
-        if (running === active) running = undefined;
-        await handle?.vm.close().catch(() => undefined);
-      }
+      // Keep the work so far on the branch for whoever continues it.
+      const commit = await commitLeftovers().catch(() => undefined);
+      const uncommitted = commit !== undefined && commit.exitCode !== 0;
       await writeResult({
         version: 1,
         id: current.id,
         seq: ++seq,
         status: "blocked",
-        summary: uncommitted ? `${summary}\nSome changes could not be committed and stay in the clone.` : summary,
+        summary: uncommitted ? `${summary}\nSome changes could not be committed and stay in the worktree.` : summary,
         modelError: error.slice(0, 2_000),
         ...(quota ? { quota } : {}),
         ...(uncommitted ? { uncommitted } : {}),
@@ -287,11 +197,5 @@ export default function worker(pi: ExtensionAPI) {
       // Without a result the Lead would wait on this idle tab until Pi exits.
       ctx?.ui.notify(`PI Lead could not report "${summary}": ${failure instanceof Error ? failure.message : String(failure)}`, "error");
     }
-  });
-
-  pi.on("session_shutdown", async () => {
-    const active = running;
-    running = undefined;
-    if (active) await (await active.catch(() => undefined))?.vm.close();
   });
 }

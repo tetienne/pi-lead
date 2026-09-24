@@ -1,8 +1,8 @@
 /**
  * Notices a worker that keeps repeating a failing approach, which burns the
- * user's model quota. Deterministic: failing shell commands seen by the
- * host-side bash wrapper count, and a file written or edited through the
- * sandboxed tools clears them, so a test-first loop (edit, test fails, edit)
+ * user's model quota. Deterministic: failing shell commands seen via Pi's own
+ * `tool_result` event count, and a file written or edited through Pi's own
+ * tools clears them, so a test-first loop (edit, test fails, edit)
  * never counts. The response is one steer per cycle; the worker is never stopped.
  */
 

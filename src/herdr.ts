@@ -5,16 +5,18 @@ const execFileAsync = promisify(execFile);
 
 /** Host-side Herdr presentation. Workers never receive the Herdr socket. */
 export type Herdr = {
-  /** The Lead's own workspace, where worker tabs open. */
+  /** The Lead's own workspace, where the Lead itself runs. */
   readonly workspace: string;
-  /** Open a named tab without stealing focus and type `command` into its shell. */
-  openWorkerTab(input: { label: string; cwd: string; command: string }): Promise<{ tabId: string; paneId: string }>;
+  /** Create a linked git worktree workspace for a worker; its pane starts as an idle shell. */
+  createWorktree(input: { cwd: string; branch: string; base: string; path: string; label: string }): Promise<{ workspaceId: string; paneId: string }>;
+  /** Type a command into an idle pane's shell, as if typed (used right after `createWorktree`). */
+  runCommand(paneId: string, command: string): Promise<void>;
   /** Submit text to the Pi running in a pane, as if typed (bracketed paste, then Enter). */
   sendToAgent(paneId: string, text: string): Promise<void>;
-  /** Close a tab; this kills the processes in its panes (worker Pi and its VM). */
-  closeTab(tabId: string): Promise<void>;
-  /** Ids of the tabs that currently exist in a workspace. */
-  listTabs(workspace: string): Promise<string[]>;
+  /** Remove a worker's worktree workspace: kills its pane and deletes the checkout. The branch is kept. */
+  removeWorktree(workspaceId: string): Promise<void>;
+  /** Ids of the workspaces that currently exist. */
+  listWorkspaces(): Promise<string[]>;
   /**
    * Display-only pane metadata (title, sidebar name, tokens, working label).
    * Never lifecycle state: that stays with Herdr's Pi integration.
@@ -22,8 +24,8 @@ export type Herdr = {
   reportMetadata(paneId: string, metadata: PaneMetadata): Promise<void>;
   /** Name the agent in a pane (live-unique); fails until Herdr has detected the agent. */
   renameAgent(paneId: string, name: string): Promise<void>;
-  /** Relabel a tab (the worker's state glyph and title). */
-  renameTab(tabId: string, label: string): Promise<void>;
+  /** Relabel a worktree workspace (the worker's state glyph and title, shown in the sidebar). */
+  renameWorktree(workspaceId: string, label: string): Promise<void>;
   /** A Herdr toast, for a worker that stopped and needs the user. */
   notify(title: string, sound: "request" | "none"): Promise<void>;
 };
@@ -42,17 +44,6 @@ export type PaneMetadata = {
 
 /** `--agent pi` makes Herdr apply the presentation fields only while a Pi occupies the pane. */
 export const METADATA_SOURCE = "custom:pi-lead";
-
-function findString(value: unknown, field: string): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  if (typeof record[field] === "string") return record[field];
-  for (const nested of Object.values(record)) {
-    const found = findString(nested, field);
-    if (found) return found;
-  }
-  return undefined;
-}
 
 function collectStrings(value: unknown, field: string, found: string[] = []): string[] {
   if (!value || typeof value !== "object") return found;
@@ -91,13 +82,18 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
   let legacyMetadata = false;
   return {
     workspace,
-    async openWorkerTab({ label, cwd, command }) {
-      const created = await herdr(["tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus"]);
-      const tabId = findString(created, "tab_id");
-      const paneId = findString(created, "pane_id");
-      if (!tabId || !paneId) throw new Error("herdr did not return tab_id and pane_id");
+    async createWorktree({ cwd, branch, base, path, label }) {
+      const created = await herdr(["worktree", "create", "--cwd", cwd, "--branch", branch, "--base", base, "--path", path, "--label", label, "--no-focus"]);
+      const result = (created as { result?: unknown } | undefined)?.result as
+        | { workspace?: { workspace_id?: unknown }; root_pane?: { pane_id?: unknown } }
+        | undefined;
+      const workspaceId = result?.workspace?.workspace_id;
+      const paneId = result?.root_pane?.pane_id;
+      if (typeof workspaceId !== "string" || typeof paneId !== "string") throw new Error("herdr did not return a workspace_id and pane_id");
+      return { workspaceId, paneId };
+    },
+    async runCommand(paneId, command) {
       await herdr(["pane", "run", paneId, command]);
-      return { tabId, paneId };
     },
     async sendToAgent(paneId, text) {
       // Only through the agent surface: the target must be a live, detected
@@ -105,11 +101,11 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
       // pane, which could be a host shell once Pi has exited.
       await herdr(["agent", "prompt", paneId, text]);
     },
-    async closeTab(tabId) {
-      await herdr(["tab", "close", tabId]);
+    async removeWorktree(workspaceId) {
+      await herdr(["worktree", "remove", "--workspace", workspaceId, "--force"]);
     },
-    async listTabs(inWorkspace) {
-      return collectStrings(await herdr(["tab", "list", "--workspace", inWorkspace]), "tab_id");
+    async listWorkspaces() {
+      return collectStrings(await herdr(["workspace", "list"]), "workspace_id");
     },
     async reportMetadata(paneId, { title, displayAgent, tokens, workingLabel, idleLabel, blockedLabel, seq }) {
       // argv, never a shell: titles and branches are user/model text.
@@ -160,8 +156,8 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     async renameAgent(paneId, name) {
       await herdr(["agent", "rename", paneId, name]);
     },
-    async renameTab(tabId, label) {
-      await herdr(["tab", "rename", "--", tabId, label]);
+    async renameWorktree(workspaceId, label) {
+      await herdr(["workspace", "rename", "--", workspaceId, label]);
     },
     async notify(title, sound) {
       await herdr(["notification", "show", title, "--sound", sound]);

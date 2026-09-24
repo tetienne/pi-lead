@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import { DELEGATED_SKILLS } from "../src/guidance.ts";
-import lead, { findHerdrPiExtension, skillMounts, workerCommand } from "../src/lead.ts";
+import lead, { findHerdrPiExtension, startupWarnings, workerCommand } from "../src/lead.ts";
 import { parseWorkerResult, workerPrompt } from "../src/protocol.ts";
 
 type Handler = (event: any, ctx?: any) => any;
@@ -50,7 +50,7 @@ test("the Lead never intercepts user input: the model answers questions itself",
     }
   }
   assert.ok(pi.handlers.has("tool_call"), "the report guard is registered");
-  assert.deepEqual(pi.commands, ["lead-doctor", "jev"]);
+  assert.deepEqual(pi.commands, ["jev"]);
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker", "git_read"]);
 });
 
@@ -109,36 +109,6 @@ test("the Matt skills ship with the package and are discovered", async () => {
   assert.ok(manifest.files.includes(".agents/skills/"));
 });
 
-test("every non-project skill the Lead loaded is mounted in the guest, once", () => {
-  const skill = (path: string, scope = "user") => ({ name: "x", source: "skill", sourceInfo: { path, scope } }) as any;
-  const [packaged, ...rest] = skillMounts([
-    skill("/home/.pi/agent/vendor/go-skills/go/SKILL.md"),
-    skill("/home/.pi/agent/git/github.com/a/ponytail/skills/ponytail/SKILL.md"),
-    skill("/home/.pi/agent/vendor/go-skills/go/SKILL.md"),
-    skill("/repo/.agents/skills/local/SKILL.md", "project"),
-    skill("/home/notes/review.md"),
-    { name: "p", source: "prompt", sourceInfo: { path: "/home/prompts/p.md", scope: "user" } } as any,
-  ]);
-  assert.ok(existsSync(join(packaged!, "ask-matt", "SKILL.md")), "the package's own skills come first");
-  assert.deepEqual(rest, ["/home/.pi/agent/vendor/go-skills/go", "/home/.pi/agent/git/github.com/a/ponytail/skills/ponytail"]);
-  assert.deepEqual(skillMounts([skill(join(packaged!, "ask-matt", "SKILL.md"), "temporary")]), [packaged]);
-});
-
-test("sibling skills of one package share a single mount of their skills folder", () => {
-  const skill = (path: string) => ({ name: "x", source: "skill", sourceInfo: { path, scope: "user" } }) as any;
-  const [, ...rest] = skillMounts([
-    skill("/home/.pi/agent/git/github.com/obra/superpowers/skills/brainstorming/SKILL.md"),
-    skill("/home/.pi/agent/vendor/go-skills/go/SKILL.md"),
-    skill("/home/.pi/agent/git/github.com/obra/superpowers/skills/writing-plans/SKILL.md"),
-    skill("/home/.agents/skills/find-skills/SKILL.md"),
-  ]);
-  assert.deepEqual(rest, [
-    "/home/.pi/agent/git/github.com/obra/superpowers/skills",
-    "/home/.pi/agent/vendor/go-skills/go",
-    "/home/.agents/skills/find-skills",
-  ]);
-});
-
 test("workers get the Lead's skills plus host copies of the repo's resources, and no extensions", () => {
   const base = {
     taskPath: "/tmp/t/task.json",
@@ -150,7 +120,8 @@ test("workers get the Lead's skills plus host copies of the repo's resources, an
     ...base,
     resources: { skills: ["/tmp/t/resources/agents-skills"], prompts: ["/tmp/t/resources/prompts"], appendSystem: "/tmp/t/resources/APPEND_SYSTEM.md" },
   });
-  for (const flag of ["--no-approve", "--no-extensions", "--no-builtin-tools"]) assert.ok(argv.includes(flag), flag);
+  for (const flag of ["--no-approve", "--no-extensions"]) assert.ok(argv.includes(flag), flag);
+  assert.ok(!argv.includes("--no-builtin-tools"), "the worker uses Pi's stock tools");
   assert.ok(!argv.includes("--no-skills"), "global skills load like in the Lead");
   assert.match(argv[argv.indexOf("-e") + 1]!, /src\/worker\/extension\.ts$/);
   const skillArgs = argv.flatMap((arg, i) => (arg === "--skill" ? [argv[i + 1]!] : []));
@@ -158,7 +129,7 @@ test("workers get the Lead's skills plus host copies of the repo's resources, an
   assert.ok(skillArgs.includes("/tmp/t/resources/agents-skills"));
   assert.equal(argv[argv.indexOf("--prompt-template") + 1], "/tmp/t/resources/prompts");
   assert.equal(argv[argv.indexOf("--append-system-prompt") + 1], "/tmp/t/resources/APPEND_SYSTEM.md");
-  assert.ok(!argv.some((arg) => arg.includes("/repo")), "nothing is read from the guest-writable clone");
+  assert.ok(!argv.some((arg) => arg.includes("/repo")), "nothing is read from the worker's worktree");
   assert.deepEqual(argv.slice(-2), ["--", "/skill:implement do it"]);
 
   const bare = workerCommand({ ...base, resources: { skills: [], prompts: [] } });
@@ -172,6 +143,12 @@ test("Herdr's Pi integration is found where `herdr integration install pi` write
   await mkdir(join(home, "extensions"), { recursive: true });
   await writeFile(join(home, "extensions", "herdr-agent-state.ts"), "");
   assert.equal(findHerdrPiExtension(home), join(home, "extensions", "herdr-agent-state.ts"));
+});
+
+test("the session start warns only about what stops or degrades workers", () => {
+  assert.deepEqual(startupWarnings({ herdr: "w1", herdrPi: true }), []);
+  assert.match(startupWarnings({ herdrPi: true })[0]!, /not inside Herdr/);
+  assert.match(startupWarnings({ herdr: "w1", herdrPi: false })[0]!, /herdr integration install pi/);
 });
 
 test("worker prompts invoke Matt skills explicitly and results are validated", () => {
