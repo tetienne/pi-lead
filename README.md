@@ -64,9 +64,11 @@ you ─► Lead (Pi, your tab)
   while one waits on you), and events such as "started on…" or "waits for a
   free worker slot" appear as dim transcript lines that the model never sees.
   Each result shows in the Lead as a card: verdict, time, model, commits and
-  diff, the verify line, the branch, the first lines of what the worker wrote
-  (marked untrusted), review hints and next steps. Expand it to read the full
-  report the model received.
+  diff, the verify line, the branch, review hints and next steps, with every
+  line the worker wrote behind a `│` gutter, marked untrusted. Expand it to
+  read the full report the model received. `/lead-doctor` checks the setup
+  (Herdr and its Pi integration, Jev, the worker image, `verify`, the model
+  behind each tier); the Lead warns at start only when workers cannot run.
   Tab glyphs, state labels and notifications need Herdr 0.9.1 or later
   (`tab rename`, `notification show`, `--seq`); on an older Herdr, tabs keep
   their plain title and the pane keeps its title, tokens and working label.

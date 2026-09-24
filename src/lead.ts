@@ -8,10 +8,12 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { loadConfig, type LeadConfig } from "./config.ts";
-import { createDelegator, type Delegator, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
+import { createDelegator, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
-import { createWorkerImage } from "./image.ts";
+import { doctorReport, startupWarnings, type SetupFacts } from "./doctor.ts";
+import { createWorkerImage, hasReleasedImage, PACKAGE_VERSION, releaseImageRef } from "./image.ts";
+import { resolveRoute } from "./model-routing.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
 import { renderCard } from "./report-card.ts";
@@ -116,6 +118,33 @@ export default function lead(pi: ExtensionAPI) {
   const recent: JevDecision[] = [];
   registerReportGuard(pi);
 
+  let leadConfig: LeadConfig | undefined;
+
+  /** What `/lead-doctor` and the session-start warning look at. */
+  const setupFacts = (ctx: ExtensionContext, config: LeadConfig): SetupFacts => {
+    const herdr = createHerdrCli();
+    const lead = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
+    const available = ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id }));
+    return {
+      version: PACKAGE_VERSION,
+      ...(herdr ? { herdr: herdr.workspace } : {}),
+      herdrPi: findHerdrPiExtension() !== undefined,
+      jev: {
+        configured: jev !== undefined,
+        via: config.jev.via,
+        keyEnv: config.jev.apiKeyEnv,
+        budgetUsd: config.jev.dailyBudgetUsd,
+        ...(jevUsage ? { calls: jevUsage.calls, usd: jevUsage.usd } : {}),
+      },
+      tiers: (["fast", "standard", "deep"] as const).map((tier) => ({ tier, route: resolveRoute(tier, config.tiers, lead, available) })),
+      maxWorkers: config.maxWorkers,
+      ...(config.verify ? { verify: config.verify } : {}),
+      image: config.sandbox.image
+        ? { custom: config.sandbox.image }
+        : { released: releaseImageRef(PACKAGE_VERSION), present: hasReleasedImage() },
+    };
+  };
+
   const status = () => {
     const parts: string[] = [];
     const counts = workerCounts(delegator?.list() ?? []);
@@ -139,6 +168,7 @@ export default function lead(pi: ExtensionAPI) {
     hasUI = ctx.hasUI;
     const agentDir = getAgentDir();
     const config: LeadConfig = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
+    leadConfig = config;
     const ask = createAskJev(config.jev);
     const ledger = createLedger(join(agentDir, "pi-lead", "jev-usage.json"));
     jev = ask ? { ledger, budgetUsd: config.jev.dailyBudgetUsd } : undefined;
@@ -203,6 +233,8 @@ export default function lead(pi: ExtensionAPI) {
     closed = false;
     recent.length = 0;
     const current = await setup(ctx);
+    // Only what stops workers or degrades them; `/lead-doctor` shows the rest.
+    if (ctx.hasUI && leadConfig) for (const warning of startupWarnings(setupFacts(ctx, leadConfig))) ctx.ui.notify(warning, "warning");
     // Close tabs a crashed or killed Lead left open; in the background, never blocking the session.
     void current.reconcile().catch(() => undefined);
   });
@@ -238,6 +270,15 @@ export default function lead(pi: ExtensionAPI) {
     render: (width: number) => [theme.fg("dim", renderProgress(entry.data?.text, width))],
     invalidate: () => undefined,
   }));
+
+  pi.registerCommand("lead-doctor", {
+    description: "Check PI Lead's setup: Herdr, Jev, worker image, verify command and the model behind each tier",
+    handler: async (_args, ctx) => {
+      if (!leadConfig) await setup(ctx);
+      if (jev) jevUsage = await jev.ledger.usage().catch(() => jevUsage);
+      ctx.ui.notify(doctorReport(setupFacts(ctx, leadConfig!)), "info");
+    },
+  });
 
   pi.registerCommand("jev", {
     description: "Jev's calls and spend today, and this session's last decisions",
@@ -276,13 +317,20 @@ export default function lead(pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
-      const started = await current.start(params, {
-        cwd: ctx.cwd,
-        lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-        available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
-        projectTrusted: ctx.isProjectTrusted(),
-        ...(ctx.hasUI ? { confirm: (question: string) => ctx.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) } : {}),
-      });
+      // Jev's intake and difficulty call can take a few seconds: say what the wait is.
+      if (ctx.hasUI) ctx.ui.setWorkingMessage("Sizing up the ticket and picking a model…");
+      let started: StartResult;
+      try {
+        started = await current.start(params, {
+          cwd: ctx.cwd,
+          lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+          available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
+          projectTrusted: ctx.isProjectTrusted(),
+          ...(ctx.hasUI ? { confirm: (question: string) => ctx.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) } : {}),
+        });
+      } finally {
+        if (ctx.hasUI) ctx.ui.setWorkingMessage();
+      }
       status();
       return { content: [{ type: "text", text: started.text }], details: started };
     },

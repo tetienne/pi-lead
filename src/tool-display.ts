@@ -14,9 +14,9 @@ export type Color = "toolTitle" | "accent" | "muted" | "dim" | "success" | "warn
 export type Paint = (color: Color, text: string) => string;
 
 /** Multi-line text with every line cleaned like `safePreview`, for expanded views. */
-export function cleanLines(text: string, maxLines = 40): string {
+export function cleanLines(text: string, maxLines = 40, lineLimit = 400): string {
   const lines = text.split("\n");
-  const shown = lines.slice(0, maxLines).map((line) => safePreview(line, 400));
+  const shown = lines.slice(0, maxLines).map((line) => safePreview(line, lineLimit));
   return [...shown, ...(lines.length > maxLines ? [`… ${lines.length - maxLines} more lines`] : [])].join("\n");
 }
 

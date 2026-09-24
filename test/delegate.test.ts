@@ -216,7 +216,7 @@ test("delegate returns at once; the result arrives later, then the worker is cle
   assert.equal(card.title, "Add CSV export");
   assert.equal(card.model, "anthropic/claude-sonnet-5");
   assert.ok(card.elapsedMs >= 0);
-  assert.equal(card.summary, outcome.text.match(/Summary:\n([^\n]*)/)![1]);
+  assert.equal(card.summary, undefined, "the worker's words stay in the report text only");
   assert.ok(card.next.some((line) => line.includes("nothing was pushed")));
 });
 

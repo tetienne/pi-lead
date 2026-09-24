@@ -86,7 +86,7 @@ export type ReportCard = {
   title: string;
   model: string;
   thinking: string;
-  /** Since the task was delegated. */
+  /** This run: since the worker last started running, or since delegation. */
   elapsedMs: number;
   branch?: string;
   commits: number;
@@ -94,8 +94,14 @@ export type ReportCard = {
   diff?: string;
   /** The verify line of the report (host text, the command from the config). */
   verify?: string;
-  /** Written by the worker, or the error that ended it: untrusted. */
-  summary: string;
+  /** The verify run passed (exit 0). */
+  verified?: boolean;
+  /**
+   * The error that ended a failed worker (untrusted). A finished worker's own
+   * words are the report's `<worker-report untrusted>` block, which the card
+   * shows from the text the model reads, so they are not stored twice.
+   */
+  summary?: string;
   /** Host-written next steps of the report. */
   next: string[];
 };
@@ -190,8 +196,9 @@ type Worker = WorkerInfo & {
   lastSeq: number;
   attempts: number;
   createdAt?: string;
-  /** When the task was delegated, for the report card. */
+  /** When the task was delegated, and when the worker last started running (a relayed answer, a reroute): the card times this run. */
   delegatedAt: number;
+  runningSince?: number;
   /** When the worker started waiting on a question (waitingTimeoutMinutes). */
   waitingSince?: number;
   /** The label Herdr last took for the tab, so a state change renames it only when it changes. */
@@ -388,6 +395,7 @@ export function createDelegator(deps: DelegateDeps) {
   };
 
   const setState = (worker: Worker, state: WorkerState) => {
+    if (state === "running" && worker.state !== "running") worker.runningSince = now();
     worker.state = state;
     // Only a finish says why a worker waits; any other state starts from none.
     if (state !== "waiting" && state !== "done" && state !== "failed") worker.verdict = undefined;
@@ -663,7 +671,7 @@ export function createDelegator(deps: DelegateDeps) {
     title: worker.title,
     model: worker.route.model,
     thinking: worker.route.thinking,
-    elapsedMs: Math.max(0, now() - worker.delegatedAt),
+    elapsedMs: Math.max(0, now() - (worker.runningSince ?? worker.delegatedAt)),
   });
 
   const settle = async (worker: Worker, result: WorkerResult) => {
@@ -768,8 +776,7 @@ export function createDelegator(deps: DelegateDeps) {
           ...(worker.branch ? { branch: worker.branch } : {}),
           commits: collected.commits ? collected.commits.trim().split("\n").length : 0,
           ...(collected.diffStat.trim() ? { diff: collected.diffStat.trim().split("\n").at(-1)!.trim() } : {}),
-          ...(claimsProgress ? { verify: verificationLine(verify, verification) } : {}),
-          summary: result.summary,
+          ...(claimsProgress ? { verify: verificationLine(verify, verification), verified: verification?.exitCode === 0 } : {}),
           next,
         },
       },

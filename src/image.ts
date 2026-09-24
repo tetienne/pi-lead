@@ -73,6 +73,11 @@ async function download(url: string, to: string, fetchImpl: typeof fetch): Promi
   return hash.digest("hex");
 }
 
+/** Whether the image released with this version is already in Gondolin's store (for `/lead-doctor`). */
+export function hasReleasedImage(version = PACKAGE_VERSION, arch: string = getDefaultArch(), store: ImageStore = gondolinStore): boolean {
+  return store.has(releaseImageRef(version), arch);
+}
+
 /** Returns the Gondolin image selector workers use, downloading the release image the first time. */
 export function createWorkerImage(options: {
   version?: string;

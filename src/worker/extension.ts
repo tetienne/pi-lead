@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge } from "../jev.ts";
 import { decisionLine, shouldShow } from "../jev-display.ts";
 import { quotaError } from "../quota.ts";
+import { plainTitle } from "../worker-display.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
@@ -206,7 +207,9 @@ export default function worker(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     latestContext = ctx;
-    await loadTask();
+    const current = await loadTask();
+    // `/resume` in the worker's tab lists it by its ticket rather than its long first prompt.
+    if (!pi.getSessionName()) pi.setSessionName(`${current.kind}: ${plainTitle(current.title)}`);
     void ensureVm(ctx).catch((error) => ctx.ui.notify(`PI Lead sandbox: ${error instanceof Error ? error.message : String(error)}`, "error"));
   });
 

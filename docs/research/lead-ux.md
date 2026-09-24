@@ -295,7 +295,12 @@ Pi integration or a missing Jev key gives one `notify` warning with the fix.
 2. `renderCall` / `renderResult` for `delegate` and `worker`. **Done** (`src/tool-display.ts`).
 3. The report card, with `details` passed through. **Done** (`src/report-card.ts`).
 4. The startup warning and `/lead-doctor`, working messages, worker session
-   names.
+   names. **Done** (`src/doctor.ts`).
+
+The report card of step 3 shows every line the worker wrote, not a
+three-line excerpt: a review found that findings, commit subjects and the
+verify output reached the model unseen, while the report guard counted the
+user's reply as having seen them.
 
 Each step keeps rendering pure, as `jev-display.ts` does: functions from data
 to width-fitted, sanitized lines, unit-tested at fixed widths. `lead.ts` and

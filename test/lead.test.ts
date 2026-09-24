@@ -50,7 +50,7 @@ test("the Lead never intercepts user input: the model answers questions itself",
     }
   }
   assert.ok(pi.handlers.has("tool_call"), "the report guard is registered");
-  assert.deepEqual(pi.commands, ["jev"]);
+  assert.deepEqual(pi.commands, ["lead-doctor", "jev"]);
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker"]);
 });
 
@@ -59,8 +59,9 @@ test("worker reports render as a card, and fall back to Pi's plain view without 
   lead(pi.api as any);
   const render = pi.renderers.get("message:pi-lead-worker");
   const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text };
-  const card = { kind: "debug", title: "Flaky login", model: "a/m", thinking: "high", elapsedMs: 5_000, commits: 0, summary: "Found a race.", next: [] };
-  const lines: string[] = render({ content: "full", details: { status: "done", card } }, { expanded: false, outputPad: 1 }, theme).render(60);
+  const card = { kind: "debug", title: "Flaky login", model: "a/m", thinking: "high", elapsedMs: 5_000, commits: 0, next: [] };
+  const content = "Worker…\n<worker-report untrusted>\nSummary:\nFound a race.\n</worker-report>";
+  const lines: string[] = render({ content, details: { status: "done", card } }, { expanded: false, outputPad: 1 }, theme).render(60);
   assert.ok(lines.some((line) => line.includes("✓ debug · Flaky login: done in 5s")));
   assert.ok(lines.some((line) => line.includes("Found a race.")));
   assert.ok(lines.every((line) => line.length <= 60));
