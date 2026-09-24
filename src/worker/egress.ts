@@ -54,7 +54,7 @@ export function createEgressPolicy(options: {
       // Only a human answer covers the whole host; Jev caches per path itself.
       if (options.askHuman) remembered.set(key, allowed);
     } else {
-      // Jev's own decisions are shown through the judge's `onDecision`, filtered by `jev.display`.
+      // Jev's own decisions are shown through the judge's `onDecision`, denials and questions only.
       allowed = decision === "allow";
     }
     return allowed;

@@ -56,12 +56,10 @@ test("Jev decisions render as dim transcript lines, and /jev explains when Jev i
   lead(pi.api as any);
   const render = pi.renderers.get("pi-lead-jev");
   const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` };
-  const entry = { data: { kind: "overlap", outcome: "unsure → waits", applied: "fallback", threshold: "overlaps at p ≥ 0.5", at: 0 } };
+  const entry = { data: { kind: "overlap", outcome: "unsure → waits", applied: "fallback", at: 0 } };
   assert.deepEqual(render(entry, { expanded: false }, theme).render(80), ["<dim>◇ jev · overlap unsure → waits</dim>"]);
-  assert.deepEqual(render(entry, { expanded: true }, theme).render(80), [
-    "<dim>◇ jev · overlap unsure → waits</dim>",
-    "<dim>  threshold overlaps at p ≥ 0.5</dim>",
-  ]);
+  const legacy = { data: { ...entry.data, threshold: "overlaps at p ≥ 0.5", usd: 0.00005, ms: 412 } };
+  assert.deepEqual(render(legacy, { expanded: true }, theme).render(80), ["<dim>◇ jev · overlap unsure → waits</dim>"], "an entry from an older version still renders, as one line");
   assert.equal(render({ data: { junk: true } }, { expanded: false }, theme), undefined);
 
   const notes: string[] = [];

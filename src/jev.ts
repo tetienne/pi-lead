@@ -42,11 +42,7 @@ export type JevDecision = {
   confidence?: number;
   /** Of a yes/no answer. */
   probability?: number;
-  /** The confidence floor or probability band the answer was held to. */
-  threshold?: string;
   detail?: string;
-  usd?: number;
-  ms?: number;
   at: number;
 };
 
@@ -304,8 +300,8 @@ export function describeRequest(method: string, url: string, max = 80): string {
   return `${verb} ${target.length > max ? `${target.slice(0, max - 1)}…` : target}`;
 }
 
-type Call = { answers?: Record<string, unknown>; usd?: number; ms?: number; failure?: JevProblem["kind"] };
-type DecisionInput = Omit<JevDecision, "at" | "usd" | "ms">;
+type Call = { answers?: Record<string, unknown>; failure?: JevProblem["kind"] };
+type DecisionInput = Omit<JevDecision, "at">;
 
 const FALLBACK_REASON: Record<JevProblem["kind"] | "unsure", string> = { unsure: "unsure", budget: "over budget", error: "failing" };
 
@@ -330,20 +326,13 @@ export function createJudge(options: {
       // A broken notifier must not turn a fallback into a crash.
     }
   };
-  const minConfidence = `conf ≥ ${config.minConfidence}`;
 
   /** For a fallback, `outcome` names the default that applies; the reason is prefixed here. */
   const emit = (call: Call | undefined, decision: DecisionInput) => {
     if (!call || !onDecision) return;
     const outcome = decision.applied === "fallback" ? `${FALLBACK_REASON[call.failure ?? "unsure"]} → ${decision.outcome}` : decision.outcome;
     try {
-      onDecision({
-        ...decision,
-        outcome,
-        ...(call.usd !== undefined ? { usd: call.usd } : {}),
-        ...(call.ms !== undefined ? { ms: call.ms } : {}),
-        at: Date.now(),
-      });
+      onDecision({ ...decision, outcome, at: Date.now() });
     } catch {
       // Display only: never let it change a decision.
     }
@@ -356,12 +345,9 @@ export function createJudge(options: {
         report("budget", `Jev's daily budget ($${config.dailyBudgetUsd}) is spent`);
         return { failure: "budget" };
       }
-      const started = Date.now();
       const result = await ask(state, questions, AbortSignal.timeout(15_000));
-      const ms = Date.now() - started;
-      const usd = (result.inputTokens / 1_000_000) * config.inputUsdPerMillion;
-      await ledger.charge(usd, kind);
-      return { answers: result.answers, usd, ms };
+      await ledger.charge((result.inputTokens / 1_000_000) * config.inputUsdPerMillion, kind);
+      return { answers: result.answers };
     } catch (error) {
       const text = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim() || "unknown error";
       report("error", text.length > 200 ? `${text.slice(0, 200)}…` : text);
@@ -381,7 +367,6 @@ export function createJudge(options: {
       outcome: judged ? judged.tier : defaultTier(kind),
       applied: judged ? "jev" : "fallback",
       ...confidence(answer),
-      threshold: minConfidence,
       ...(detail ? { detail } : {}),
     };
   };
@@ -411,7 +396,7 @@ export function createJudge(options: {
       const readiness = checkReadiness ? readinessOf(answers) : undefined;
       const tier = tierOf(answers?.difficulty, kind, config.minConfidence);
       if (readiness && !readiness.ready) {
-        emit(call, { kind: "tier", outcome: "not ready", applied: "jev", detail: `missing ${readiness.missing.join(", ")}`, threshold: "p ≤ 0.35" });
+        emit(call, { kind: "tier", outcome: "not ready", applied: "jev", detail: `missing ${readiness.missing.join(", ")}` });
       } else {
         emit(call, tierDecision(answers?.difficulty, kind, tier, !checkReadiness ? undefined : readiness ? "ready" : "readiness unsure"));
       }
@@ -448,7 +433,6 @@ export function createJudge(options: {
         outcome: decision === "ask" ? "asks you" : decision,
         applied: decision === "ask" ? "fallback" : "jev",
         ...(probability !== undefined ? { probability } : {}),
-        threshold: "deny ≤ 0.15 < ask < 0.85 ≤ allow",
         detail: describeRequest(method, url),
       });
       return decision;
@@ -496,7 +480,7 @@ export function createJudge(options: {
       // An unmet criterion makes Jev's verdict at most partial; blocked and needs_human stand.
       const final = unmet.length > 0 && (verdict === undefined || verdict === "done") ? "partial" : verdict;
       const unmetDetail = unmet.length ? `${unmet.length > 1 ? "criteria" : "criterion"} ${unmet.join(", ")} not met` : undefined;
-      const common = { kind: "verdict" as const, ...confidence(answers?.verdict), threshold: minConfidence };
+      const common = { kind: "verdict" as const, ...confidence(answers?.verdict) };
       if (final === undefined) emit(call, { ...common, outcome: `${reported} stands`, applied: "fallback" });
       else if (VERDICT_ORDER.indexOf(final) > VERDICT_ORDER.indexOf(reported)) {
         emit(call, { ...common, outcome: `${reported} → ${final}`, applied: "overridden", ...(unmetDetail ? { detail: unmetDetail } : {}) });
@@ -514,7 +498,7 @@ export function createJudge(options: {
         { severity: score("How severe are the most serious findings in this code review?", SEVERITY_RUBRIC) },
       );
       const severity = scoreOf(call?.answers?.severity, SEVERITY_RUBRIC.length, config.minConfidence);
-      const common = { kind: "review" as const, ...confidence(call?.answers?.severity), threshold: minConfidence };
+      const common = { kind: "review" as const, ...confidence(call?.answers?.severity) };
       if (severity === undefined) {
         emit(call, { ...common, outcome: "no severity", applied: "fallback" });
         return undefined;
@@ -544,7 +528,6 @@ export function createJudge(options: {
         outcome: kind ?? "not transient",
         applied: kind ? "jev" : "fallback",
         ...confidence(call?.answers?.kind),
-        threshold: minConfidence,
       });
       return kind;
     },
@@ -562,7 +545,6 @@ export function createJudge(options: {
         outcome: overlaps === undefined ? "waits" : overlaps ? "overlaps → waits" : "independent → parallel",
         applied: overlaps === undefined ? "fallback" : "jev",
         ...(probability !== undefined ? { probability } : {}),
-        threshold: "overlaps at p ≥ 0.5",
       });
       return overlaps;
     },

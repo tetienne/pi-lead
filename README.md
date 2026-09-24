@@ -106,7 +106,7 @@ pi install -l git:github.com/tetienne/pi-lead@v0.5.0
   },
   "maxWorkers": 2,
   "sandbox": { "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
-  "jev": { "via": "openrouter", "dailyBudgetUsd": 1, "display": "normal" },
+  "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
   "keepFailedWorkers": true,
   "leadGuard": "confirm",
   "waitingTimeoutMinutes": 120,
@@ -160,15 +160,10 @@ the Lead makes gets one dim line in the transcript, which the model never sees:
 ```
 
 `◆` Jev decided and its answer applied, `◇` Jev was unsure, failing or over
-budget and the default applied, `▲` Jev overrode the worker. Pi's expanded
-view adds confidence, threshold, latency and cost. Worker tabs show their
-egress decisions as notifications. `/jev` lists today's calls and spend by kind
-and this session's last 20 decisions.
-
-`jev.display` sets how much shows: `normal` (default) shows every Lead
-judgment, and in worker tabs only denied or questioned egress (allowed egress
-is just counted); `quiet` shows only `◇`, `▲` and denied egress; `verbose` also
-shows allowed egress.
+budget and the default applied, `▲` Jev overrode the worker. Worker tabs
+notify only egress Jev denied or put to you; allowed egress is just counted.
+`/jev` lists today's calls and spend by kind and this session's last 20
+decisions.
 
 ## Develop
 
