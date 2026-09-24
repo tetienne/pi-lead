@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
 import worker, { unverifiedDone } from "../src/worker/extension.ts";
-import { isTestCommand, OUTPUT_TAIL, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
+import { isTestCommand, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
 
 test("test-like commands are recognised by a heuristic", () => {
   for (const command of ["npm test", "npm run check", "pnpm typecheck", "npx vitest run", "cd api && pytest -q", "cargo test -p core", "go test ./...", "mix test", "bundle exec rspec", "node --test test/*.test.ts", "python -m unittest"]) {
@@ -46,29 +46,38 @@ test("the host-side bash wrapper reports each command's exit code, -1 when it di
   assert.deepEqual(seen, [["npm test", 0], ["npm test -- fail", 1], ["npm test -- hang", -1]]);
 });
 
-test("the bash wrapper hands the listener a clipped tail of the output", async () => {
+test("a successful write or edit reports a file change; a failed one does not", async () => {
+  const files = new Map<string, string>([["/workspace/a.ts", "const a = 1;\n"]]);
   const vm: any = {
-    exec: () =>
-      Object.assign(Promise.resolve({ exitCode: 2 }), {
-        output: async function* () {
-          yield { data: Buffer.from("x".repeat(1_500)) };
-          yield { data: Buffer.from("\nError: the end") };
-        },
-      }),
+    fs: {
+      readFile: async (path: string) => {
+        if (!files.has(path)) throw new Error("ENOENT");
+        return Buffer.from(files.get(path)!);
+      },
+      writeFile: async (path: string, content: string) => void files.set(path, content),
+      mkdir: async () => undefined,
+      access: async (path: string) => {
+        if (!files.has(path)) throw new Error("ENOENT");
+      },
+    },
   };
   const tools = new Map<string, any>();
-  const tails: string[] = [];
+  let changes = 0;
   registerSandboxTools(
     { registerTool: (tool: any) => tools.set(tool.name, tool), on: () => undefined } as any,
     "/host/clone",
     async () => ({ vm, shellPath: "/bin/sh", env: {}, root: "/host/clone" }),
-    (_command, _exitCode, tail) => void tails.push(tail),
+    undefined,
+    () => void changes++,
   );
-  await assert.rejects(tools.get("bash").execute("1", { command: "make" }, undefined, undefined, {}));
-  assert.equal(tails[0]!.length, OUTPUT_TAIL);
-  assert.ok(tails[0]!.endsWith("\nError: the end"));
+  await tools.get("write").execute("1", { path: "b.ts", content: "b\n" }, undefined, undefined, {});
+  assert.equal(changes, 1);
+  await tools.get("edit").execute("2", { path: "a.ts", edits: [{ oldText: "1", newText: "2" }] }, undefined, undefined, {});
+  assert.equal(changes, 2);
+  assert.equal(files.get("/workspace/a.ts"), "const a = 2;\n");
+  await assert.rejects(tools.get("edit").execute("3", { path: "a.ts", edits: [{ oldText: "missing", newText: "x" }] }, undefined, undefined, {}));
+  assert.equal(changes, 2);
 });
-
 test("a worker result may carry the last test run", () => {
   const base = { version: 1, id: "t", seq: 1, status: "done", summary: "s" };
   assert.equal(parseWorkerResult(base, "t").lastTest, undefined);

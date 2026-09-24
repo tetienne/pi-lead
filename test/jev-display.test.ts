@@ -47,12 +47,10 @@ test("display modes filter what gets a line", () => {
   const tier = decision({});
   const fallback = decision({ outcome: "unsure → standard", applied: "fallback" });
   const overridden = decision({ kind: "verdict", outcome: "done → partial", applied: "overridden" });
-  const stuck = decision({ kind: "stuck", outcome: "yes" });
-  const notStuck = decision({ kind: "stuck", outcome: "no" });
-  const all = [allow, deny, ask, tier, fallback, overridden, stuck, notStuck];
+  const all = [allow, deny, ask, tier, fallback, overridden];
   assert.deepEqual(all.filter((d) => shouldShow(d, "verbose")), all);
-  assert.deepEqual(all.filter((d) => shouldShow(d, "normal")), [deny, ask, tier, fallback, overridden, stuck, notStuck]);
-  assert.deepEqual(all.filter((d) => shouldShow(d, "quiet")), [deny, ask, fallback, overridden, stuck]);
+  assert.deepEqual(all.filter((d) => shouldShow(d, "normal")), [deny, ask, tier, fallback, overridden]);
+  assert.deepEqual(all.filter((d) => shouldShow(d, "quiet")), [deny, ask, fallback, overridden]);
   assert.equal(displayMode("quiet"), "quiet");
   assert.equal(displayMode("loud"), "normal");
   assert.equal(displayMode(undefined), "normal");

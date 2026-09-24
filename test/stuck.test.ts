@@ -1,24 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ShellRun } from "../src/jev.ts";
-import { createStuckDetector, finishMessage, normalizeCommand, steerMessage } from "../src/worker/stuck.ts";
+import { createStuckDetector, normalizeCommand, steerMessage } from "../src/worker/stuck.ts";
 
-function detector(answer: boolean | undefined | ((runs: readonly ShellRun[]) => Promise<boolean | undefined>)) {
-  const asked: ShellRun[][] = [];
+function detector() {
   const steered: string[] = [];
-  const notified: string[] = [];
-  const stuck = createStuckDetector({
-    judge: async (runs) => {
-      asked.push([...runs]);
-      return typeof answer === "function" ? answer(runs) : answer;
-    },
-    steer: (text) => void steered.push(text),
-    notify: (text) => void notified.push(text),
-  });
-  const run = async (command: string, exitCode = 1, output?: string) =>
-    stuck.record({ command, exitCode, ...(output ? { output } : {}) });
-  return { stuck, run, asked, steered, notified };
+  const stuck = createStuckDetector({ steer: (text) => void steered.push(text) });
+  const run = (command: string, exitCode = 1) => stuck.record(command, exitCode);
+  return { stuck, run, steered };
 }
 
 test("retries of one command compare equal despite cosmetic changes", () => {
@@ -30,115 +19,86 @@ test("retries of one command compare equal despite cosmetic changes", () => {
   assert.notEqual(normalizeCommand("npm test | grep FAIL"), base);
 });
 
-test("the same command failing three times, with no success in between, asks Jev once", async () => {
-  const { run, asked, steered } = detector(true);
-  await run("npm test");
-  await run("npm test 2>&1 | tail -20");
-  assert.equal(asked.length, 0);
-  await run("npm test", 1, "FAIL a.test.ts\nexpected 1 got 2");
-  assert.equal(asked.length, 1);
-  assert.deepEqual(asked[0]!.at(-1), { command: "npm test", exitCode: 1, output: "FAIL a.test.ts\nexpected 1 got 2" });
+test("the same command failing three times, with no success and no file change in between, steers once", () => {
+  const { run, steered } = detector();
+  run("npm test");
+  run("npm test 2>&1 | tail -20");
+  assert.deepEqual(steered, []);
+  run("npm test");
   assert.deepEqual(steered, [
-    "PI Lead: you ran `npm test` 3 times with the same failure. Step back: re-read the error, try a different approach, or finish with status blocked explaining what you tried.",
+    "PI Lead: you ran `npm test` 3 times with the same failure and changed no file in between. Step back: re-read the error, try a different approach, or finish with status blocked explaining what you tried.",
   ]);
 });
 
-test("a success of the command resets its count; other commands in between do not", async () => {
-  const { run, asked } = detector(true);
-  await run("npm test");
-  await run("npm test");
-  await run("npm test", 0);
-  await run("npm test");
-  await run("cat src/a.ts", 0);
-  await run("npm test");
-  assert.equal(asked.length, 0);
-  await run("npm test");
-  assert.equal(asked.length, 1);
-});
-
-test("six failures in a row trigger the broader check", async () => {
-  const { run, asked, steered } = detector(true);
-  for (const command of ["a", "b", "c", "d", "e"]) await run(command);
-  assert.equal(asked.length, 0);
-  await run("f");
-  assert.equal(asked.length, 1);
-  assert.equal(asked[0]!.length, 6);
-  assert.match(steered[0]!, /^PI Lead: your last 6 shell commands all failed\. Step back/);
-});
-
-test("after a check, the next one waits for three more shell commands, twice as many after each \"not stuck\"", async () => {
-  const { run, asked } = detector(false);
-  for (let index = 0; index < 3; index++) await run("npm test");
-  assert.equal(asked.length, 1);
-  for (let index = 0; index < 5; index++) await run("npm test");
-  assert.equal(asked.length, 1, "cooldown");
-  await run("npm test");
-  assert.equal(asked.length, 2);
-  for (let index = 0; index < 12; index++) await run("npm test");
-  assert.equal(asked.length, 3);
-  for (let index = 0; index < 72; index++) await run("npm test");
-  assert.equal(asked.length, 5, "logarithmic in the number of failing commands, not linear");
-
-  const steered = detector(true);
-  for (let index = 0; index < 6; index++) await steered.run("npm test");
-  assert.equal(steered.asked.length, 2, "a steer keeps the short cooldown");
-});
-
-test("a reset drops a check in flight and does not block the new cycle", async () => {
-  let release!: (answer: boolean) => void;
-  const first = new Promise<boolean>((resolve) => (release = resolve));
-  let calls = 0;
-  const { stuck, run, asked, steered } = detector(() => (++calls === 1 ? first : Promise.resolve(true)));
-  await run("npm test");
-  await run("npm test");
-  const pending = run("npm test");
-  stuck.reset();
-  for (let index = 0; index < 3; index++) await run("npm test");
-  assert.equal(asked.length, 2, "the new cycle checks without waiting for the stale check");
+test("a success of the command resets its count; other commands in between do not", () => {
+  const { run, steered } = detector();
+  run("npm test");
+  run("npm test");
+  run("npm test", 0);
+  run("npm test");
+  run("cat src/a.ts", 0);
+  run("npm test");
+  assert.deepEqual(steered, []);
+  run("npm test");
   assert.equal(steered.length, 1);
-  release(true);
-  await pending;
-  assert.equal(steered.length, 1, "the stale check steers nothing");
 });
 
-test("Jev decides; without it only the same-command trigger counts", async () => {
-  const no = detector(false);
-  for (let index = 0; index < 3; index++) await no.run("npm test");
-  assert.equal(no.asked.length, 1);
-  assert.deepEqual(no.steered, []);
+test("a file change resets the per-command counts and the failure streak", () => {
+  const { stuck, run, steered } = detector();
+  run("npm test");
+  run("npm test");
+  stuck.progress();
+  run("npm test");
+  run("npm test");
+  assert.deepEqual(steered, [], "two failures after the edit");
 
-  const strict = detector(undefined);
-  for (let index = 0; index < 3; index++) await strict.run("npm test");
-  assert.equal(strict.steered.length, 1, "unavailable or unsure: the strict trigger stands");
-
-  const broad = detector(undefined);
-  for (const command of ["a", "b", "c", "d", "e", "f"]) await broad.run(command);
-  assert.equal(broad.asked.length, 1);
-  assert.deepEqual(broad.steered, [], "unavailable or unsure: six different failures may be exploration");
-
-  const failing = detector(async () => {
-    throw new Error("boom");
-  });
-  for (let index = 0; index < 3; index++) await failing.run("npm test");
-  assert.equal(failing.steered.length, 1);
+  const streak = detector();
+  for (const command of ["a", "b", "c", "d", "e"]) streak.run(command);
+  streak.stuck.progress();
+  for (const command of ["f", "g", "h", "i", "j"]) streak.run(command);
+  assert.deepEqual(streak.steered, [], "five failures after the edit");
+  streak.run("k");
+  assert.equal(streak.steered.length, 1);
 });
 
-test("a second detection in the same cycle tells the worker to finish as blocked and warns the tab, then stops checking", async () => {
-  const { stuck, run, asked, steered, notified } = detector(true);
-  for (let index = 0; index < 3; index++) await run("npm test");
-  for (let index = 0; index < 3; index++) await run("npm test");
-  assert.equal(steered.length, 2);
-  assert.equal(steered[1], finishMessage({ kind: "same_command", command: "npm test", failures: 6 }));
-  assert.match(steered[1]!, /Stop now: call finish with status blocked/);
-  assert.equal(notified.length, 1);
-  assert.match(notified[0]!, /told to finish as blocked/);
+test("a test-first loop (edit, tests fail, edit, tests fail) is never flagged", () => {
+  const { stuck, run, steered } = detector();
+  for (let index = 0; index < 20; index++) {
+    stuck.progress();
+    run("npm test");
+  }
+  run("npm test", 0);
+  assert.deepEqual(steered, []);
+});
 
-  for (let index = 0; index < 6; index++) await run("npm test");
-  assert.equal(asked.length, 2, "never killed, never nagged further");
+test("six failures in a row with no file change steer, whatever the commands", () => {
+  const { run, steered } = detector();
+  for (const command of ["a", "b", "c", "d", "e"]) run(command);
+  assert.deepEqual(steered, []);
+  run("f");
+  assert.equal(steered[0], steerMessage({ kind: "streak", failures: 6 }));
+  assert.match(steered[0]!, /^PI Lead: your last 6 shell commands all failed and you changed no file in between\. Step back/);
 
-  // A new prompt from the Lead or the user starts over.
+  const broken = detector();
+  for (const command of ["a", "b", "c"]) broken.run(command);
+  broken.run("ls", 0);
+  for (const command of ["d", "e", "f", "g", "h"]) broken.run(command);
+  assert.deepEqual(broken.steered, [], "a success breaks the streak");
+});
+
+test("one steer per cycle; a reset starts a new one", () => {
+  const { stuck, run, steered } = detector();
+  for (let index = 0; index < 12; index++) run("npm test");
+  assert.equal(steered.length, 1, "never nagged further in the same cycle");
+  stuck.progress();
+  for (let index = 0; index < 3; index++) run("npm test");
+  assert.equal(steered.length, 1, "a file change does not start a new cycle");
+
+  // A new prompt from the Lead or the user, or a reported result, starts over.
   stuck.reset();
-  for (let index = 0; index < 3; index++) await run("npm test");
-  assert.equal(asked.length, 3);
-  assert.equal(steered[2], steerMessage({ kind: "same_command", command: "npm test", failures: 3 }));
+  run("npm test");
+  run("npm test");
+  assert.equal(steered.length, 1, "the counts start over too");
+  run("npm test");
+  assert.equal(steered.length, 2);
 });
