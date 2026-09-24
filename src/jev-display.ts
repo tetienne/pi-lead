@@ -90,7 +90,7 @@ const safe = (line: string) => line.replace(/[^\x20-\x7e◆◇▲≥≤→…·]
 
 function fit(line: string, width: number): string {
   const chars = [...safe(line)];
-  return chars.length <= width ? line : `${chars.slice(0, Math.max(0, width - 1)).join("")}…`;
+  return chars.length <= width ? chars.join("") : `${chars.slice(0, Math.max(0, width - 1)).join("")}…`;
 }
 
 /** Lines of the transcript entry, each at most `width` columns, before theming. */
