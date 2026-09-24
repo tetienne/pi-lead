@@ -134,7 +134,11 @@ export default function worker(pi: ExtensionAPI) {
   const commitLeftovers = async (ctx?: ExtensionContext) => {
     const { vm, env } = await ensureVm(ctx);
     return vm.exec(
-      ["/bin/sh", "-lc", 'git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes") 2>&1'],
+      [
+        "/bin/sh",
+        "-lc",
+        '{ git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes"); } 2>&1',
+      ],
       { cwd: GUEST_WORKSPACE, env },
     );
   };
