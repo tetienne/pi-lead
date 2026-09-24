@@ -2,16 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { JevDecision } from "../src/jev.ts";
-import {
-  decisionDetails,
-  decisionLine,
-  displayMode,
-  isDecision,
-  jevReport,
-  jevStatus,
-  renderDecision,
-  shouldShow,
-} from "../src/jev-display.ts";
+import { decisionLine, isDecision, jevReport, jevStatus, renderDecision, shouldShow } from "../src/jev-display.ts";
 
 const decision = (overrides: Partial<JevDecision>): JevDecision => ({ kind: "tier", outcome: "standard", applied: "jev", at: 0, ...overrides });
 
@@ -31,16 +22,12 @@ test("one line per decision, with its glyph", () => {
   );
 });
 
-test("the expanded view adds confidence, threshold, time and cost", () => {
-  const full = decision({ confidence: 0.82, threshold: "conf ≥ 0.7", ms: 412.4, usd: 0.00005 });
-  assert.equal(decisionDetails(full), "confidence 0.82 · threshold conf ≥ 0.7 · 412 ms · $0.000050");
-  assert.deepEqual(renderDecision(full, false, 200), ["◆ jev · tier standard (conf 0.82)"]);
-  assert.deepEqual(renderDecision(full, true, 200), ["◆ jev · tier standard (conf 0.82)", "  confidence 0.82 · threshold conf ≥ 0.7 · 412 ms · $0.000050"]);
-  assert.deepEqual(renderDecision(full, false, 12), ["◆ jev · tie…"], "lines fit the width");
-  assert.deepEqual(renderDecision(decision({}), true, 80), ["◆ jev · tier standard"], "no empty details line");
+test("the transcript line fits the width", () => {
+  assert.equal(renderDecision(decision({ confidence: 0.82 }), 200), "◆ jev · tier standard (conf 0.82)");
+  assert.equal(renderDecision(decision({ confidence: 0.82 }), 12), "◆ jev · tie…");
 });
 
-test("display modes filter what gets a line", () => {
+test("every Lead decision gets a line, egress only when not allowed", () => {
   const allow = decision({ kind: "egress", outcome: "allow" });
   const deny = decision({ kind: "egress", outcome: "deny" });
   const ask = decision({ kind: "egress", outcome: "unsure → asks you", applied: "fallback" });
@@ -48,12 +35,7 @@ test("display modes filter what gets a line", () => {
   const fallback = decision({ outcome: "unsure → standard", applied: "fallback" });
   const overridden = decision({ kind: "verdict", outcome: "done → partial", applied: "overridden" });
   const all = [allow, deny, ask, tier, fallback, overridden];
-  assert.deepEqual(all.filter((d) => shouldShow(d, "verbose")), all);
-  assert.deepEqual(all.filter((d) => shouldShow(d, "normal")), [deny, ask, tier, fallback, overridden]);
-  assert.deepEqual(all.filter((d) => shouldShow(d, "quiet")), [deny, ask, fallback, overridden]);
-  assert.equal(displayMode("quiet"), "quiet");
-  assert.equal(displayMode("loud"), "normal");
-  assert.equal(displayMode(undefined), "normal");
+  assert.deepEqual(all.filter(shouldShow), [deny, ask, tier, fallback, overridden]);
 });
 
 test("the status segment is short and turns warning, then error, as the budget runs out", () => {
@@ -101,12 +83,11 @@ test("only well-formed stored entries are rendered", () => {
 
 test("a replayed entry cannot inject escape sequences or overflow the line", () => {
   const hostile = decision({ outcome: "x\x1b]0;title\x07漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢" });
-  const [line] = renderDecision(hostile, false, 40);
-  assert.ok(!/[\x00-\x1f]/.test(line!), "no control characters");
-  assert.ok([...line!].length <= 40 && /^[\x20-\x7e◆◇▲≥≤→…·]*$/.test(line!), "one column per character, within the width");
+  const line = renderDecision(hostile, 40);
+  assert.ok(!/[\x00-\x1f]/.test(line), "no control characters");
+  assert.ok([...line].length <= 40 && /^[\x20-\x7e◆◇▲→…·]*$/.test(line), "one column per character, within the width");
 });
 
 test("a line that fits the width is sanitised too", () => {
-  const [line] = renderDecision(decision({ outcome: "x\u001b[31mred漢" }), false, 200);
-  assert.equal(line, "◆ jev · tier x?[31mred?", "escape sequences and wide characters are replaced");
+  assert.equal(renderDecision(decision({ outcome: "x\u001b[31mred漢" }), 200), "◆ jev · tier x?[31mred?", "escape sequences and wide characters are replaced");
 });

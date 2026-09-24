@@ -12,7 +12,7 @@ import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
 import { createWorkerImage } from "./image.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
-import { displayMode, isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
+import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
 import { registerReportGuard } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
 import { gitWorkspace } from "./workspace.ts";
@@ -103,7 +103,7 @@ export default function lead(pi: ExtensionAPI) {
   let jev: { ledger: ReturnType<typeof createLedger>; budgetUsd: number } | undefined;
   let jevUsage: JevUsage | undefined;
   let usageTimer: ReturnType<typeof setInterval> | undefined;
-  /** This session's last decisions, for `/jev`, whatever `jev.display` shows. */
+  /** This session's last decisions, for `/jev`. */
   const recent: JevDecision[] = [];
   registerReportGuard(pi);
 
@@ -136,7 +136,6 @@ export default function lead(pi: ExtensionAPI) {
     const config: LeadConfig = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     const ask = createAskJev(config.jev);
     const ledger = createLedger(join(agentDir, "pi-lead", "jev-usage.json"));
-    const display = displayMode(config.jev.display);
     jev = ask ? { ledger, budgetUsd: config.jev.dailyBudgetUsd } : undefined;
     jevUsage = undefined;
     if (usageTimer) clearInterval(usageTimer);
@@ -154,7 +153,7 @@ export default function lead(pi: ExtensionAPI) {
         recent.push(decision);
         if (recent.length > RECENT_DECISIONS) recent.shift();
         // A custom entry, not a message: the transcript shows it, the model never sees it.
-        if (shouldShow(decision, display)) pi.appendEntry(JEV_ENTRY, decision);
+        if (shouldShow(decision)) pi.appendEntry(JEV_ENTRY, decision);
         void refreshUsage();
       },
     });
@@ -210,11 +209,11 @@ export default function lead(pi: ExtensionAPI) {
     await delegator?.shutdown();
   });
 
-  pi.registerEntryRenderer<JevDecision>(JEV_ENTRY, (entry, { expanded }, theme) => {
+  pi.registerEntryRenderer<JevDecision>(JEV_ENTRY, (entry, _options, theme) => {
     const decision = entry.data;
     if (!isDecision(decision)) return undefined;
     return {
-      render: (width: number) => renderDecision(decision, expanded, width).map((line) => theme.fg("dim", line)),
+      render: (width: number) => [theme.fg("dim", renderDecision(decision, width))],
       invalidate: () => undefined,
     };
   });

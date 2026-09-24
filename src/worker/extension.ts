@@ -7,7 +7,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { Type } from "typebox";
 
 import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge } from "../jev.ts";
-import { decisionLine, displayMode, shouldShow } from "../jev-display.ts";
+import { decisionLine, shouldShow } from "../jev-display.ts";
 import { quotaError } from "../quota.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
@@ -49,15 +49,14 @@ export default function worker(pi: ExtensionAPI) {
   let judge: Judge | undefined;
   const getJudge = async () => {
     const current = await loadTask();
-    const display = displayMode(current.jev.display);
     judge ??= createJudge({
       ask: createAskJev(current.jev),
       config: current.jev,
       ledger: createLedger(join(getAgentDir(), "pi-lead", "jev-usage.json")),
       onProblem: (problem) => latestContext?.ui.notify(describeJevProblem(problem), "warning"),
-      // In the worker's own tab only (egress checks); allowed egress is just counted unless `jev.display` is verbose.
+      // In the worker's own tab only (egress checks); allowed egress is just counted.
       onDecision: (decision) => {
-        if (shouldShow(decision, display)) latestContext?.ui.notify(decisionLine(decision), decision.outcome === "deny" ? "warning" : "info");
+        if (shouldShow(decision)) latestContext?.ui.notify(decisionLine(decision), decision.outcome === "deny" ? "warning" : "info");
       },
     });
     return judge;

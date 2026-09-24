@@ -36,10 +36,14 @@ you ─► Lead (Pi, your tab)
   you reply, every Lead tool call that can execute or write on your machine
   (bash, write, edit…) asks you first, and is blocked without a UI. Set
   `"leadGuard": "off"` in the global config to disable it. When the fetched
-  branch touches files that run implicitly on your machine or in CI, or widen
-  PI Lead's policy (CI workflows, `package.json`, `.npmrc`, mise and direnv
-  config, git hooks, `.vscode` tasks/settings, `.pi/`…), the report adds a
-  host-generated warning to review them before merging; it never blocks.
+  branch touches files that can run on your machine or in CI, or steer future
+  agents, the report adds a host-generated "Host check" line naming the
+  matched patterns: CI workflows and actions, `package.json` (only when its
+  `scripts` or `packageManager` change), `.npmrc`/`.yarnrc`, mise, direnv, git
+  hooks, `.vscode` tasks/settings, `.pi/`, `.agents/`, `.claude/`,
+  `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` and `.gitmodules`. It is a hint
+  to focus your review, not a security guarantee: ordinary source, tests and
+  lockfiles run too once you use them, and it never blocks.
 - A **worker** is an interactive Pi session in its own Herdr tab. Its
   `read/write/edit/bash/ls/find/grep` tools run inside a Gondolin micro-VM that
   mounts only a throw-away clone of the repository. The guest never sees your
@@ -102,7 +106,7 @@ pi install -l git:github.com/tetienne/pi-lead@v0.5.0
   },
   "maxWorkers": 2,
   "sandbox": { "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
-  "jev": { "via": "openrouter", "dailyBudgetUsd": 1, "display": "normal" },
+  "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
   "keepFailedWorkers": true,
   "leadGuard": "confirm",
   "waitingTimeoutMinutes": 120,
@@ -163,8 +167,8 @@ tail sits in the untrusted worker block and goes to Jev's verdict. Without
 
 The worker controls the repository, so it can change what `verify` runs (a
 `package.json` script, a test file): `verify` catches honest mistakes, and the
-sensitive-path warning on `package.json`, CI and similar files flags the
-dishonest ones. Review both before merging.
+sensitive-path review hint (changed `package.json` scripts, CI, `.pi` and
+similar) points at the dishonest ones. Review both before merging.
 
 ### Seeing Jev
 
@@ -180,15 +184,10 @@ the Lead makes gets one dim line in the transcript, which the model never sees:
 ```
 
 `◆` Jev decided and its answer applied, `◇` Jev was unsure, failing or over
-budget and the default applied, `▲` Jev overrode the worker. Pi's expanded
-view adds confidence, threshold, latency and cost. Worker tabs show their
-egress decisions as notifications. `/jev` lists today's calls and spend by kind
-and this session's last 20 decisions.
-
-`jev.display` sets how much shows: `normal` (default) shows every Lead
-judgment, and in worker tabs only denied or questioned egress (allowed egress
-is just counted); `quiet` shows only `◇`, `▲` and denied egress; `verbose` also
-shows allowed egress.
+budget and the default applied, `▲` Jev overrode the worker. Worker tabs
+notify only egress Jev denied or put to you; allowed egress is just counted.
+`/jev` lists today's calls and spend by kind and this session's last 20
+decisions.
 
 ## Develop
 

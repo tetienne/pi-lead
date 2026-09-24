@@ -21,7 +21,8 @@ prototype or debug work finishes `done` or `partial`, the worker extension
   reach.
 - **What it proves.** The guest controls the repository, so it can change what
   `verify` runs (a script, a test). `verify` catches honest mistakes; the
-  sensitive-path warning flags edits to `package.json`, `.pi` and similar. The
+  sensitive-path review hint names changed `package.json` scripts, `.pi` and
+  similar. The
   output is guest text: it stays in the untrusted report block, while the
   command and exit code are host text.
 - **Policy, not judgment** ([ADR 0003](0003-bound-jev-judgments-with-policy.md)):

@@ -4,8 +4,6 @@ import { join } from "node:path";
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type Tier = "fast" | "standard" | "deep";
-/** How much of Jev's work the terminal shows (see jev-display.ts). */
-export type JevDisplay = "quiet" | "normal" | "verbose";
 
 export type TierRoute = {
   /** `provider/model-id`. Omitted means "the model the Lead is using". */
@@ -40,13 +38,6 @@ export type LeadConfig = {
     dailyBudgetUsd: number;
     /** Below this confidence a judgment is treated as "don't know". */
     minConfidence: number;
-    /**
-     * `normal`: every Lead judgment as a transcript line, and egress
-     * denials and questions in worker tabs. `quiet`: only fallbacks,
-     * overrides and egress denials.
-     * `verbose`: also allowed egress.
-     */
-    display: JevDisplay;
   };
   /** Keep the Herdr tab and clone of a worker that did not finish cleanly. */
   keepFailedWorkers: boolean;
@@ -101,7 +92,6 @@ export const DEFAULT_CONFIG: LeadConfig = {
     inputUsdPerMillion: 0.05,
     dailyBudgetUsd: 1,
     minConfidence: 0.7,
-    display: "normal",
   },
   keepFailedWorkers: true,
   leadGuard: "confirm",

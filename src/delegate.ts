@@ -9,7 +9,7 @@ import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.t
 import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
-import { sensitivePatterns } from "./sensitive-paths.ts";
+import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
 import type { Toolchains } from "./toolchains.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -64,7 +64,7 @@ export type DelegateOutcome = {
     review?: { severity: number; action: ReviewAction };
     failure?: FailureKind;
     quota?: QuotaError;
-    /** Sensitive path patterns the branch touches; informative only, never a status change. */
+    /** Sensitive path patterns the branch touches; a review hint only, never a status change. */
     sensitive?: string[];
     /** The project's `verify` run; a non-zero exit made `done` at most `partial`. */
     verification?: { exitCode: number; ms: number };
@@ -564,6 +564,17 @@ export function createDelegator(deps: DelegateDeps) {
     ...(worker.route.note ? [`Note: ${worker.route.note}`] : []),
   ];
 
+  /** Sensitive patterns the branch touches, keeping `package.json` only when some file's scripts or package manager changed. */
+  const reviewHints = async (worker: Worker, changedFiles: string[]): Promise<string[]> => {
+    const patterns = sensitivePatterns(changedFiles);
+    if (!patterns.includes(PACKAGE_JSON)) return patterns;
+    const read = (rev: string, path: string) => deps.workspace.fileAt({ repoRoot: worker.repoRoot!, rev, path });
+    for (const path of filesMatching(PACKAGE_JSON, changedFiles)) {
+      if (packageRunFieldsChanged(await read(worker.base!, path), await read(worker.branch!, path))) return patterns;
+    }
+    return patterns.filter((pattern) => pattern !== PACKAGE_JSON);
+  };
+
   const settle = async (worker: Worker, result: WorkerResult) => {
     // Only a run of this Lead's own command counts; the command shown comes from the config, not the result file.
     const verify = deps.config.verify;
@@ -590,7 +601,7 @@ export function createDelegator(deps: DelegateDeps) {
     const verifyFailed = verification !== undefined && verification.exitCode !== 0;
     const status = verifyFailed && judged === "done" ? "partial" : judged;
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
-    const sensitive = sensitivePatterns(collected.changedFiles);
+    const sensitive = await reviewHints(worker, collected.changedFiles);
     const keep = status !== "done" && deps.config.keepFailedWorkers;
     setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
     if (keep) worker.waitingSince = Date.now();
@@ -647,7 +658,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(sensitive.length
           ? [
               "",
-              `Host check: the branch changes files that can run on your machine or in CI, or widen PI Lead's policy (${sensitive.join(", ")}); review them before merging.`,
+              `Host check: review these before merging; they can run on your machine or in CI, or steer future agents: ${sensitive.join(", ")}.`,
             ]
           : []),
         ...(review ? ["", `Jev review severity: ${review.severity.toFixed(1)}/4 → ${review.action}`] : []),
