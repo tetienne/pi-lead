@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
-import worker, { unverifiedDone } from "../src/worker/extension.ts";
+import worker, { stuckRun, unverifiedDone } from "../src/worker/extension.ts";
 import { guestCommand, hasPipeline, isTestCommand, OUTPUT_TAIL, PIPED_EXIT_UNKNOWN, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
 
 test("test-like commands are recognised by a heuristic", () => {
@@ -112,6 +112,12 @@ test("the bash wrapper runs a piped test with pipefail, or records its exit code
   assert.deepEqual(argvs.map((argv) => argv[2]), ["set -o pipefail; npm test 2>&1 | tail -50", "npm test 2>&1 | tail -50", "ls | wc -l"]);
   assert.deepEqual(seen, [["npm test 2>&1 | tail -50", 0], ["npm test 2>&1 | tail -50", PIPED_EXIT_UNKNOWN], ["ls | wc -l", 0]]);
   assert.match(unverifiedDone({ kind: "implement" }, "done", { command: "npm test | tail", exitCode: PIPED_EXIT_UNKNOWN })!, /`npm test \| tail` was piped, so its exit code is unknown/);
+});
+
+test("a piped test run with an unknown exit code is not fed to the stuck detector", () => {
+  assert.equal(stuckRun("npm test | tail", PIPED_EXIT_UNKNOWN, "ok"), undefined);
+  assert.deepEqual(stuckRun("npm test | tail", 1, "FAIL"), { command: "npm test | tail", exitCode: 1, output: "FAIL" });
+  assert.deepEqual(stuckRun("npm test", -1, ""), { command: "npm test", exitCode: -1, output: "" });
 });
 
 test("a worker result may carry the last test run", () => {

@@ -6,7 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge, type WorkerVerdict } from "../jev.ts";
+import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge, type ShellRun, type WorkerVerdict } from "../jev.ts";
 import { decisionLine, displayMode, isStuck, shouldShow } from "../jev-display.ts";
 import { quotaError } from "../quota.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, WRITES_CODE, type LastTest, type WorkerResult, type WorkerTask } from "../protocol.ts";
@@ -26,6 +26,14 @@ export function unverifiedDone(task: Pick<WorkerTask, "kind" | "steerUnverifiedD
     ? `the last test run \`${lastTest.command}\` ${lastTest.exitCode === -1 ? "did not complete" : lastTest.exitCode === PIPED_EXIT_UNKNOWN ? "was piped, so its exit code is unknown (run it without the pipe)" : `exited ${lastTest.exitCode}`}`
     : "no test run was recorded";
   return `Not finished: you report done but ${why}. Run the project's tests (or the command that verifies the acceptance criteria) and finish again, or finish with status partial and say what is unverified.`;
+}
+
+/**
+ * The shell run the stuck detector sees, if any: a piped test run whose exit
+ * code is unknown is no evidence of a failure, nor of a success.
+ */
+export function stuckRun(command: string, exitCode: number, output: string): ShellRun | undefined {
+  return exitCode === PIPED_EXIT_UNKNOWN ? undefined : { command, exitCode, output };
 }
 
 /**
@@ -129,7 +137,8 @@ export default function worker(pi: ExtensionAPI) {
 
   registerSandboxTools(pi, process.cwd(), ensureVm, (command, exitCode, outputTail) => {
     if (isTestCommand(command)) lastTest = { command: command.slice(0, 500), exitCode };
-    if (task && task.stuckDetection !== false) void stuck.record({ command, exitCode, output: outputTail }).catch(() => undefined);
+    const run = stuckRun(command, exitCode, outputTail);
+    if (run && task && task.stuckDetection !== false) void stuck.record(run).catch(() => undefined);
   });
 
   /**
