@@ -15,6 +15,7 @@ import { createEgressPolicy } from "./egress.ts";
 import { registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
 import { createStuckDetector } from "./stuck.ts";
 import { runVerification, shouldVerify } from "./verify.ts";
+import { registerWebSearch } from "./web-search.ts";
 
 /**
  * Loaded only into worker Pi processes (`--no-extensions -e`). Pi and this
@@ -116,6 +117,8 @@ export default function worker(pi: ExtensionAPI) {
     },
     () => stuck.progress(),
   );
+
+  registerWebSearch(pi);
 
   /**
    * Commit anything left in the tree, inside the guest, so the host only ever
