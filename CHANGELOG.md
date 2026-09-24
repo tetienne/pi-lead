@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/tetienne/pi-lead/compare/v0.6.0...v0.6.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* warn when a PI Lead setting is ignored ([#27](https://github.com/tetienne/pi-lead/issues/27)) ([21378ff](https://github.com/tetienne/pi-lead/commit/21378ff843ef301febd91a34fded05c9399652fa))
+
 ## [0.6.0](https://github.com/tetienne/pi-lead/compare/v0.5.0...v0.6.0) (2026-09-24)
 
 
