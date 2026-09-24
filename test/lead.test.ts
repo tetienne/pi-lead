@@ -124,6 +124,21 @@ test("every non-project skill the Lead loaded is mounted in the guest, once", ()
   assert.deepEqual(skillMounts([skill(join(packaged!, "ask-matt", "SKILL.md"), "temporary")]), [packaged]);
 });
 
+test("sibling skills of one package share a single mount of their skills folder", () => {
+  const skill = (path: string) => ({ name: "x", source: "skill", sourceInfo: { path, scope: "user" } }) as any;
+  const [, ...rest] = skillMounts([
+    skill("/home/.pi/agent/git/github.com/obra/superpowers/skills/brainstorming/SKILL.md"),
+    skill("/home/.pi/agent/vendor/go-skills/go/SKILL.md"),
+    skill("/home/.pi/agent/git/github.com/obra/superpowers/skills/writing-plans/SKILL.md"),
+    skill("/home/.agents/skills/find-skills/SKILL.md"),
+  ]);
+  assert.deepEqual(rest, [
+    "/home/.pi/agent/git/github.com/obra/superpowers/skills",
+    "/home/.pi/agent/vendor/go-skills/go",
+    "/home/.agents/skills/find-skills",
+  ]);
+});
+
 test("workers get the Lead's skills plus host copies of the repo's resources, and no extensions", () => {
   const base = {
     taskPath: "/tmp/t/task.json",

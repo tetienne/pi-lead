@@ -59,7 +59,10 @@ export function skillMounts(commands: SlashCommandInfo[]): string[] {
     const dir = dirname(command.sourceInfo.path);
     if (!mounts.some((mount) => dir === mount || dir.startsWith(mount + sep))) mounts.push(dir);
   }
-  return mounts;
+  // Each mount lands on the guest kernel command line, which is cut at 2048 bytes and
+  // silently loses Gondolin's MITM CA: siblings share one mount of their `skills/` folder.
+  const siblings = (dir: string) => mounts.filter((mount) => dirname(mount) === dirname(dir)).length;
+  return [...new Set(mounts.map((dir) => (basename(dirname(dir)) === "skills" && siblings(dir) > 1 ? dirname(dir) : dir)))];
 }
 
 /**
