@@ -89,6 +89,12 @@ export default function worker(pi: ExtensionAPI) {
       await vm.close();
       throw new Error("the Gondolin image has no git; use PI Lead's default image or add git to yours");
     }
+    // Gondolin's init writes this bundle only when its MITM CA was mounted at boot; without it every HTTPS call fails x509.
+    const trust = await vm.exec(["/bin/sh", "-c", "test -r /run/gondolin/ca-certificates.crt"], { env });
+    if (trust.exitCode !== 0) {
+      await vm.close();
+      throw new Error("the Gondolin guest booted without its MITM CA (too many mounts for the kernel command line); HTTPS would fail");
+    }
     ctx?.ui.setStatus("pi-lead", `Gondolin: ${vm.id.slice(0, 8)} · ${current.branch}`);
     return { vm, shellPath: bash || "/bin/sh", env, root: current.clonePath };
   };
