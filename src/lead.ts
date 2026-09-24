@@ -6,7 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { loadConfig, type LeadConfig } from "./config.ts";
+import { loadConfigWithNotices } from "./config.ts";
 import { createDelegator, type Delegator, type WorkerCommand } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
@@ -133,7 +133,9 @@ export default function lead(pi: ExtensionAPI) {
     ui = ctx.ui;
     hasUI = ctx.hasUI;
     const agentDir = getAgentDir();
-    const config: LeadConfig = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
+    const { config, ignored } = await loadConfigWithNotices(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
+    // A setting dropped by the global/project rules would otherwise vanish without a trace.
+    if (ctx.hasUI) for (const notice of ignored) ctx.ui.notify(notice, "warning");
     const ask = createAskJev(config.jev);
     const ledger = createLedger(join(agentDir, "pi-lead", "jev-usage.json"));
     jev = ask ? { ledger, budgetUsd: config.jev.dailyBudgetUsd } : undefined;
