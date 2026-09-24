@@ -45,7 +45,6 @@ export async function runVerification(
     });
   } catch (error) {
     note(signal.aborted ? stopReason() : `could not run: ${error instanceof Error ? error.message : String(error)}`);
-    exitCode = -1;
   } finally {
     clearTimeout(timer);
   }

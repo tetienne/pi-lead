@@ -452,7 +452,7 @@ export function createDelegator(deps: DelegateDeps) {
     }
   };
 
-  /** Workers holding a slot. A waiting worker's VM idles on a question, so it does not count. */
+  /** Workers holding a slot. A waiting worker idles on a question, so it does not count. */
   const busy = () => [...workers.values()].filter((w) => w.state === "starting" || w.state === "running");
 
   /** Two code-writing tickets that Jev thinks overlap (or can't tell) run one after the other. */
@@ -538,7 +538,7 @@ export function createDelegator(deps: DelegateDeps) {
         if (worker.state === "running") nameAgent(worker);
         lastBeat = Date.now();
       }
-      // An unanswered question must not keep a VM up forever: the abort ends in `fail`.
+      // An unanswered question must not keep a worker running forever: the abort ends in `fail`.
       if (worker.state === "waiting" && waitingTimeoutMs > 0 && Date.now() - (worker.waitingSince ?? 0) >= waitingTimeoutMs) {
         worker.controller.abort(new WaitingTimeout(`no answer within ${deps.config.waitingTimeoutMinutes} minutes`));
       }

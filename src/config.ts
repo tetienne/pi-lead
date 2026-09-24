@@ -48,10 +48,10 @@ export type LeadConfig = {
    */
   stuckDetection: boolean;
   /**
-   * Shell command run in the worker's VM (cwd /workspace) when code work
-   * finishes `done` or `partial`; a non-zero exit makes the result at most
-   * `partial`. Read only from a trusted project's `.pi/pi-lead.json`: it is
-   * per project, and the global config cannot set it.
+   * Shell command run in the worker's worktree when code work finishes
+   * `done` or `partial`; a non-zero exit makes the result at most `partial`.
+   * Read only from a trusted project's `.pi/pi-lead.json`: it is per
+   * project, and the global config cannot set it.
    */
   verify?: string;
   /** The `verify` run is stopped after this long and counts as failed. */

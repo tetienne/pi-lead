@@ -28,12 +28,12 @@ status: accepted
    worker is queued; each result arrives as a message that wakes the Lead. A
    worker that stops on a question stays open and watched; the `worker` tool
    lists, messages or stops workers.
-5. **Only the Lead's pane outlives the Lead.** A worker tab closes at once when
-   done, after `waitingTimeoutMinutes` (default 120) without an answer when
-   waiting, and at the latest when the Lead session ends. `keepFailedWorkers`
-   keeps a failed worker's tab only while the Lead runs, and its directory
-   after. Each task dir holds `tab.json` (tab and pane ids, Lead pid); on start
-   a Lead closes the tabs of Leads whose process is gone and removes their
-   dirs. Worker panes carry display-only `herdr pane report-metadata` and an
+5. **Only the Lead's pane outlives the Lead.** A worker's worktree workspace is
+   removed at once when done, after `waitingTimeoutMinutes` (default 120)
+   without an answer when waiting, and at the latest when the Lead session
+   ends; its branch always stays. `keepFailedWorkers` keeps a failed worker's
+   workspace only while the Lead runs, and its task directory after. Each task
+   dir holds `tab.json` (workspace and pane ids, Lead pid); on start a Lead
+   removes the worktrees of Leads whose process is gone and their task dirs. Worker panes carry display-only `herdr pane report-metadata` and an
    `herdr agent rename` name, best-effort; never `report-agent`, which would
    take lifecycle authority from Herdr's Pi integration.

@@ -3,8 +3,8 @@
 A Pi package that turns one Pi session into an engineering lead. You talk in
 plain language; the Lead answers questions itself, shapes ideas with
 [Matt Pocock's skills](https://github.com/mattpocock/skills), and delegates
-real work to workers that run in background [Herdr](https://herdr.dev) tabs
-on a model chosen by [Jev](https://docs.typesafe.ai).
+real work to workers that run in background [Herdr](https://herdr.dev) worktree
+workspaces on a model chosen by [Jev](https://docs.typesafe.ai).
 
 No commands. Ask "how does the session store work?" and you get an answer.
 Say "let's add CSV export" and the Lead reads Matt's own router, `ask-matt`,
@@ -20,10 +20,10 @@ you ─► Lead (Pi, your tab)
         implement / prototype / diagnosing-bugs / code-review / research
                             → delegate tool
                                  Jev: ticket ready? how hard? → model + thinking level
-                                 → Herdr tab (no focus), worker Pi in its own git worktree
+                                 → Herdr worktree workspace (no focus), worker Pi in it
                                  worker Pi: runs on the host, /skill:implement …
                                  worker calls finish
-                                 Jev checks the verdict, tab closed
+                                 Jev checks the verdict, worktree removed (branch kept)
                                  (delegate returns at once; the result comes back as a message)
         worker tool         → list workers, relay an answer to one waiting on you, stop one
 ```
@@ -43,8 +43,9 @@ you ─► Lead (Pi, your tab)
   `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` and `.gitmodules`. It is a hint
   to focus your review, not a security guarantee: ordinary source, tests and
   lockfiles run too once you use them, and it never blocks.
-- A **worker** is an interactive Pi session in its own Herdr tab, running
-  directly on the host in its own git worktree/branch; its
+- A **worker** is an interactive Pi session in its own Herdr worktree
+  workspace (`herdr worktree create`), running directly on the host on its own
+  branch; its
   `read/write/edit/bash/ls/find/grep` tools have the same network and
   filesystem access as the user running the Lead (see
   [ADR 0005](docs/adr/0005-run-workers-on-the-host.md)). A worker is a Pi like
@@ -55,7 +56,7 @@ you ─► Lead (Pi, your tab)
   [Web access for workers](#web-access-for-workers)). When the project names a
   `verify` command, PI Lead runs it itself when code work finishes (see
   [Verify](#verify)).
-- **Seeing workers.** Each worker tab's label starts with its state:
+- **Seeing workers.** Each worker workspace's label starts with its state:
   `○` queued or starting, `●` running, `?` waiting for your answer, `~` partly
   done, `✗` blocked or failed, `✓` done, `-` stopped (e.g. `? Add CSV export`).
   A worker that stops and needs you also raises a Herdr notification; only a
@@ -69,11 +70,10 @@ you ─► Lead (Pi, your tab)
   line the worker wrote behind a `│` gutter, marked untrusted. Expand it to
   read the full report the model received. The Lead warns at start only when
   workers cannot run (not inside Herdr, or Herdr's Pi integration missing).
-  Tab glyphs, state labels and notifications need Herdr 0.9.1 or later
-  (`tab rename`, `notification show`, `--seq`); on an older Herdr, tabs keep
-  their plain title and the pane keeps its title, tokens and working label.
-- **Jev** answers small closed questions — difficulty, readiness, verdict,
-  review severity, failure kind, ticket overlap — and code maps each answer
+  Worker workspaces need Herdr 0.9.1 or later (`worktree create`,
+  `notification show`, `--seq`).
+- **Jev** answers small closed questions (difficulty, readiness, verdict,
+  review severity, failure kind, ticket overlap) and code maps each answer
   to an action. Without a key, documented defaults apply.
 
 Design record: [ADR 0001](docs/adr/0001-lead-is-a-tool-driven-conversation.md),

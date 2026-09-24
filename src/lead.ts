@@ -204,7 +204,7 @@ export default function lead(pi: ExtensionAPI) {
         // A check must never keep the session from starting or skip the reconcile below.
       }
     }
-    // Close tabs a crashed or killed Lead left open; in the background, never blocking the session.
+    // Remove worktrees a crashed or killed Lead left open; in the background, never blocking the session.
     void current.reconcile().catch(() => undefined);
   });
 

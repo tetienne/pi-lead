@@ -63,9 +63,10 @@ export type ReportGuard = {
  * Deterministic host-side guard against a prompt-injected worker steering the
  * Lead. Worker reports are text written by a worker model that read
  * untrusted code; the Lead's own tools run on the host too, with no isolation.
- * So from the moment a report enters the conversation until the human sends a message of
- * their own, every Lead tool call that can execute or write on the host needs
- * an explicit confirmation (and is blocked when there is no UI to ask).
+ * So from the moment a report enters the conversation until the human sends a
+ * message of their own, every Lead tool call that can execute or write on the
+ * host needs an explicit confirmation (and is blocked when there is no UI to
+ * ask).
  *
  * Reports are detected from the conversation itself (`message_end` for the
  * delivered custom message, and `context` before every model call, which also

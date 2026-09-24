@@ -13,8 +13,8 @@ status: accepted
 3. **Matt skills ship with the package** and are loaded natively by Pi. Skills
    with `disable-model-invocation` are invoked explicitly: by the Lead's
    workflow guidance, or as `/skill:<name>` in the worker's first message.
-4. **Workers are visible Pi sessions in Herdr tabs.** One `--no-focus` tab per
-   worker runs an interactive `pi` process with a Jev-chosen model and thinking
+4. **Workers are visible Pi sessions in Herdr.** One `--no-focus` worktree
+   workspace per worker runs an interactive `pi` process with a Jev-chosen model and thinking
    level. The worker ends by calling `finish`; the Lead waits for that result
    file and collects the branch.
 5. **Jev judges, code decides** (ADR 0002). Jev answers closed-set questions
@@ -25,4 +25,4 @@ status: accepted
 
 - Herdr is presentation; the Lead owns completion through the worker's
   `finish` result. There are no durable task records or restart recovery: an
-  interrupted worker leaves its tab and clone for the human to inspect.
+  interrupted worker leaves its workspace and branch for the human to inspect.
