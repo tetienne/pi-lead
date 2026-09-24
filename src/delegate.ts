@@ -224,10 +224,22 @@ export function slugify(text: string): string {
   );
 }
 
-/** Worker text never closes (or opens) the report's untrusted block, for the model or the card. */
+/**
+ * Invisible characters (zero-width, soft hyphen, fillers, bidi marks,
+ * variation selectors, Unicode tags) that can carry text the model reads but
+ * the user never sees. An emoji's own presentation selector is kept.
+ */
+export const INVISIBLE = /(?<!\p{Extended_Pictographic})[\ufe0e\ufe0f]|(?![\ufe0e\ufe0f])\p{Default_Ignorable_Code_Point}|\u061c/gu;
+
+/**
+ * Worker text as the report carries it, for the model and the card alike:
+ * without invisible characters, and never opening or closing the report's
+ * untrusted block, look-alikes of the marker included.
+ */
 export function unmarked(text: string): string {
-  // Also the look-alikes a model might read as the marker: spaces, full-width `＜`, other dashes, invisible joiners.
-  return text.replace(/[<＜]\s*(\/?)\s*(worker[\s\u2010-\u2015\u200b-\u200d\u2060-]{0,3}report)/giu, "‹$1$2");
+  return text
+    .replace(INVISIBLE, "")
+    .replace(/[<＜﹤]\s*(\/?)\s*(worker[\s_\u2010-\u2015-]{0,3}report)/giu, "‹$1$2");
 }
 
 export function isSafeBranchName(name: string): boolean {

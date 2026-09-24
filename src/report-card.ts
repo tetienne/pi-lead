@@ -1,6 +1,6 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
-import type { ReportCard } from "./delegate.ts";
+import { INVISIBLE, type ReportCard } from "./delegate.ts";
 import type { WorkerVerdict } from "./jev.ts";
 import { cleanLines, type Paint } from "./tool-display.ts";
 import { safePreview } from "./report-guard.ts";
@@ -70,13 +70,14 @@ function isCard(value: unknown): value is ReportCard {
 /**
  * Worker text for the card: every line, uncut (the model reads all of it),
  * cleaned of escapes and controls. Tabs become spaces, since the terminal's
- * tab stops would push text past the gutter; invisible characters (zero-width,
- * BOM, Unicode tags) become `·`, so text the model can read never renders as nothing.
+ * tab stops would push text past the gutter. Invisible characters, which
+ * settle() already removes from what the model reads, become `·` here in
+ * case a stored report predates that.
  */
 const cleanWorkerText = (text: string) =>
   cleanLines(text.replace(/\t/g, "   ").replace(INVISIBLE, "·"), Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER);
 
-const INVISIBLE = /[\u200b-\u200f\u2060-\u2064\ufeff\u{e0000}-\u{e007f}]/gu;
+
 
 const GUTTER = "  │ ";
 const NARROW_GUTTER = "│";
