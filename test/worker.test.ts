@@ -85,7 +85,7 @@ test("a worker result may carry a verification, which must be well formed", () =
   }
 });
 
-test("the worker replaces every file/shell tool with a sandboxed one and adds finish", async () => {
+test("the worker replaces every file/shell tool with a sandboxed one and adds finish and web_search", async () => {
   const tools: string[] = [];
   const handlers = new Map<string, (event: any, ctx?: any) => any>();
   const flags = new Map<string, unknown>();
@@ -100,7 +100,7 @@ test("the worker replaces every file/shell tool with a sandboxed one and adds fi
   } as any);
 
   assert.ok(flags.has("pi-lead-task"));
-  assert.deepEqual(tools.sort(), ["bash", "edit", "find", "finish", "grep", "ls", "read", "write"]);
+  assert.deepEqual(tools.sort(), ["bash", "edit", "find", "finish", "grep", "ls", "read", "web_search", "write"]);
   assert.ok(handlers.has("user_bash"), "! shell commands are sandboxed too");
 
   const { systemPrompt } = await handlers.get("before_agent_start")!({

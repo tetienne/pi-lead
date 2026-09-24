@@ -51,8 +51,10 @@ you ─► Lead (Pi, your tab)
   any Pi provider or subscription works. A worker is a Pi like the Lead: same
   skills, prompts and `AGENTS.md`, plus the repository's own skills when you
   trust the project, but no host-side extensions except Herdr's Pi
-  integration (working/idle badges). When the project names a `verify`
-  command, PI Lead runs it itself when code work finishes (see
+  integration (working/idle badges). It can search the web with `web_search`
+  through your ChatGPT subscription (see
+  [Web access for workers](#web-access-for-workers)). When the project names a
+  `verify` command, PI Lead runs it itself when code work finishes (see
   [Verify](#verify)).
 - **Seeing workers.** Each worker tab's label starts with its state:
   `○` queued or starting, `●` running, `?` waiting for your answer, `~` partly
@@ -103,14 +105,31 @@ Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
 
 <!-- x-release-please-start-version -->
 ```bash
-pi install -l git:github.com/tetienne/pi-lead@v0.6.0
+pi install -l git:github.com/tetienne/pi-lead@v0.6.1
 ```
 <!-- x-release-please-end -->
 
 ## Configure
 
-`~/.pi/agent/pi-lead.json` (a trusted project can override it in
-`.pi/pi-lead.json`). Everything is optional:
+Two files, both optional:
+
+- `~/.pi/agent/pi-lead.json` (global): every key except `verify`.
+- `.pi/pi-lead.json` in the project: overrides the global file, key by key,
+  and is the only place for `verify`. It cannot set `leadGuard`, and it is
+  read only when Pi trusts the project.
+
+Pi trusts a project on its own when nothing in it needs trust: its `.pi` holds
+only `pi-lead.json` and there is no `.agents/skills` in it or a parent folder.
+Otherwise (`.pi/settings.json`, `.pi/extensions`, `.pi/skills`, prompts,
+`.agents/skills` and similar) Pi asks at startup, unless a saved decision or
+`defaultProjectTrust` decides, and print and RPC modes never ask. To trust it
+later, run `/trust` and restart Pi, or start Pi with `--approve` for one run
+(see Pi's `docs/security.md`). A
+setting that is ignored (`verify` in the global file, `leadGuard` in the
+project file, or the whole project file of an untrusted project) is reported
+with a warning when the session starts.
+
+A global file, for example:
 
 ```json
 {
@@ -164,11 +183,80 @@ fail, with no file changed through its `write` or `edit` tools in between, the
 worker is told once per prompt to step back or finish as `blocked`. A test-first loop (edit, tests fail, edit) never counts. It is never
 stopped automatically, and Jev is not involved.
 
+### Web access for workers
+
+Workers load no host-side extensions, so web tools installed in your own Pi
+(pi-web-access, context-mode, an MCP server…) do not reach them. Two ways in
+stay within the sandbox policy.
+
+**`web_search` (built in).** Every worker has a `web_search` tool when you are
+logged in to Pi with a ChatGPT subscription (`/login` → OpenAI Codex). It sends
+one request with OpenAI's hosted web search through Pi's own Codex transport:
+the search runs at OpenAI, nothing is fetched from your machine or the VM, and
+the token never reaches the guest. It uses the worker's model when that is an
+`openai-codex` model, otherwise any `openai-codex` model you are logged in to;
+it never falls back to another provider (an OpenAI API key, OpenCode Go, a
+gateway), and a Codex provider pointed at a host other than `chatgpt.com` is
+refused. Without a Codex login the tool is hidden. The answer comes back
+wrapped in `<web-search-results untrusted>` with its source URLs, and each
+search counts against your ChatGPT usage. Queries do not go through the VM's
+egress policy: OpenAI already sees the worker's context, but the pages its
+search visits are chosen by the model, so a query written from untrusted code
+can carry text to a third-party site.
+
+**Context7 (up-to-date library docs).** [Context7](https://context7.com)'s API
+is plain HTTPS GET, so allowlisting it lets workers query it without asking
+Jev or you. `allowedHosts` replaces the default list, so keep the defaults:
+
+```json
+{
+  "sandbox": {
+    "allowedHosts": [
+      "registry.npmjs.org", "pypi.org", "files.pythonhosted.org",
+      "github.com", "codeload.github.com", "objects.githubusercontent.com",
+      "context7.com"
+    ]
+  }
+}
+```
+
+Then tell workers about it in the consuming project's `AGENTS.md` (workers
+read the same `AGENTS.md` as the Lead):
+
+```markdown
+## Library documentation
+
+Before using a third-party API, check its current docs with Context7:
+
+    # find the library ID
+    CTX7_TELEMETRY_DISABLED=1 npx -y ctx7 library nextjs "middleware"
+    # fetch the docs for a topic
+    CTX7_TELEMETRY_DISABLED=1 npx -y ctx7 docs /vercel/next.js "middleware authentication"
+
+Without Node, the same with curl (JSON):
+
+    curl -s "https://context7.com/api/v2/libs/search?libraryName=prisma&query=relations"
+    curl -s "https://context7.com/api/v2/context?libraryId=/prisma/prisma&query=one-to-many%20relations"
+```
+
+`CTX7_TELEMETRY_DISABLED` stops the CLI's usage event, a POST that Jev would
+otherwise have to judge. Queries are anonymous and rate-limited; keep your
+Context7 API key out of the VM.
+
+Then ask the Lead in plain language:
+
+- "Research how Prisma 7 handles one-to-many relations and write it up" → a
+  `research` worker reads the docs through Context7 and cites them.
+- "Add rate limiting to the API with the current Hono middleware" → the
+  `implement` worker checks Hono's docs before writing code.
+- "Find out why `pnpm install` fails with ERR_PNPM_BAD_PM_VERSION since
+  yesterday" → a `debug` worker uses `web_search` for recent reports.
+
 ### Verify
 
 A trusted project names the command that proves its work in
 `.pi/pi-lead.json` (only there: the global config and untrusted projects
-cannot set it):
+cannot set it, and PI Lead warns when either tries):
 
 ```json
 { "verify": "npm run typecheck && npm test" }
