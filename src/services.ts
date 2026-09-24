@@ -8,8 +8,8 @@ const execFileAsync = promisify(execFile);
 /**
  * A relay on `bridge` that forwards to the service's alias on an `--internal`
  * network: the service itself never gets a published port or internet access
- * (see docs/research/sandbox-boundary.md, 2026-09-24). Pinned by digest
- * (multi-arch index, checked amd64+arm64) so a socat tag change can't slip in.
+ * (see docs/research/sandbox-boundary.md, 2026-09-24). Pinned by digest so a
+ * socat tag change can't slip in.
  */
 const SOCAT_IMAGE = "alpine/socat@sha256:24220ef2c80a2a421ea08e4624488e985330c421b6aa3329bae14b0933a1d403";
 
@@ -87,8 +87,12 @@ export async function startServices(id: string, services: readonly SandboxServic
   }
 }
 
-/** Removes every container and network labeled for `id`. Best-effort: a worker's cleanup must never fail on this. */
-export async function stopServices(id: string): Promise<void> {
+/**
+ * Removes every container and network labeled for `id`. Best-effort: a
+ * worker's cleanup must never fail on this. Returns what is still there after
+ * cleanup (empty when everything is gone), so a caller can warn the user.
+ */
+export async function stopServices(id: string): Promise<string[]> {
   const filter = `label=${LABEL}=${id}`;
   try {
     const containers = (await docker(["ps", "-aq", "--filter", filter])).split("\n").map((line) => line.trim()).filter(Boolean);
@@ -101,5 +105,12 @@ export async function stopServices(id: string): Promise<void> {
     for (const network of networks) await docker(["network", "rm", network]).catch(() => undefined);
   } catch {
     // best-effort cleanup
+  }
+  try {
+    const containers = (await docker(["ps", "-a", "--filter", filter, "--format", "{{.Names}}"])).split("\n").map((line) => line.trim()).filter(Boolean);
+    const networks = (await docker(["network", "ls", "--filter", filter, "--format", "{{.Name}}"])).split("\n").map((line) => line.trim()).filter(Boolean);
+    return [...containers, ...networks];
+  } catch (error) {
+    return [`docker unreachable: ${error instanceof Error ? error.message : String(error)}`];
   }
 }

@@ -131,7 +131,8 @@ export type DelegateDeps = {
   /** Docker sidecar services (sandbox.services); absent when the host has no way to run them. */
   services?: {
     start(id: string, services: readonly SandboxService[]): Promise<StartedService[]>;
-    stop(id: string): Promise<void>;
+    /** Never rejects; resolves to what is still there after cleanup (empty when everything is gone). */
+    stop(id: string): Promise<string[]>;
   };
   /** The Gondolin image selector for workers when the config names none (downloads it the first time). */
   image?(progress: (text: string) => void): Promise<string>;
@@ -561,7 +562,10 @@ export function createDelegator(deps: DelegateDeps) {
 
   /** Stop this worker's sandbox containers, if any were started (best-effort, never throws). */
   const stopServices = async (worker: Worker) => {
-    if (worker.taskDir && deps.services) await deps.services.stop(basename(worker.taskDir)).catch(() => undefined);
+    // Nothing to stop, and no configured services means no reason to call Docker on hosts that don't run it.
+    if (!worker.taskDir || !deps.services || !deps.config.sandbox.services?.length) return;
+    const leftover = await deps.services.stop(basename(worker.taskDir)).catch(() => []);
+    if (leftover.length) progress(`could not remove Docker resources for "${worker.title}": ${leftover.join(", ")}`);
   };
 
   /**
@@ -1090,6 +1094,13 @@ export function createDelegator(deps: DelegateDeps) {
           .filter((worker) => worker.tabId)
           .map((worker) => closeAndClean(worker, worker.state === "failed" && deps.config.keepFailedWorkers)),
       );
+      // Still inside launch() when the race timed out: no tab, but its services may already run.
+      // Its taskDir is left alone so a later reconcile still finds the record if a docker run lands after this.
+      await Promise.all(
+        [...workers.values()]
+          .filter((worker) => !["done", "failed", "stopped"].includes(worker.state) && !worker.tabId && worker.taskDir)
+          .map((worker) => stopServices(worker)),
+      );
     },
 
     /**
@@ -1112,7 +1123,12 @@ export function createDelegator(deps: DelegateDeps) {
         if (record && record.leadPid !== process.pid && !processAlive(record.leadPid)) orphans.push({ dir, record });
       }
       // Independent of Herdr: an orphaned task dir's containers must go even without a tab to close.
-      if (deps.services) for (const { dir } of orphans) await deps.services.stop(basename(dir)).catch(() => undefined);
+      if (deps.services && deps.config.sandbox.services?.length) {
+        for (const { dir } of orphans) {
+          const leftover = await deps.services.stop(basename(dir)).catch(() => []);
+          if (leftover.length) progress(`could not remove Docker resources for "${basename(dir)}": ${leftover.join(", ")}`);
+        }
+      }
       const herdr = deps.herdr;
       // Nothing can be closed outside Herdr: keep the records for a Lead inside it.
       if (!herdr || orphans.length === 0) return 0;

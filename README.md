@@ -191,9 +191,10 @@ by name (needs Docker; a global or trusted project `.pi/pi-lead.json`):
 ```
 
 The worker reaches it at `postgres:5432` and sees `PI_LEAD_SERVICE_POSTGRES=postgres:5432`
-in its environment. Each service runs on its own `--internal` Docker network (no
-internet, no published port); a socat relay bound to `127.0.0.1` on the host is
-the only way in, forwarded into the VM through Gondolin's `tcp.hosts` mapping,
+in its environment. Each worker gets one `--internal` Docker network shared by
+its services, which have no internet access and no published port; a socat
+relay bound to `127.0.0.1` on the host is the only way in, forwarded into the
+VM through Gondolin's `tcp.hosts` mapping,
 which the Lead resolves itself from trusted config only. Containers are
 labelled per worker and removed when its tab closes (or, for one an earlier
 Lead process left behind, on the next session's reconcile). A service can take
