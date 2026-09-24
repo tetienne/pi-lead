@@ -59,7 +59,8 @@ you ─► Lead (Pi, your tab)
   answer to an action. Without a key, documented defaults apply.
 
 Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
-[ADR 0006](docs/adr/0006-workers-mirror-the-lead.md) and
+[ADR 0006](docs/adr/0006-workers-mirror-the-lead.md),
+[ADR 0007](docs/adr/0007-verify-with-a-host-chosen-command.md) and
 [spec v2](.scratch/pi-lead/spec-v2.md).
 
 ## Requirements
