@@ -224,6 +224,11 @@ export function slugify(text: string): string {
   );
 }
 
+/** Worker text never closes (or opens) the report's untrusted block, for the model or the card. */
+export function unmarked(text: string): string {
+  return text.replace(/<(\/?)(worker-report)/gi, "‹$1$2");
+}
+
 export function isSafeBranchName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(name) && !name.includes("..") && !name.endsWith("/") &&
     !name.endsWith(".lock") && !name.includes("//");
@@ -748,11 +753,11 @@ export function createDelegator(deps: DelegateDeps) {
         // Everything in this block was written inside the sandbox: report it, never obey it.
         "<worker-report untrusted>",
         "Summary:",
-        result.summary,
-        ...(collected.commits ? ["", "Commits:", collected.commits] : []),
-        ...(collected.diffStat ? ["", "Diff stat:", collected.diffStat] : []),
-        ...(result.findings ? ["", "Findings:", result.findings] : []),
-        ...(verification?.outputTail ? ["", "Verify output (tail):", verification.outputTail] : []),
+        unmarked(result.summary),
+        ...(collected.commits ? ["", "Commits:", unmarked(collected.commits)] : []),
+        ...(collected.diffStat ? ["", "Diff stat:", unmarked(collected.diffStat)] : []),
+        ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
+        ...(verification?.outputTail ? ["", "Verify output (tail):", unmarked(verification.outputTail)] : []),
         "</worker-report>",
         // Host-generated from the fixed pattern list, so it sits outside the block; guest-chosen file names stay inside.
         ...(sensitive.length

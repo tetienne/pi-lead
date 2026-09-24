@@ -1,3 +1,5 @@
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+
 import type { ReportCard } from "./delegate.ts";
 import type { WorkerVerdict } from "./jev.ts";
 import { cleanLines, type Paint } from "./tool-display.ts";
@@ -65,19 +67,35 @@ function isCard(value: unknown): value is ReportCard {
   );
 }
 
-/** Every line the worker wrote, each behind a painted gutter, so none can pass for a host line. */
-function workerLines(text: string, paint: Paint): string[] {
-  const gutter = paint("muted", "  │ ");
-  return [paint("muted", "  worker says (untrusted):"), ...cleanLines(text, Number.POSITIVE_INFINITY, 2_000).split("\n").map((line) => `${gutter}${line.trimStart()}`)];
-}
+/** Worker text for the card: every line, uncut (the model reads all of it), cleaned of escapes and controls. */
+const cleanWorkerText = (text: string) => cleanLines(text, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER);
+
+const GUTTER = "  │ ";
 
 /**
- * The card's text, or undefined for a report without a card (another
- * version, a stop): Pi then shows the plain text. Collapsed, it shows host
- * facts and every untrusted line (summary, commits, diff stat, findings,
- * verify output); expanded, the full report exactly as the model reads it.
+ * The worker's lines wrapped to `width`, with the painted gutter on every
+ * row, wrapped ones included: no row of worker text can pass for a host line.
  */
-export function renderCard(details: unknown, content: string, expanded: boolean, paint: Paint): string | undefined {
+export function gutterLines(said: string, width: number, paint: Paint): string[] {
+  const inner = Math.max(1, width - GUTTER.length);
+  const rows = [paint("muted", "  worker says (untrusted):")];
+  for (const line of said.split("\n")) {
+    const wrapped = line.trim() ? wrapTextWithAnsi(line.trimStart(), inner) : [""];
+    for (const row of wrapped) rows.push(`${paint("muted", GUTTER)}${row}`);
+  }
+  return rows;
+}
+
+/** A card in three parts: host lines, the worker's own lines (drawn behind a gutter), host lines. */
+export type CardParts = { head: string; said?: string; tail?: string };
+
+/**
+ * The card, or undefined for a report without one (another version, a
+ * stop): Pi then shows the plain text. Collapsed, it shows host facts and
+ * every untrusted line (summary, commits, diff stat, findings, verify
+ * output); expanded, the full report exactly as the model reads it.
+ */
+export function renderCard(details: unknown, content: string, expanded: boolean, paint: Paint): CardParts | undefined {
   const report = details as ReportDetails | undefined;
   const status = report?.status as Status | undefined;
   if (!report || !status || !Object.hasOwn(HEADLINE, status) || !isCard(report.card)) return undefined;
@@ -107,12 +125,20 @@ export function renderCard(details: unknown, content: string, expanded: boolean,
     lines.push(paint("warning", `  ! review before merging: ${report.sensitive.map((pattern) => safePreview(pattern, 60)).join(", ")}`));
   }
 
+  const block = untrustedBlock(content);
+  const said = block ?? card.summary;
+  const parts: CardParts = { head: lines.join("\n"), ...(said?.trim() ? { said: cleanWorkerText(said) } : {}) };
   if (expanded) {
-    lines.push("", paint("dim", cleanLines(content, Number.POSITIVE_INFINITY, 2_000)));
-    return lines.join("\n");
+    // The full text around the block, as the model reads it; the block itself stays behind the gutter.
+    const open = content.indexOf("<worker-report untrusted>");
+    const close = content.lastIndexOf("</worker-report>");
+    const before = block === undefined ? content : content.slice(0, open);
+    const after = block === undefined ? "" : content.slice(close + "</worker-report>".length);
+    return {
+      head: `${parts.head}\n\n${paint("dim", cleanWorkerText(before.replace(/\n+$/, "")))}`,
+      ...(parts.said ? { said: parts.said } : {}),
+      ...(after.trim() ? { tail: paint("dim", cleanWorkerText(after.replace(/^\n+/, ""))) } : {}),
+    };
   }
-  const said = untrustedBlock(content) ?? card.summary;
-  if (said?.trim()) lines.push(...workerLines(said, paint));
-  for (const step of card.next) lines.push(paint("dim", `  next: ${safePreview(step, 300)}`));
-  return lines.join("\n");
+  return { ...parts, ...(card.next.length ? { tail: card.next.map((step) => paint("dim", `  next: ${safePreview(step, 300)}`)).join("\n") } : {}) };
 }

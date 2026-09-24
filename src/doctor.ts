@@ -23,7 +23,7 @@ export type SetupFacts = {
 };
 
 /** One line per problem that stops workers or degrades them, for a warning at session start. */
-export function startupWarnings(facts: SetupFacts): string[] {
+export function startupWarnings(facts: Pick<SetupFacts, "herdr" | "herdrPi">): string[] {
   if (!facts.herdr) return ["PI Lead: this Pi is not inside Herdr, so it cannot start workers. Start it in a Herdr pane."];
   if (!facts.herdrPi) {
     return ["PI Lead: Herdr's Pi integration is missing (worker badges and messages to workers). Run `herdr integration install pi`."];

@@ -16,7 +16,7 @@ import { createWorkerImage, hasReleasedImage, PACKAGE_VERSION, releaseImageRef }
 import { resolveRoute } from "./model-routing.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
-import { renderCard } from "./report-card.ts";
+import { gutterLines, renderCard } from "./report-card.ts";
 import { registerReportGuard, WORKER_REPORT_TYPE } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
@@ -119,6 +119,8 @@ export default function lead(pi: ExtensionAPI) {
   registerReportGuard(pi);
 
   let leadConfig: LeadConfig | undefined;
+  /** `delegate` calls in their start phase, which share Pi's working message. */
+  let delegating = 0;
 
   /** What `/lead-doctor` and the session-start warning look at. */
   const setupFacts = (ctx: ExtensionContext, config: LeadConfig): SetupFacts => {
@@ -167,6 +169,7 @@ export default function lead(pi: ExtensionAPI) {
     ui = ctx.ui;
     hasUI = ctx.hasUI;
     const agentDir = getAgentDir();
+    leadConfig = undefined; // `/lead-doctor` never reports a previous session's config
     const config: LeadConfig = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     leadConfig = config;
     const ask = createAskJev(config.jev);
@@ -234,7 +237,16 @@ export default function lead(pi: ExtensionAPI) {
     recent.length = 0;
     const current = await setup(ctx);
     // Only what stops workers or degrades them; `/lead-doctor` shows the rest.
-    if (ctx.hasUI && leadConfig) for (const warning of startupWarnings(setupFacts(ctx, leadConfig))) ctx.ui.notify(warning, "warning");
+    if (ctx.hasUI) {
+      try {
+        const herdr = createHerdrCli();
+        for (const warning of startupWarnings({ ...(herdr ? { herdr: herdr.workspace } : {}), herdrPi: findHerdrPiExtension() !== undefined })) {
+          ctx.ui.notify(warning, "warning");
+        }
+      } catch {
+        // A check must never keep the session from starting or skip the reconcile below.
+      }
+    }
     // Close tabs a crashed or killed Lead left open; in the background, never blocking the session.
     void current.reconcile().catch(() => undefined);
   });
@@ -259,10 +271,14 @@ export default function lead(pi: ExtensionAPI) {
 
   // A card for the user; the model still reads the report's full text.
   pi.registerMessageRenderer(WORKER_REPORT_TYPE, (message, { expanded, outputPad }, theme) => {
-    const text = renderCard(message.details, resultText({ content: typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content }), expanded, paint(theme));
-    if (text === undefined) return undefined;
+    const content = typeof message.content === "string" ? message.content : resultText({ content: message.content });
+    const card = renderCard(message.details, content, expanded, paint(theme));
+    if (card === undefined) return undefined;
     const box = new Box(outputPad, 1, (line) => theme.bg("customMessageBg", line));
-    box.addChild(new Text(text, 0, 0));
+    box.addChild(new Text(card.head, 0, 0));
+    const said = card.said;
+    if (said !== undefined) box.addChild({ render: (width: number) => gutterLines(said, width, paint(theme)), invalidate: () => undefined });
+    if (card.tail) box.addChild(new Text(card.tail, 0, 0));
     return box;
   });
 
@@ -318,7 +334,8 @@ export default function lead(pi: ExtensionAPI) {
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
       // Jev's intake and difficulty call can take a few seconds: say what the wait is.
-      if (ctx.hasUI) ctx.ui.setWorkingMessage("Sizing up the ticket and picking a model…");
+      // One shared slot: the last of parallel delegations restores Pi's default.
+      if (ctx.hasUI && delegating++ === 0) ctx.ui.setWorkingMessage("Sizing up the ticket and picking a model…");
       let started: StartResult;
       try {
         started = await current.start(params, {
@@ -329,7 +346,7 @@ export default function lead(pi: ExtensionAPI) {
           ...(ctx.hasUI ? { confirm: (question: string) => ctx.ui.confirm("PI Lead sandbox", question, { timeout: 120_000 }) } : {}),
         });
       } finally {
-        if (ctx.hasUI) ctx.ui.setWorkingMessage();
+        if (ctx.hasUI && --delegating === 0) ctx.ui.setWorkingMessage();
       }
       status();
       return { content: [{ type: "text", text: started.text }], details: started };
