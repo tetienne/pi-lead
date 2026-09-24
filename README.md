@@ -91,8 +91,22 @@ pi install -l git:github.com/tetienne/pi-lead@v0.6.0
 
 ## Configure
 
-`~/.pi/agent/pi-lead.json` (a trusted project can override it in
-`.pi/pi-lead.json`). Everything is optional:
+Two files, both optional:
+
+- `~/.pi/agent/pi-lead.json` (global): every key except `verify`.
+- `.pi/pi-lead.json` in the project: overrides the global file, key by key,
+  and is the only place for `verify`. It cannot set `leadGuard`, and it is
+  read only when Pi trusts the project.
+
+Pi trusts a project whose `.pi` holds only `pi-lead.json` on its own. When the
+project also has `.pi/settings.json`, `.pi/extensions`, skills, prompts or
+similar, Pi asks at startup; to trust it later, run `/trust` and restart Pi,
+or start Pi with `--approve` for one run (see Pi's `docs/security.md`). A
+setting that is ignored (`verify` in the global file, `leadGuard` in the
+project file, or the whole project file of an untrusted project) is reported
+with a warning when the session starts.
+
+A global file, for example:
 
 ```json
 {
@@ -150,7 +164,7 @@ stopped automatically, and Jev is not involved.
 
 A trusted project names the command that proves its work in
 `.pi/pi-lead.json` (only there: the global config and untrusted projects
-cannot set it):
+cannot set it, and PI Lead warns when either tries):
 
 ```json
 { "verify": "npm run typecheck && npm test" }

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -148,6 +148,23 @@ async function readJson(path: string): Promise<PartialConfig | undefined> {
   }
 }
 
+/** A path for a notice: `~` for the home directory, nothing else shortened. */
+function displayPath(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}
+
+function has(value: PartialConfig, key: keyof PartialConfig): boolean {
+  return typeof value === "object" && value !== null && key in value;
+}
+
+async function exists(path: string): Promise<boolean> {
+  return access(path).then(
+    () => true,
+    () => false,
+  );
+}
+
 /**
  * Global `<agent dir>/pi-lead.json` (`~/.pi/agent` unless PI_CODING_AGENT_DIR
  * moves it), then project `.pi/pi-lead.json`. The project file can widen
@@ -156,21 +173,46 @@ async function readJson(path: string): Promise<PartialConfig | undefined> {
  * be able to disable the check that protects the host from worker reports.
  * `verify` is the reverse: a command for one project, so only the project
  * file sets it (it runs in the worker's VM, never on the host).
+ *
+ * `ignored` has one line per setting dropped by these rules, so the Lead can
+ * say so instead of silently ignoring it. It names keys and paths only.
  */
+export async function loadConfigWithNotices(
+  cwd: string,
+  options: { projectTrusted: boolean; agentDir?: string },
+): Promise<{ config: LeadConfig; ignored: string[] }> {
+  let config = DEFAULT_CONFIG;
+  const ignored: string[] = [];
+  const globalPath = join(options.agentDir ?? join(homedir(), ".pi", "agent"), "pi-lead.json");
+  const projectPath = join(cwd, ".pi", "pi-lead.json");
+  const global = await readJson(globalPath);
+  if (global) {
+    if (has(global, "verify")) {
+      ignored.push(`PI Lead: \`verify\` in ${displayPath(globalPath)} is ignored; set it in the project's .pi/pi-lead.json.`);
+      delete global.verify;
+    }
+    config = mergeConfig(config, global);
+  }
+  if (options.projectTrusted) {
+    const project = await readJson(projectPath);
+    if (project) {
+      if (has(project, "leadGuard")) {
+        ignored.push("PI Lead: `leadGuard` in .pi/pi-lead.json is ignored; only the global config can change it.");
+        delete project.leadGuard;
+      }
+      config = mergeConfig(config, project);
+    }
+  } else if (await exists(projectPath)) {
+    ignored.push(
+      "PI Lead: .pi/pi-lead.json is ignored because this project is not trusted in Pi (use /trust and restart Pi, or start it with --approve).",
+    );
+  }
+  return { config, ignored };
+}
+
 export async function loadConfig(
   cwd: string,
   options: { projectTrusted: boolean; agentDir?: string },
 ): Promise<LeadConfig> {
-  let config = DEFAULT_CONFIG;
-  const globalPath = join(options.agentDir ?? join(homedir(), ".pi", "agent"), "pi-lead.json");
-  const paths = [globalPath];
-  if (options.projectTrusted) paths.push(join(cwd, ".pi", "pi-lead.json"));
-  for (const path of paths) {
-    const override = await readJson(path);
-    if (!override) continue;
-    if (path !== globalPath) delete override.leadGuard;
-    else delete override.verify;
-    config = mergeConfig(config, override);
-  }
-  return config;
+  return (await loadConfigWithNotices(cwd, options)).config;
 }
