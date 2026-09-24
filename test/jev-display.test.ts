@@ -47,12 +47,10 @@ test("display modes filter what gets a line", () => {
   const tier = decision({});
   const fallback = decision({ outcome: "unsure → standard", applied: "fallback" });
   const overridden = decision({ kind: "verdict", outcome: "done → partial", applied: "overridden" });
-  const stuck = decision({ kind: "stuck", outcome: "yes" });
-  const notStuck = decision({ kind: "stuck", outcome: "no" });
-  const all = [allow, deny, ask, tier, fallback, overridden, stuck, notStuck];
+  const all = [allow, deny, ask, tier, fallback, overridden];
   assert.deepEqual(all.filter((d) => shouldShow(d, "verbose")), all);
-  assert.deepEqual(all.filter((d) => shouldShow(d, "normal")), [deny, ask, tier, fallback, overridden, stuck, notStuck]);
-  assert.deepEqual(all.filter((d) => shouldShow(d, "quiet")), [deny, ask, fallback, overridden, stuck]);
+  assert.deepEqual(all.filter((d) => shouldShow(d, "normal")), [deny, ask, tier, fallback, overridden]);
+  assert.deepEqual(all.filter((d) => shouldShow(d, "quiet")), [deny, ask, fallback, overridden]);
   assert.equal(displayMode("quiet"), "quiet");
   assert.equal(displayMode("loud"), "normal");
   assert.equal(displayMode(undefined), "normal");
@@ -106,4 +104,9 @@ test("a replayed entry cannot inject escape sequences or overflow the line", () 
   const [line] = renderDecision(hostile, false, 40);
   assert.ok(!/[\x00-\x1f]/.test(line!), "no control characters");
   assert.ok([...line!].length <= 40 && /^[\x20-\x7e◆◇▲≥≤→…·]*$/.test(line!), "one column per character, within the width");
+});
+
+test("a line that fits the width is sanitised too", () => {
+  const [line] = renderDecision(decision({ outcome: "x\u001b[31mred漢" }), false, 200);
+  assert.equal(line, "◆ jev · tier x?[31mred?", "escape sequences and wide characters are replaced");
 });

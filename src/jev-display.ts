@@ -29,15 +29,13 @@ export function glyph(decision: Pick<JevDecision, "applied">): string {
 /** Egress Jev allowed: by far the most frequent decision, and the least interesting. */
 const isEgressAllow = (decision: JevDecision) => decision.kind === "egress" && decision.applied === "jev" && decision.outcome === "allow";
 const isEgressDeny = (decision: JevDecision) => decision.kind === "egress" && decision.applied === "jev" && decision.outcome === "deny";
-/** Jev found a worker stuck: the worker is told to change course. */
-export const isStuck = (decision: JevDecision) => decision.kind === "stuck" && decision.applied === "jev" && decision.outcome === "yes";
 
 /** Whether a decision gets its own line (transcript in the Lead, notification in a worker tab). */
 export function shouldShow(decision: JevDecision, display: JevDisplay): boolean {
   if (display === "verbose") return true;
   if (display === "normal") return !isEgressAllow(decision);
-  // quiet: only what did not go Jev's way, egress that did not go through, and a worker found stuck.
-  return decision.applied !== "jev" || isEgressDeny(decision) || isStuck(decision);
+  // quiet: only what did not go Jev's way and egress that did not go through.
+  return decision.applied !== "jev" || isEgressDeny(decision);
 }
 
 /** Is a stored entry (possibly from another version) a decision this code can render? */
@@ -90,7 +88,7 @@ const safe = (line: string) => line.replace(/[^\x20-\x7e◆◇▲≥≤→…·]
 
 function fit(line: string, width: number): string {
   const chars = [...safe(line)];
-  return chars.length <= width ? line : `${chars.slice(0, Math.max(0, width - 1)).join("")}…`;
+  return chars.length <= width ? chars.join("") : `${chars.slice(0, Math.max(0, width - 1)).join("")}…`;
 }
 
 /** Lines of the transcript entry, each at most `width` columns, before theming. */

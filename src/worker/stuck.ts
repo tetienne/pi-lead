@@ -1,19 +1,15 @@
-import type { ShellRun } from "../jev.ts";
-
 /**
  * Notices a worker that keeps repeating a failing approach, which burns the
- * user's model quota. Deterministic triggers on the shell commands the
- * host-side bash wrapper saw; Jev only confirms; the response is graduated and
- * never stops the worker: a steer, then a steer to finish as blocked and a
- * warning in the tab.
+ * user's model quota. Deterministic: failing shell commands seen by the
+ * host-side bash wrapper count, and a file written or edited through the
+ * sandboxed tools clears them, so a test-first loop (edit, test fails, edit)
+ * never counts. The response is one steer per cycle; the worker is never stopped.
  */
 
-/** Same normalized command failing this many times, with no success of it in between. */
+/** Same normalized command failing this many times, with no success of it and no file change in between. */
 export const SAME_COMMAND_FAILURES = 3;
-/** This many shell commands in a row failing, whatever they are. */
+/** This many shell commands in a row failing, whatever they are, with no file change in between. */
 export const FAILURE_STREAK = 6;
-/** Shell commands to wait after a check before checking again; doubles after each "not stuck", to bound Jev calls. */
-export const CHECK_COOLDOWN = 3;
 
 export type StuckTrigger = { kind: "same_command"; command: string; failures: number } | { kind: "streak"; failures: number };
 
@@ -37,110 +33,61 @@ const quote = (command: string) => {
   return `\`${line.length > 200 ? `${line.slice(0, 200)}…` : line}\``;
 };
 
-/** First response: step back. */
 export function steerMessage(trigger: StuckTrigger): string {
   const what =
     trigger.kind === "same_command"
-      ? `you ran ${quote(trigger.command)} ${trigger.failures} times with the same failure`
-      : `your last ${trigger.failures} shell commands all failed`;
+      ? `you ran ${quote(trigger.command)} ${trigger.failures} times with the same failure and changed no file in between`
+      : `your last ${trigger.failures} shell commands all failed and you changed no file in between`;
   return `PI Lead: ${what}. Step back: re-read the error, try a different approach, or finish with status blocked explaining what you tried.`;
 }
 
-/** Second response, in the same run: finish now. */
-export function finishMessage(trigger: StuckTrigger): string {
-  const what =
-    trigger.kind === "same_command"
-      ? `you ran ${quote(trigger.command)} ${trigger.failures} times with the same failure`
-      : `your last ${trigger.failures} shell commands all failed`;
-  return `PI Lead: you were already told to step back, and ${what}. Stop now: call finish with status blocked, explaining what you tried and what failed.`;
-}
-
-/** The warning shown in the worker tab on the second detection. */
-export function tabWarning(trigger: StuckTrigger): string {
-  const what = trigger.kind === "same_command" ? `keeps failing on ${quote(trigger.command)}` : `had ${trigger.failures} failing shell commands in a row`;
-  return `PI Lead: this worker ${what} after a warning; it was told to finish as blocked. It keeps running until it does or you stop it.`;
-}
-
 export type StuckDetector = {
-  /** Record one shell command; resolves once any check it started is over. */
-  record(run: ShellRun): Promise<void>;
-  /** A new prompt (from the Lead or the user), or a reported result, starts a new cycle; a check in flight is dropped. */
+  /** Record one shell command; `exitCode` -1 means it did not complete. */
+  record(command: string, exitCode: number): void;
+  /** A file was written or edited: the failures so far were not a loop. */
+  progress(): void;
+  /** A new prompt (from the Lead or the user), or a reported result, starts a new cycle. */
   reset(): void;
 };
 
-export function createStuckDetector(options: {
-  /** Jev's opinion; `undefined` when it is unavailable or unsure. */
-  judge: (runs: readonly ShellRun[]) => Promise<boolean | undefined>;
-  steer: (text: string) => void;
-  notify: (text: string) => void;
-}): StuckDetector {
-  let runs: ShellRun[] = [];
+export function createStuckDetector(options: { steer: (text: string) => void }): StuckDetector {
   let failures = new Map<string, number>();
-  let runsSinceCheck = Number.POSITIVE_INFINITY;
-  let cooldown = CHECK_COOLDOWN;
-  /** 0: nothing said yet, 1: steered, 2: told to finish (no more checks this cycle). */
-  let level = 0;
-  let checking = false;
-  let cycle = 0;
+  let streak = 0;
+  let steered = false;
 
-  const triggerFor = (run: ShellRun): StuckTrigger | undefined => {
-    const count = failures.get(normalizeCommand(run.command)) ?? 0;
-    if (count >= SAME_COMMAND_FAILURES) return { kind: "same_command", command: run.command, failures: count };
-    const recent = runs.slice(-FAILURE_STREAK);
-    if (recent.length === FAILURE_STREAK && recent.every((entry) => entry.exitCode !== 0)) {
-      return { kind: "streak", failures: FAILURE_STREAK };
-    }
-    return undefined;
+  const progress = () => {
+    failures = new Map();
+    streak = 0;
   };
 
   return {
-    async record(run) {
-      runs = [...runs.slice(-(FAILURE_STREAK - 1)), run];
-      const key = normalizeCommand(run.command);
-      if (run.exitCode === 0) failures.delete(key);
-      else failures.set(key, (failures.get(key) ?? 0) + 1);
-      runsSinceCheck += 1;
-      if (run.exitCode === 0 || level >= 2 || checking || runsSinceCheck < cooldown) return;
-      const trigger = triggerFor(run);
-      if (!trigger) return;
-
-      checking = true;
-      runsSinceCheck = 0;
-      const started = cycle;
-      try {
-        let stuck: boolean | undefined;
-        try {
-          stuck = await options.judge(runs);
-        } catch {
-          stuck = undefined;
-        }
-        if (started !== cycle) return;
-        // Without Jev only the strict trigger counts: six unrelated failures can be normal exploration.
-        if (!(stuck ?? trigger.kind === "same_command")) {
-          cooldown *= 2;
-          return;
-        }
-        if (level === 0) {
-          level = 1;
-          options.steer(steerMessage(trigger));
-        } else {
-          level = 2;
-          options.notify(tabWarning(trigger));
-          options.steer(finishMessage(trigger));
-        }
-      } finally {
-        if (started === cycle) checking = false;
+    record(command, exitCode) {
+      const key = normalizeCommand(command);
+      if (exitCode === 0) {
+        failures.delete(key);
+        streak = 0;
+        return;
       }
+      const count = (failures.get(key) ?? 0) + 1;
+      failures.set(key, count);
+      streak += 1;
+      if (steered) return;
+      const trigger: StuckTrigger | undefined =
+        count >= SAME_COMMAND_FAILURES
+          ? { kind: "same_command", command, failures: count }
+          : streak >= FAILURE_STREAK
+            ? { kind: "streak", failures: streak }
+            : undefined;
+      if (!trigger) return;
+      steered = true;
+      options.steer(steerMessage(trigger));
     },
 
+    progress,
+
     reset() {
-      runs = [];
-      failures = new Map();
-      runsSinceCheck = Number.POSITIVE_INFINITY;
-      cooldown = CHECK_COOLDOWN;
-      level = 0;
-      checking = false;
-      cycle += 1;
+      progress();
+      steered = false;
     },
   };
 }

@@ -126,13 +126,8 @@ function createGondolinFindOps(vm: VM, localCwd: string): FindOperations {
 	};
 }
 
-/**
- * Called with each shell command, its exit code (-1 when it did not complete)
- * and the last `OUTPUT_TAIL` characters of its output.
- */
-export type CommandListener = (command: string, exitCode: number, outputTail: string) => void;
-
-export const OUTPUT_TAIL = 1_000;
+/** Called with each shell command and its exit code (-1 when it did not complete). */
+export type CommandListener = (command: string, exitCode: number) => void;
 
 function createGondolinBashOps(
 	vm: VM,
@@ -158,8 +153,6 @@ function createGondolinBashOps(
 						}, timeout * 1000)
 					: undefined;
 
-			let tail = "";
-			const decoder = new TextDecoder();
 			try {
 				const proc = vm.exec([shellPath, "-lc", command], {
 					cwd: guestCwd,
@@ -168,15 +161,12 @@ function createGondolinBashOps(
 					stdout: "pipe",
 					stderr: "pipe",
 				});
-				for await (const chunk of proc.output()) {
-					onData(chunk.data);
-					if (onCommand) tail = (tail + decoder.decode(chunk.data, { stream: true })).slice(-OUTPUT_TAIL);
-				}
+				for await (const chunk of proc.output()) onData(chunk.data);
 				const result = await proc;
-				onCommand?.(command, result.exitCode, tail);
+				onCommand?.(command, result.exitCode);
 				return { exitCode: result.exitCode };
 			} catch (error) {
-				onCommand?.(command, -1, tail);
+				onCommand?.(command, -1);
 				if (signal?.aborted) throw new Error("aborted");
 				if (timedOut) throw new Error(`timeout:${timeout}`);
 				throw error;
@@ -196,13 +186,15 @@ export type SandboxHandle = { vm: VM; shellPath: string; env: Record<string, str
  * the VM. The worker is started with `--no-builtin-tools`, so these are the
  * only tools of those names. `localCwd` (Pi's own cwd) only shapes the tool
  * definitions; paths are mapped against the sandbox's `root`. `onCommand`
- * sees every shell command, from the model or typed with `!` in the tab.
+ * sees every shell command, from the model or typed with `!` in the tab;
+ * `onFileChange` runs after each successful `write` or `edit`.
  */
 export function registerSandboxTools(
   pi: ExtensionAPI,
   localCwd: string,
   ensureVm: (ctx?: ExtensionContext) => Promise<SandboxHandle>,
   onCommand?: CommandListener,
+  onFileChange?: () => void,
 ): void {
   const templates = {
     read: createReadTool(localCwd),
@@ -225,14 +217,18 @@ export function registerSandboxTools(
     ...templates.write,
     async execute(id, params, signal, onUpdate, ctx) {
       const { vm, root } = await ensureVm(ctx);
-      return createWriteTool(GUEST_WORKSPACE, { operations: createGondolinWriteOps(vm, root) }).execute(id, params, signal, onUpdate);
+      const result = await createWriteTool(GUEST_WORKSPACE, { operations: createGondolinWriteOps(vm, root) }).execute(id, params, signal, onUpdate);
+      onFileChange?.();
+      return result;
     },
   });
   pi.registerTool({
     ...templates.edit,
     async execute(id, params, signal, onUpdate, ctx) {
       const { vm, root } = await ensureVm(ctx);
-      return createEditTool(GUEST_WORKSPACE, { operations: createGondolinEditOps(vm, root) }).execute(id, params, signal, onUpdate);
+      const result = await createEditTool(GUEST_WORKSPACE, { operations: createGondolinEditOps(vm, root) }).execute(id, params, signal, onUpdate);
+      onFileChange?.();
+      return result;
     },
   });
   pi.registerTool({

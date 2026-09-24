@@ -41,9 +41,9 @@ export type LeadConfig = {
     /** Below this confidence a judgment is treated as "don't know". */
     minConfidence: number;
     /**
-     * `normal`: every Lead judgment as a transcript line, and stuck checks
-     * and egress denials and questions in worker tabs. `quiet`: only
-     * fallbacks, overrides, egress denials and a worker found stuck.
+     * `normal`: every Lead judgment as a transcript line, and egress
+     * denials and questions in worker tabs. `quiet`: only fallbacks,
+     * overrides and egress denials.
      * `verbose`: also allowed egress.
      */
     display: JevDisplay;
@@ -60,8 +60,8 @@ export type LeadConfig = {
   /** A worker waiting on a question this long without an answer is stopped and its tab closed. 0 disables. */
   waitingTimeoutMinutes: number;
   /**
-   * Steer a worker whose shell commands keep failing the same way (see
-   * worker/stuck.ts): once, then once more telling it to finish as blocked.
+   * Steer a worker whose shell commands keep failing with no file changed in
+   * between (see worker/stuck.ts), once per prompt.
    */
   stuckDetection: boolean;
   /**

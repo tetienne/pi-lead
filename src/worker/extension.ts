@@ -7,7 +7,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { Type } from "typebox";
 
 import { createAskJev, createJudge, createLedger, describeJevProblem, type Judge } from "../jev.ts";
-import { decisionLine, displayMode, isStuck, shouldShow } from "../jev-display.ts";
+import { decisionLine, displayMode, shouldShow } from "../jev-display.ts";
 import { quotaError } from "../quota.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
@@ -55,9 +55,9 @@ export default function worker(pi: ExtensionAPI) {
       config: current.jev,
       ledger: createLedger(join(getAgentDir(), "pi-lead", "jev-usage.json")),
       onProblem: (problem) => latestContext?.ui.notify(describeJevProblem(problem), "warning"),
-      // In the worker's own tab only (egress and stuck checks); allowed egress is just counted unless `jev.display` is verbose.
+      // In the worker's own tab only (egress checks); allowed egress is just counted unless `jev.display` is verbose.
       onDecision: (decision) => {
-        if (shouldShow(decision, display)) latestContext?.ui.notify(decisionLine(decision), decision.outcome === "deny" || isStuck(decision) ? "warning" : "info");
+        if (shouldShow(decision, display)) latestContext?.ui.notify(decisionLine(decision), decision.outcome === "deny" ? "warning" : "info");
       },
     });
     return judge;
@@ -102,17 +102,21 @@ export default function worker(pi: ExtensionAPI) {
   };
 
   const stuck = createStuckDetector({
-    judge: async (runs) => (await getJudge()).stuck({ task: (await loadTask()).task, runs }),
     // Queued into the running turn; skipped when the run is already over.
     steer: (text) => {
       if (latestContext && !latestContext.isIdle()) pi.sendMessage({ customType: "pi-lead-stuck", content: text, display: true }, { deliverAs: "steer" });
     },
-    notify: (text) => latestContext?.ui.notify(text, "warning"),
   });
 
-  registerSandboxTools(pi, process.cwd(), ensureVm, (command, exitCode, outputTail) => {
-    if (task && task.stuckDetection !== false) void stuck.record({ command, exitCode, output: outputTail }).catch(() => undefined);
-  });
+  registerSandboxTools(
+    pi,
+    process.cwd(),
+    ensureVm,
+    (command, exitCode) => {
+      if (task && task.stuckDetection !== false) stuck.record(command, exitCode);
+    },
+    () => stuck.progress(),
+  );
 
   /**
    * Commit anything left in the tree, inside the guest, so the host only ever
@@ -131,8 +135,8 @@ export default function worker(pi: ExtensionAPI) {
     const temporary = `${current.resultPath}.tmp`;
     await writeFile(temporary, JSON.stringify(result));
     await rename(temporary, current.resultPath);
-    // A Jev check still in flight must not steer a worker that already reported:
-    // a steer queued now would restart its run after `finish`.
+    // A late steer must not reach a worker that already reported: a steer
+    // queued now would restart its run after `finish`.
     stuck.reset();
   };
 
