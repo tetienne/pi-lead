@@ -29,7 +29,6 @@ const noJudge: Judge = {
   reviewSeverity: async () => undefined,
   failureKind: async () => undefined,
   overlap: async () => undefined,
-  stuck: async () => undefined,
 };
 
 type Log = string[];

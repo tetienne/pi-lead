@@ -136,11 +136,11 @@ npm run sandbox:smoke              # boots a VM and checks the isolation claims
 `allowedHosts` are trusted for downloads only (GET/HEAD and git fetch); any other request, including uploads to an allowlisted host, is
 judged by Jev per path, and when Jev is unsure the worker tab asks you.
 
-`stuckDetection` watches a worker's shell commands: when the same command fails
-three times in a row, or its last six commands all fail, Jev is asked whether
-it is repeating a failed approach; if so the worker is told to step back, and
-the second time to finish as `blocked` (with a warning in its tab). It is never
-stopped automatically. Without Jev, only the same-command case counts.
+`stuckDetection` watches a worker's shell commands and file changes: when the
+same command fails three times without succeeding, or six commands in a row
+fail, with no file changed through its `write` or `edit` tools in between, the
+worker is told once per prompt to step back or finish as `blocked`. A test-first loop (edit, tests fail, edit) never counts. It is never
+stopped automatically, and Jev is not involved.
 
 ### Seeing Jev
 
@@ -158,14 +158,13 @@ the Lead makes gets one dim line in the transcript, which the model never sees:
 `◆` Jev decided and its answer applied, `◇` Jev was unsure, failing or over
 budget and the default applied, `▲` Jev overrode the worker. Pi's expanded
 view adds confidence, threshold, latency and cost. Worker tabs show their
-egress and stuck-loop decisions as notifications. `/jev` lists today's calls and spend by kind
+egress decisions as notifications. `/jev` lists today's calls and spend by kind
 and this session's last 20 decisions.
 
 `jev.display` sets how much shows: `normal` (default) shows every Lead
-judgment, and in worker tabs every stuck-loop check and only denied or
-questioned egress (allowed egress is just counted); `quiet` shows only `◇`,
-`▲`, denied egress and a worker found stuck; `verbose` also shows allowed
-egress.
+judgment, and in worker tabs only denied or questioned egress (allowed egress
+is just counted); `quiet` shows only `◇`, `▲` and denied egress; `verbose` also
+shows allowed egress.
 
 ## Develop
 
