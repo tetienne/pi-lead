@@ -473,7 +473,7 @@ export function createJudge(options: {
                 command: clip(verification.command, 500),
                 exitCode: verification.exitCode,
                 outputTail: clip(verification.outputTail, 2_000),
-                note: "the project's verify command, run by PI Lead in the worker's clone after its last commit; -1 means it did not complete",
+                note: "the project's verify command, run by PI Lead in the worker's worktree after its last commit; -1 means it did not complete",
               }
             : "none: no run of the project's verify command for this result",
         },

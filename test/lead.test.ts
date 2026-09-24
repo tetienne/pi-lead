@@ -129,7 +129,7 @@ test("workers get the Lead's skills plus host copies of the repo's resources, an
   assert.ok(skillArgs.includes("/tmp/t/resources/agents-skills"));
   assert.equal(argv[argv.indexOf("--prompt-template") + 1], "/tmp/t/resources/prompts");
   assert.equal(argv[argv.indexOf("--append-system-prompt") + 1], "/tmp/t/resources/APPEND_SYSTEM.md");
-  assert.ok(!argv.some((arg) => arg.includes("/repo")), "nothing is read from the worker's clone");
+  assert.ok(!argv.some((arg) => arg.includes("/repo")), "nothing is read from the worker's worktree");
   assert.deepEqual(argv.slice(-2), ["--", "/skill:implement do it"]);
 
   const bare = workerCommand({ ...base, resources: { skills: [], prompts: [] } });

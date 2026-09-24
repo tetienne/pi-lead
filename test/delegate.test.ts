@@ -40,13 +40,13 @@ type Reply =
 function fakeWorkspace(log: Log): Workspace {
   return {
     repoRoot: async (cwd) => cwd,
-    create: async ({ branch, startFrom }) => {
-      log.push(`create ${branch}${startFrom ? ` from ${startFrom}` : ""}`);
-      return { base: "abc123" };
+    resolveBase: async ({ startFrom }) => {
+      log.push(`resolveBase${startFrom ? ` from ${startFrom}` : ""}`);
+      return "abc123";
     },
     collect: async ({ branch }) => ({ commits: `def456 work on ${branch}`, diffStat: " src/a.ts | 3 ++-", changedFiles: ["src/a.ts"], head: "def456" }),
     fileAt: async () => undefined,
-    remove: async () => void log.push("remove clone"),
+    remove: async () => void log.push("remove dir"),
   };
 }
 
@@ -62,11 +62,11 @@ function fakeHerdr(
   log: Log,
   replies: Reply[],
   seen: Seen = {},
-  options: { tabs?: Record<string, string[]>; renameFailures?: number; closeFailures?: number; sharedTurns?: boolean } = {},
+  options: { workspaces?: string[]; renameFailures?: number; closeFailures?: number; sharedTurns?: boolean } = {},
 ): Herdr {
   let renameFailures = options.renameFailures ?? 0;
   let closeFailures = options.closeFailures ?? 0;
-  // With sharedTurns, a relaunched worker (new tab) continues the reply list instead of restarting it.
+  // With sharedTurns, a relaunched worker (new worktree) continues the reply list instead of restarting it.
   let sharedTurn = 0;
   let tabs = 0;
   const workers = new Map<string, { task: WorkerTask; exitPath: string; seq: number; turn: number }>();
@@ -84,11 +84,10 @@ function fakeHerdr(
   };
   return {
     workspace: "w1",
-    async listTabs(workspace) {
-      log.push(`list ${workspace}`);
-      const tabs = options.tabs?.[workspace];
-      if (!tabs) throw new Error("workspace_not_found");
-      return tabs;
+    async listWorkspaces() {
+      log.push("list");
+      if (!options.workspaces) throw new Error("herdr not responding");
+      return options.workspaces;
     },
     async reportMetadata(paneId, metadata) {
       log.push(`meta ${paneId} state=${metadata.tokens.state}`);
@@ -98,31 +97,34 @@ function fakeHerdr(
       log.push(`rename ${paneId} ${name}`);
       if (renameFailures-- > 0) throw new Error("agent_not_found");
     },
-    async renameTab(tabId, label) {
-      log.push(`label ${tabId} ${label}`);
+    async renameWorktree(workspaceId, label) {
+      log.push(`label ${workspaceId} ${label}`);
     },
     async notify(title, sound) {
       log.push(`notify ${title} (${sound})`);
     },
-    async openWorkerTab({ label, command }) {
-      const tabId = `tab-${++tabs}`;
+    async createWorktree({ branch, label }) {
+      const workspaceId = `tab-${++tabs}`;
       const paneId = `pane-${tabs}`;
+      log.push(`create ${branch}`);
       log.push(`open ${label}`);
+      return { workspaceId, paneId };
+    },
+    async runCommand(paneId, command) {
       const script = await readFile(scriptOf(command), "utf8");
       seen.script = script;
       const task = JSON.parse(await readFile(/'--pi-lead-task' '([^']+)'/.exec(script)![1]!, "utf8")) as WorkerTask;
       seen.task = task;
       workers.set(paneId, { task, exitPath: /echo \$\? > '([^']+)'/.exec(script)![1]!, seq: 0, turn: 0 });
       reply(paneId);
-      return { tabId, paneId };
     },
     async sendToAgent(paneId, text) {
       log.push(`send ${paneId}: ${text}`);
       reply(paneId);
     },
-    async closeTab(tabId) {
-      log.push(`close ${tabId}`);
-      if (closeFailures-- > 0) throw new Error("tab still running");
+    async removeWorktree(workspaceId) {
+      log.push(`close ${workspaceId}`);
+      if (closeFailures-- > 0) throw new Error("worktree still running");
     },
   };
 }
@@ -222,7 +224,7 @@ test("delegate returns at once; the result arrives later, then the worker is cle
   assert.match(outcome.text, /Branch: pi-lead\/add-csv-export-[^\n]*\nHead: def456\nBase: abc123\n/);
   assert.match(outcome.text, /src\/a\.ts/);
   assert.match(outcome.text, /anthropic\/claude-sonnet-5 · thinking medium · tier standard \(default tier; Jev unavailable\)/);
-  assert.deepEqual(lifecycle(log), ["open ○ Add CSV export", "close tab-1", "remove clone"]);
+  assert.deepEqual(lifecycle(log), ["open ○ Add CSV export", "close tab-1", "remove dir"]);
   assert.equal(delegator.list()[0]!.state, "done");
   const card = outcome.details.card!;
   assert.equal(card.title, "Add CSV export");
@@ -280,8 +282,8 @@ test("a question asked again after a relayed answer calls the user again", async
 test("a stopped worker raises no toast, and a failed rename stops the glyphs for later tabs", async (t) => {
   const log: Log = [];
   const herdr = fakeHerdr(log, ["silent"]);
-  herdr.renameTab = async (tabId, label) => {
-    log.push(`label ${tabId} ${label}`);
+  herdr.renameWorktree = async (workspaceId, label) => {
+    log.push(`label ${workspaceId} ${label}`);
     throw new Error("unrecognized subcommand 'rename'");
   };
   const { delegator } = await setup(t, { herdr });
@@ -301,8 +303,8 @@ test("a transient rename failure keeps the glyphs and is retried on the next sta
   const log: Log = [];
   const herdr = fakeHerdr(log, [{ status: "needs_human", delayMs: 30 }]);
   let failures = 1;
-  herdr.renameTab = async (tabId, label) => {
-    log.push(`label ${tabId} ${label}`);
+  herdr.renameWorktree = async (workspaceId, label) => {
+    log.push(`label ${workspaceId} ${label}`);
     if (failures-- > 0) throw new Error("tab_busy");
   };
   const { delegator, nextOutcome } = await setup(t, { herdr });
@@ -705,7 +707,7 @@ test("shutdown closes the tab of a worker waiting on a question", async (t) => {
   await first;
   assert.ok(!log.includes("close tab-1"));
   await delegator.shutdown();
-  assert.deepEqual(lifecycle(log), ["open ○ Ask", "close tab-1", "remove clone"]);
+  assert.deepEqual(lifecycle(log), ["open ○ Ask", "close tab-1", "remove dir"]);
   assert.equal(outcomes.at(-1)?.status, "stopped");
 });
 
@@ -719,13 +721,13 @@ test("shutdown closes a failed worker's kept tab but keeps its directory", async
   assert.match(outcome.text, /its tab closes when this Lead session ends/);
   assert.ok(!log.includes("close tab-1"), "kept for inspection while the Lead runs");
   const taskDir = dirname(seen.task!.resultPath);
-  assert.equal(JSON.parse(await readFile(join(taskDir, "tab.json"), "utf8")).tabId, "tab-1");
+  assert.equal(JSON.parse(await readFile(join(taskDir, "tab.json"), "utf8")).workspaceId, "tab-1");
 
   await delegator.shutdown();
   assert.ok(log.includes("close tab-1"));
-  assert.ok(!log.includes("remove clone"), "keepFailedWorkers keeps the directory");
+  assert.ok(!log.includes("remove dir"), "keepFailedWorkers keeps the directory");
   const record = JSON.parse(await readFile(join(taskDir, "tab.json"), "utf8"));
-  assert.equal(record.tabId, undefined, "nothing left for a later Lead to close");
+  assert.equal(record.workspaceId, undefined, "nothing left for a later Lead to close");
   assert.equal(record.failed, true);
   assert.equal(record.leadPid, process.pid);
 });
@@ -755,30 +757,30 @@ test("reconcile closes tabs of dead Leads that still exist and removes their dir
       await writeFile(join(stateRoot, name, "tab.json"), JSON.stringify({ version: 1, createdAt: "2026-09-20T00:00:00Z", ...content }));
     }
   };
-  await record("dead-open", { leadPid: 111, tabId: "w1:t7", paneId: "w1:p7" });
-  await record("dead-gone", { leadPid: 111, tabId: "w1:t8", paneId: "w1:p8" });
-  await record("dead-failed", { leadPid: 111, tabId: "w2:t3", paneId: "w2:p3", failed: true });
-  await record("alive", { leadPid: 222, tabId: "w1:t9", paneId: "w1:p9" });
+  await record("dead-open", { leadPid: 111, workspaceId: "w7", paneId: "w7:p1" });
+  await record("dead-gone", { leadPid: 111, workspaceId: "w8", paneId: "w8:p1" });
+  await record("dead-failed", { leadPid: 111, workspaceId: "w9", paneId: "w9:p1", failed: true });
+  await record("alive", { leadPid: 222, workspaceId: "w10", paneId: "w10:p1" });
   await record("unowned", undefined);
   const { delegator, log, progress } = await setup(t, {
     stateRoot,
     processAlive: (pid) => pid === 222,
-    // w2 is gone: Herdr cannot list it.
-    herdrOptions: { tabs: { w1: ["w1:t1", "w1:t7", "w1:t9"] } },
+    // w9 is gone: Herdr no longer lists it.
+    herdrOptions: { workspaces: ["w1", "w7"] },
     workspace: { ...fakeWorkspace([]), remove: async (path) => void removed.push(basename(path)) },
   });
   assert.equal(await delegator.reconcile(), 1);
-  assert.deepEqual(log.filter((line) => line.startsWith("close")), ["close w1:t7"], "only the dead Lead's live tab");
+  assert.deepEqual(log.filter((line) => line.startsWith("close")), ["close w7"], "only the dead Lead's live worktree");
   assert.deepEqual(removed.sort(), ["dead-gone", "dead-open"]);
   const failed = JSON.parse(await readFile(join(stateRoot, "dead-failed", "tab.json"), "utf8"));
-  assert.equal(failed.tabId, undefined, "kept for inspection, but its tab is forgotten");
-  assert.ok(progress.some((line) => line.includes("closed 1 worker tab left by an earlier Lead")));
+  assert.equal(failed.workspaceId, undefined, "kept for inspection, but its worktree is forgotten");
+  assert.ok(progress.some((line) => line.includes("removed 1 worker worktree left by an earlier Lead")));
 });
 
 test("reconcile keeps every record when Herdr does not answer", async (t) => {
   const stateRoot = await mkdtemp(join(tmpdir(), "pi-lead-state-"));
   await mkdir(join(stateRoot, "dead"));
-  await writeFile(join(stateRoot, "dead", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x", tabId: "w1:t7" }));
+  await writeFile(join(stateRoot, "dead", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x", workspaceId: "w7" }));
   const { delegator, log } = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: {} });
   assert.equal(await delegator.reconcile(), 0);
   assert.ok(!log.some((line) => line.startsWith("close") || line.startsWith("remove")));
@@ -786,34 +788,34 @@ test("reconcile keeps every record when Herdr does not answer", async (t) => {
 });
 
 test("reconcile never touches the task dirs of a Lead that is still running", async (t) => {
-  const { delegator, log, stateRoot } = await setup(t, { replies: ["silent"], herdrOptions: { tabs: { w1: ["tab-1"] } } });
+  const { delegator, log, stateRoot } = await setup(t, { replies: ["silent"], herdrOptions: { workspaces: ["w1", "tab-1"] } });
   await delegator.start({ kind: "research", title: "Live", task: "q" }, io);
   await until(() => log.includes("open ○ Live"));
   await until(() => log.some((line) => line.startsWith("meta")));
   const [dir] = await readdir(stateRoot);
-  assert.equal(JSON.parse(await readFile(join(stateRoot, dir!, "tab.json"), "utf8")).tabId, "tab-1");
+  assert.equal(JSON.parse(await readFile(join(stateRoot, dir!, "tab.json"), "utf8")).workspaceId, "tab-1");
   // Same process: even with processAlive faked away, its own records are skipped.
-  const other = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: { tabs: { w1: ["tab-1"] } } });
+  const other = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: { workspaces: ["w1", "tab-1"] } });
   assert.equal(await other.delegator.reconcile(), 0);
   assert.ok(!other.log.some((line) => line.startsWith("close")));
 });
 
-test("reconcile keeps a dead Lead's directory until its tab is confirmed closed", async (t) => {
+test("reconcile keeps a dead Lead's directory until its worktree is confirmed removed", async (t) => {
   const stateRoot = await mkdtemp(join(tmpdir(), "pi-lead-state-"));
   await mkdir(join(stateRoot, "dead-task"));
-  await writeFile(join(stateRoot, "dead-task", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x", tabId: "w1:t7" }));
+  await writeFile(join(stateRoot, "dead-task", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x", workspaceId: "w7" }));
   const { delegator, log } = await setup(t, {
     stateRoot,
     processAlive: () => false,
-    herdrOptions: { tabs: { w1: ["w1:t7"] }, closeFailures: 1 },
+    herdrOptions: { workspaces: ["w1", "w7"], closeFailures: 1 },
   });
   assert.equal(await delegator.reconcile(), 0);
-  assert.ok(log.includes("close w1:t7"));
-  assert.ok(!log.includes("remove clone"));
+  assert.ok(log.includes("close w7"));
+  assert.ok(!log.includes("remove dir"));
   assert.ok((await readdir(stateRoot)).includes("dead-task"));
 
   assert.equal(await delegator.reconcile(), 1);
-  assert.ok(log.includes("remove clone"));
+  assert.ok(log.includes("remove dir"));
 });
 
 test("worker panes get Herdr metadata on every state and an agent name, best-effort", async (t) => {
@@ -904,12 +906,12 @@ test("a worker out of quota continues on the tier's fallback from its branch, an
 
   assert.equal(outcome.status, "done", "only the final result is reported");
   const first = log.find((line) => line.startsWith("create "))!.slice("create ".length);
-  assert.ok(log.includes(`create ${first}-2 from ${first}`), "the second attempt starts from the first one's branch");
+  assert.ok(log.includes(`create ${first}-2`), "the second attempt starts from the first one's branch");
   assert.match(outcome.text, /opencode-go\/glm-5\.3 · thinking high · tier standard/);
   assert.match(outcome.text, new RegExp(`Note: openai-codex/gpt-6-sol ran out of quota; continued on opencode-go/glm-5\\.3 from ${first}`));
   assert.match(seen.script!, /'--model' 'opencode-go\/glm-5\.3'/);
   assert.match(seen.script!, /ran out of model quota on this task/);
-  assert.deepEqual(lifecycle(log), ["open ○ Export", "close tab-1", "remove clone", "open ○ Export", "close tab-2", "remove clone"]);
+  assert.deepEqual(lifecycle(log), ["open ○ Export", "close tab-1", "remove dir", "open ○ Export", "close tab-2", "remove dir"]);
 
   const next = await delegator.start({ kind: "implement", title: "Import", task: "t" }, both);
   assert.match(next.text, /to opencode-go\/glm-5\.3/);
@@ -970,7 +972,7 @@ test("a worker out of quota with uncommitted changes stays put instead of moving
   assert.equal(outcome.status, "blocked");
   assert.match(outcome.text, /uncommitted changes, so it was not moved to another model/);
   assert.equal(log.filter((line) => line.startsWith("open")).length, 1);
-  assert.ok(!log.includes("remove clone"), "the clone with the changes is kept");
+  assert.ok(!log.includes("remove dir"), "the worktree with the changes is kept");
 });
 
 test("with keepFailedWorkers off, a blocked quota report says to delegate again from the branch", async (t) => {

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
-import { isUsageError, workspaceFromPaneId, type Herdr } from "./herdr.ts";
+import { isUsageError, type Herdr } from "./herdr.ts";
 import { defaultTier, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
@@ -48,6 +48,7 @@ export type WorkerInfo = {
   state: WorkerState;
   branch?: string;
   route: WorkerRoute;
+  /** A worktree workspace open in Herdr for this worker. */
   tabOpen: boolean;
   /** Verdict of the last finish, which says why a waiting worker waits. */
   verdict?: WorkerVerdict;
@@ -137,13 +138,13 @@ export type DelegateDeps = {
 
 /**
  * `tab.json` in each task dir, written by the Lead that owns it. A later Lead
- * uses it to close the tabs of a Lead that crashed or was killed.
+ * uses it to remove the worktrees of a Lead that crashed or was killed.
  */
 type TabRecord = {
   version: 1;
   leadPid: number;
   createdAt: string;
-  tabId?: string;
+  workspaceId?: string;
   paneId?: string;
   /** A failed worker whose task dir is kept for inspection (keepFailedWorkers). */
   failed?: boolean;
@@ -178,10 +179,10 @@ type Worker = WorkerInfo & {
   done: Promise<void>;
   resolveDone(): void;
   taskDir?: string;
-  clonePath?: string;
+  worktreePath?: string;
   repoRoot?: string;
   base?: string;
-  tabId?: string;
+  workspaceId?: string;
   paneId?: string;
   resultPath?: string;
   exitPath?: string;
@@ -193,9 +194,9 @@ type Worker = WorkerInfo & {
   runningSince?: number;
   /** When the worker started waiting on a question (waitingTimeoutMinutes). */
   waitingSince?: number;
-  /** The label Herdr last took for the tab, so a state change renames it only when it changes. */
+  /** The label Herdr last took for the worktree workspace, so a state change renames it only when it changes. */
   tabLabel?: string;
-  /** The worker's pending tab renames, in order. */
+  /** The worker's pending worktree renames, in order. */
   renaming?: Promise<void>;
   /** Herdr agent name: set once, tried at most twice per tab. */
   named: boolean;
@@ -307,7 +308,7 @@ export function createDelegator(deps: DelegateDeps) {
     kind: worker.kind,
     state: worker.state,
     route: worker.route,
-    tabOpen: worker.tabId !== undefined,
+    tabOpen: worker.workspaceId !== undefined,
     ...(worker.branch ? { branch: worker.branch } : {}),
     ...(worker.verdict ? { verdict: worker.verdict } : {}),
   });
@@ -362,14 +363,14 @@ export function createDelegator(deps: DelegateDeps) {
    */
   const relabel = (worker: Worker) => {
     worker.renaming = (worker.renaming ?? Promise.resolve()).then(async () => {
-      const tabId = worker.tabId;
+      const workspaceId = worker.workspaceId;
       const label = tabLabel(worker);
-      if (!tabRenames || !tabId || label === worker.tabLabel) return;
+      if (!tabRenames || !workspaceId || label === worker.tabLabel) return;
       try {
-        await deps.herdr?.renameTab(tabId, label);
+        await deps.herdr?.renameWorktree(workspaceId, label);
         worker.tabLabel = label;
       } catch (error) {
-        // Only a Herdr without `tab rename` switches glyphs off; anything else is retried on the next state change.
+        // Only a Herdr without `workspace rename` switches glyphs off; anything else is retried on the next state change.
         if (isUsageError(error)) tabRenames = false;
       }
     });
@@ -434,7 +435,7 @@ export function createDelegator(deps: DelegateDeps) {
       version: 1,
       leadPid: process.pid,
       createdAt: worker.createdAt ?? new Date().toISOString(),
-      ...(worker.tabId ? { tabId: worker.tabId } : {}),
+      ...(worker.workspaceId ? { workspaceId: worker.workspaceId } : {}),
       ...(worker.paneId ? { paneId: worker.paneId } : {}),
       ...(worker.state === "failed" ? { failed: true } : {}),
     };
@@ -546,17 +547,18 @@ export function createDelegator(deps: DelegateDeps) {
   };
 
   /**
-   * Close the tab (which kills its Pi), then remove the task dir unless it is
-   * kept for inspection.
+   * Remove the worktree (which kills its Pi and deletes the checkout; the
+   * branch is kept), then remove the task dir unless it is kept for
+   * inspection.
    */
   const closeAndClean = async (worker: Worker, keepDir = false) => {
-    // A rename still in flight must not land after the close (bounded by Herdr's exec timeout).
+    // A rename still in flight must not land after the remove (bounded by Herdr's exec timeout).
     await worker.renaming;
-    if (worker.tabId) await deps.herdr?.closeTab(worker.tabId).catch(() => undefined);
-    worker.tabId = undefined;
+    if (worker.workspaceId) await deps.herdr?.removeWorktree(worker.workspaceId).catch(() => undefined);
+    worker.workspaceId = undefined;
     worker.paneId = undefined;
     if (!worker.taskDir) return;
-    if (keepDir) await writeRecord(worker); // no tab left to close
+    if (keepDir) await writeRecord(worker); // no worktree left to remove
     else await deps.workspace.remove(worker.taskDir).catch(() => undefined);
   };
 
@@ -571,25 +573,29 @@ export function createDelegator(deps: DelegateDeps) {
     worker.taskDir = await mkdtemp(join(deps.stateRoot, `${worker.id.slice(0, 8)}-`));
     // Owned from the start, so a later Lead never mistakes it for an orphan while this one lives.
     await writeRecord(worker);
-    worker.clonePath = join(worker.taskDir, "repo");
+    worker.worktreePath = join(worker.taskDir, "worktree");
     worker.resultPath = join(worker.taskDir, "result.json");
     worker.exitPath = join(worker.taskDir, "exit");
     worker.repoRoot = await deps.workspace.repoRoot(io.cwd);
     worker.branch = `pi-lead/${slugify(params.title)}-${worker.id.slice(0, 6)}${worker.attempts > 1 ? `-${worker.attempts}` : ""}`;
-    const created = await deps.workspace.create({
+    // A resumed attempt starts from the previous branch; its report still covers everything since the first base.
+    worker.base ??= await deps.workspace.resolveBase({
       repoRoot: worker.repoRoot,
-      path: worker.clonePath,
-      branch: worker.branch,
       ...(params.startFrom ? { startFrom: params.startFrom } : {}),
     });
-    // A resumed attempt starts from the previous branch; its report still covers everything since the first base.
-    worker.base ??= created.base;
+    worker.tabLabel = openingLabel(worker);
+    ({ workspaceId: worker.workspaceId, paneId: worker.paneId } = await deps.herdr!.createWorktree({
+      cwd: worker.repoRoot,
+      branch: worker.branch,
+      base: worker.base,
+      path: worker.worktreePath,
+      label: worker.tabLabel,
+    }));
+    await writeRecord(worker);
     // Host copies of the repository's own skills, prompts and APPEND_SYSTEM.md.
-    const workDir = join(worker.taskDir, "cwd");
     const resourceDir = join(worker.taskDir, "resources");
     const resources = await snapshotProjectResources({
-      clonePath: worker.clonePath,
-      workDir,
+      worktreePath: worker.worktreePath,
       resourceDir,
       projectTrusted: io.projectTrusted,
     });
@@ -600,7 +606,7 @@ export function createDelegator(deps: DelegateDeps) {
       title: params.title,
       task: params.task,
       branch: worker.branch,
-      clonePath: worker.clonePath,
+      worktreePath: worker.worktreePath,
       resultPath: worker.resultPath,
       jev: deps.config.jev,
       stuckDetection: deps.config.stuckDetection,
@@ -621,8 +627,11 @@ export function createDelegator(deps: DelegateDeps) {
       script,
       [
         "#!/bin/sh",
-        // The worker's tools run in its clone: no isolation from the host.
-        `cd ${shellQuote(worker.clonePath!)} || exit 1`,
+        // The worker's tools run in its own git worktree: no isolation from the host.
+        `cd ${shellQuote(worker.worktreePath!)} || exit 1`,
+        // Author commits as the worker, without touching the repo's shared git config.
+        "export GIT_AUTHOR_NAME='PI Lead worker' GIT_AUTHOR_EMAIL='pi-lead-worker@localhost'",
+        "export GIT_COMMITTER_NAME='PI Lead worker' GIT_COMMITTER_EMAIL='pi-lead-worker@localhost'",
         // Lets Herdr recognise the Pi behind the node process as a Pi agent.
         "export HERDR_AGENT=pi",
         argv.map(shellQuote).join(" "),
@@ -631,16 +640,8 @@ export function createDelegator(deps: DelegateDeps) {
       ].join("\n"),
       { mode: 0o700 },
     );
-    // `herdr pane run` types one command line into the tab's shell. That
-    // shell's cwd is the task directory, never the clone: a prompt running
-    // `git status` must not execute worker-planted git config on the host.
-    worker.tabLabel = openingLabel(worker);
-    ({ tabId: worker.tabId, paneId: worker.paneId } = await deps.herdr!.openWorkerTab({
-      label: worker.tabLabel,
-      cwd: worker.taskDir,
-      command: `/bin/sh ${shellQuote(script)}`,
-    }));
-    await writeRecord(worker);
+    // The worktree's pane starts as an idle shell already cd'd there; type the run script into it.
+    await deps.herdr!.runCommand(worker.paneId, `/bin/sh ${shellQuote(script)}`);
     describe(worker);
     nameAgent(worker);
     progress(`"${worker.title}" started on ${worker.route.model} (${worker.route.thinking})`);
@@ -678,7 +679,6 @@ export function createDelegator(deps: DelegateDeps) {
     const claimsProgress = WRITES_CODE.includes(worker.kind) && (result.status === "done" || result.status === "partial");
     const collected = await deps.workspace.collect({
       repoRoot: worker.repoRoot!,
-      path: worker.clonePath!,
       branch: worker.branch!,
       base: worker.base!,
     });
@@ -790,14 +790,12 @@ export function createDelegator(deps: DelegateDeps) {
   const reroute = async (worker: Worker, result: WorkerResult & { quota: QuotaError }): Promise<boolean> => {
     const from = worker.route.model;
     exhausted.set(providerOf(from), now() + quotaPauseMinutes(result.quota) * 60_000);
-    // Uncommitted changes live only in this clone: keep the worker where it is.
+    // Uncommitted changes live only in this worktree: keep the worker where it is.
     if (result.uncommitted || worker.reroutes >= MAX_REROUTES) return false;
     const { lead, available } = routable(worker.io);
     const route = resolveRoute(worker.route.tier, deps.config.tiers, lead, available);
     if ("error" in route || route.model === from) return false;
     worker.reroutes += 1;
-    // Fetch the work so far into the repository, so the next attempt can start from it.
-    await deps.workspace.collect({ repoRoot: worker.repoRoot!, path: worker.clonePath!, branch: worker.branch!, base: worker.base! });
     const previous = worker.branch!;
     worker.params = { ...worker.params, startFrom: previous };
     worker.route = { model: route.model, thinking: route.thinking, tier: route.tier, note: `${from} ran out of quota; continued on ${route.model} from ${previous}` };
@@ -1019,10 +1017,10 @@ export function createDelegator(deps: DelegateDeps) {
       const worker = find(ref);
       if ("error" in worker) return worker.error;
       if (worker.state === "done" || worker.state === "failed" || worker.state === "stopped") {
-        if (worker.tabId) await closeAndClean(worker);
+        if (worker.workspaceId) await closeAndClean(worker);
         return `Worker "${worker.title}" is already ${worker.state}; its tab is closed.`;
       }
-      // The watcher sees the abort, closes the tab, removes the clone and reports.
+      // The watcher sees the abort, removes the worktree and reports.
       worker.controller.abort(new Error("stopped by the Lead"));
       return `Stopping "${worker.title}".`;
     },
@@ -1039,16 +1037,16 @@ export function createDelegator(deps: DelegateDeps) {
       await Promise.race([Promise.all(live.map((worker) => worker.done)), sleep(10_000)]);
       await Promise.all(
         [...workers.values()]
-          .filter((worker) => worker.tabId)
+          .filter((worker) => worker.workspaceId)
           .map((worker) => closeAndClean(worker, worker.state === "failed" && deps.config.keepFailedWorkers)),
       );
     },
 
     /**
-     * On Lead start: close the tabs that earlier Lead processes, now dead
-     * (crash, kill), left open, and remove their task dirs. Records of live
-     * Leads (other sessions, or this process) are left alone. Returns how
-     * many tabs were closed.
+     * On Lead start: remove the worktrees that earlier Lead processes, now
+     * dead (crash, kill), left open, and remove their task dirs. Records of
+     * live Leads (other sessions, or this process) are left alone. Returns
+     * how many worktrees were removed.
      */
     async reconcile(): Promise<number> {
       let names: string[];
@@ -1064,37 +1062,29 @@ export function createDelegator(deps: DelegateDeps) {
         if (record && record.leadPid !== process.pid && !processAlive(record.leadPid)) orphans.push({ dir, record });
       }
       const herdr = deps.herdr;
-      // Nothing can be closed outside Herdr: keep the records for a Lead inside it.
+      // Nothing can be removed outside Herdr: keep the records for a Lead inside it.
       if (!herdr || orphans.length === 0) return 0;
-      // If Herdr does not answer for the Lead's own workspace, try again on the next start.
-      const listings = new Map<string, Promise<string[] | undefined>>();
-      const tabsIn = (workspace: string) => {
-        if (!listings.has(workspace)) listings.set(workspace, herdr.listTabs(workspace).catch(() => undefined));
-        return listings.get(workspace)!;
-      };
-      if (!(await tabsIn(herdr.workspace))) return 0;
+      const workspaces = await herdr.listWorkspaces().catch(() => undefined);
+      // If Herdr does not answer, or not even for the Lead's own workspace, try again on the next start.
+      if (!workspaces || !workspaces.includes(herdr.workspace)) return 0;
       let closed = 0;
       for (const { dir, record } of orphans) {
-        if (record.tabId) {
-          // Herdr answered for our workspace, so a workspace it cannot list is gone with its tabs.
-          const tabs = (await tabsIn(workspaceFromPaneId(record.tabId) ?? herdr.workspace)) ?? [];
-          if (tabs.includes(record.tabId)) {
-            try {
-              await herdr.closeTab(record.tabId);
-              closed += 1;
-            } catch {
-              continue; // keep the record: the tab may still be running
-            }
+        if (record.workspaceId && workspaces.includes(record.workspaceId)) {
+          try {
+            await herdr.removeWorktree(record.workspaceId);
+            closed += 1;
+          } catch {
+            continue; // keep the record: the worktree may still be running
           }
         }
         if (record.failed && deps.config.keepFailedWorkers) {
-          const { tabId: _tab, paneId: _pane, ...kept } = record;
+          const { workspaceId: _workspace, paneId: _pane, ...kept } = record;
           await writeFile(join(dir, RECORD), JSON.stringify(kept, null, 2)).catch(() => undefined);
         } else {
           await deps.workspace.remove(dir).catch(() => undefined);
         }
       }
-      if (closed) progress(`closed ${closed} worker tab${closed === 1 ? "" : "s"} left by an earlier Lead`);
+      if (closed) progress(`removed ${closed} worker worktree${closed === 1 ? "" : "s"} left by an earlier Lead`);
       return closed;
     },
   };

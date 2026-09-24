@@ -17,7 +17,7 @@ export function shouldVerify(task: Pick<WorkerTask, "kind" | "verify">, status: 
 }
 
 /**
- * Run `command` on the host in the worker's clone. Never throws: a timeout,
+ * Run `command` on the host in the worker's worktree. Never throws: a timeout,
  * an abort (`signal`, the user stopping `finish`) or a spawn error is exit
  * code -1.
  */

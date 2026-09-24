@@ -2,15 +2,12 @@ import { copyFile, lstat, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
- * The worker's Pi runs on the host, so it must never read the guest-writable
- * clone: a guest could replace `AGENTS.md` with a symlink to a host secret, or
- * plant git config for a prompt that runs `git status`. Right after cloning,
- * before any guest runs, the host copies the repository's text resources out
- * of the clone (regular files only, no symlinks, bounded size) and Pi reads
- * the copies. Pi's cwd is a directory outside the clone.
+ * The worker's Pi runs on the host, in its own git worktree; Pi loads
+ * AGENTS.md and reads the worktree's files directly, no isolation. Only
+ * skills, prompts and APPEND_SYSTEM.md are copied out to a separate
+ * directory (regular files only, no symlinks, bounded size): Pi trust-gates
+ * those per cwd, and a fresh worktree path is untrusted.
  */
-
-export const CONTEXT_FILES = ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md"] as const;
 
 const MAX_FILE_BYTES = 1 << 20;
 const MAX_TOTAL_BYTES = 16 << 20;
@@ -53,20 +50,14 @@ async function copyTree(from: string, to: string, budget: Budget): Promise<boole
 }
 
 export async function snapshotProjectResources(input: {
-  clonePath: string;
-  /** Becomes the worker Pi's cwd; receives the context files Pi loads from its cwd. */
-  workDir: string;
+  worktreePath: string;
   /** Receives the project's skills, prompts and APPEND_SYSTEM.md (trusted projects only). */
   resourceDir: string;
   projectTrusted: boolean;
 }): Promise<ProjectResources> {
-  const budget: Budget = { bytes: 0, files: 0 };
-  await mkdir(input.workDir, { recursive: true });
-  for (const file of CONTEXT_FILES) {
-    await copyRegularFile(join(input.clonePath, file), join(input.workDir, file), budget);
-  }
   const resources: ProjectResources = { skills: [], prompts: [] };
   if (!input.projectTrusted) return resources;
+  const budget: Budget = { bytes: 0, files: 0 };
   await mkdir(input.resourceDir, { recursive: true });
   const trees: Array<[string[], string, "skills" | "prompts"]> = [
     [[".agents", "skills"], "agents-skills", "skills"],
@@ -75,9 +66,9 @@ export async function snapshotProjectResources(input: {
   ];
   for (const [parts, name, kind] of trees) {
     const target = join(input.resourceDir, name);
-    if (await copyTree(join(input.clonePath, ...parts), target, budget)) resources[kind].push(target);
+    if (await copyTree(join(input.worktreePath, ...parts), target, budget)) resources[kind].push(target);
   }
   const append = join(input.resourceDir, "APPEND_SYSTEM.md");
-  if (await copyRegularFile(join(input.clonePath, ".pi", "APPEND_SYSTEM.md"), append, budget)) resources.appendSystem = append;
+  if (await copyRegularFile(join(input.worktreePath, ".pi", "APPEND_SYSTEM.md"), append, budget)) resources.appendSystem = append;
   return resources;
 }

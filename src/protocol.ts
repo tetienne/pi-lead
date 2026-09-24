@@ -12,9 +12,9 @@ export type WorkerTask = {
   title: string;
   task: string;
   branch: string;
-  /** Host path of the disposable clone; the worker's tools run there. */
-  clonePath: string;
-  /** Host path the worker writes its `WorkerResult` to (outside the clone). */
+  /** Host path of the worker's own git worktree; its tools run there. */
+  worktreePath: string;
+  /** Host path the worker writes its `WorkerResult` to (outside the worktree). */
   resultPath: string;
   jev: LeadConfig["jev"];
   /** Steer the worker when it keeps repeating a failing command. Absent means on. */
@@ -43,7 +43,7 @@ export type WorkerResult = {
    */
   modelError?: string;
   quota?: QuotaError;
-  /** Changes left in the clone because committing them failed. */
+  /** Changes left in the worktree because committing them failed. */
   uncommitted?: boolean;
   /** Written by the worker extension, not by `finish`: the run of `WorkerTask.verify`. */
   verification?: Verification;
@@ -51,7 +51,7 @@ export type WorkerResult = {
 
 /**
  * The task's `verify` command, run by the worker extension (host-side code)
- * in the worker's clone after the model's last commit; the model cannot
+ * in the worker's worktree after the model's last commit; the model cannot
  * choose or skip it. `exitCode` is -1 when it did not complete (timeout,
  * error). The worker controls the repository, so `outputTail` is
  * worker-produced text.
@@ -121,11 +121,11 @@ export const WORKER_RULES = `
 You are a worker delegated by the PI Lead. You run unattended unless a human
 opens your tab.
 
-- Your working directory is a disposable clone of the repository, on the
-  branch you were given. Branches from the original checkout are available as
-  \`origin/<name>\`. This clone already is your isolated worktree: never
-  create another worktree, clone or branch, even if the project's
-  instructions say to; only your clone is kept.
+- Your working directory is your own git worktree of the repository, on the
+  branch you were given. Other local branches stay visible for reference:
+  never switch, reset, rebase or delete them, and never touch git config.
+  Never create another worktree, clone or branch, even if the project's
+  instructions say to; only your own worktree is kept.
 - Commit your work on the current branch. Do not push, merge or rebase other
   branches.
 - When you are done, or cannot continue, call \`finish\` with an honest status

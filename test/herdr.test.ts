@@ -19,7 +19,7 @@ for arg in "$@"; do printf '[%s]' "$arg" >> '${argv}'; done
 echo >> '${argv}'
 ${options.rejectSeq ? `case "$*" in *--seq*) echo "error: unexpected argument '--seq'" >&2; exit 2 ;; esac` : ""}
 case "$1 $2" in
-  "tab create")
+  "workspace list")
     for arg in "$@"; do
       case "$arg" in --label=*) echo "unknown option: $arg" >&2; exit 2 ;; esac
     done
@@ -38,8 +38,8 @@ case "$1 $2" in
     ;;
 esac
 case "$1 $2" in
-  "tab create") echo '{"result":{"tab":{"tab_id":"w1:t2"},"pane":{"pane_id":"w1:p3"}}}' ;;
-  "tab list") echo '{"result":{"tabs":[{"tab_id":"w1:t1","label":"lead"},{"tab_id":"w1:t2","label":"lead: x"}]}}' ;;
+  "worktree create") echo '{"id":"cli:worktree:create","result":{"workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"w1:p3"}}}' ;;
+  "workspace list") echo '{"result":{"workspaces":[{"workspace_id":"w1"},{"workspace_id":"w2"}]}}' ;;
   "agent prompt") echo 'agent_not_found' >&2; exit 1 ;;
 esac
 `,
@@ -53,14 +53,14 @@ esac
   };
 }
 
-test("tab listing, pane metadata and agent names go through argv, never a shell", async () => {
+test("workspace listing, pane metadata and agent names go through argv, never a shell", async () => {
   const { dir, argv } = await fakeHerdrBinary();
   const previous = process.env.PATH;
   process.env.PATH = `${dir}:${previous}`;
   try {
     const herdr = createHerdrCli({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" })!;
     assert.equal(herdr.workspace, "w1");
-    assert.deepEqual(await herdr.listTabs("w1"), ["w1:t1", "w1:t2"]);
+    assert.deepEqual(await herdr.listWorkspaces(), ["w1", "w2"]);
     await herdr.reportMetadata("w1:p3", {
       title: "Fix $(whoami) bug",
       displayAgent: "pi-lead debug",
@@ -71,18 +71,18 @@ test("tab listing, pane metadata and agent names go through argv, never a shell"
       seq: 42,
     });
     await herdr.renameAgent("w1:p3", "lead-fix-bug-abcd");
-    await herdr.renameTab("w1:t2", "? Fix $(whoami) bug");
+    await herdr.renameWorktree("w1", "? Fix $(whoami) bug");
     await herdr.notify("? Fix bug: needs your answer", "request");
     assert.deepEqual(await argv(), [
-      "[tab][list][--workspace][w1]",
+      "[workspace][list]",
       "[pane][report-metadata][w1:p3][--source][custom:pi-lead][--agent][pi][--title][Fix $(whoami) bug]" +
         "[--display-agent][pi-lead debug][--token][model=anthropic/claude-opus-5-5][--token][thinking=high]" +
         "[--token][branch=pi-lead/fix-bug-abc123][--token][worker=abcdef12][--token][state=running]" +
         "[--state-label][working=debug · claude-opus-5-5 · high][--state-label][idle=needs your answer]" +
         "[--state-label][done=needs your answer][--state-label][blocked=needs your answer][--seq][42]",
       "[agent][rename][w1:p3][lead-fix-bug-abcd]",
-      // `--` first: a label or title starting with `-` stays a positional argument.
-      "[tab][rename][--][w1:t2][? Fix $(whoami) bug]",
+      // `--` first: a label starting with `-` stays a positional argument.
+      "[workspace][rename][--][w1][? Fix $(whoami) bug]",
       "[notification][show][? Fix bug: needs your answer][--sound][request]",
     ]);
   } finally {
@@ -111,9 +111,9 @@ test("an older Herdr that rejects --seq or the new state labels still gets title
 
 test("only a rejected command line counts as an older Herdr, never a timeout or a missing tab", () => {
   assert.ok(isUsageError({ code: 2, stderr: "" }));
-  assert.ok(isUsageError(new Error("Command failed: herdr tab rename\nerror: unrecognized subcommand 'rename'")));
+  assert.ok(isUsageError(new Error("Command failed: herdr workspace rename\nerror: unrecognized subcommand 'rename'")));
   assert.ok(isUsageError({ code: 1, stderr: "error: unexpected argument '--seq' found" }));
-  assert.ok(!isUsageError({ code: 1, stderr: "tab_not_found" }));
+  assert.ok(!isUsageError({ code: 1, stderr: "workspace_not_found" }));
   assert.ok(!isUsageError(Object.assign(new Error("Command failed: herdr"), { killed: true, signal: "SIGTERM" })));
   assert.ok(!isUsageError(undefined));
 });
@@ -124,26 +124,30 @@ test("the Lead's workspace comes from its own pane id", () => {
   assert.equal(createHerdrCli({}), undefined, "outside Herdr there is no client");
 });
 
-test("tabs open without focus, and messages never fall back to typing into the pane", async () => {
+test("worktrees open without focus, and messages never fall back to typing into the pane", async () => {
   const { dir, calls, argv } = await fakeHerdrBinary();
   const previous = process.env.PATH;
   process.env.PATH = `${dir}:${previous}`;
   try {
     const herdr = createHerdrCli({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" })!;
-    assert.deepEqual(await herdr.openWorkerTab({ label: "○ Retry issue 316 Planning Cours…", cwd: "/tmp", command: "/bin/sh '/tmp/run.sh'" }), {
-      tabId: "w1:t2",
-      paneId: "w1:p3",
-    });
+    assert.deepEqual(
+      await herdr.createWorktree({ cwd: "/tmp/repo", branch: "pi-lead/x-1", base: "abc123", path: "/tmp/repo-x-1", label: "○ Retry issue 316 Planning Cours…" }),
+      { workspaceId: "w1", paneId: "w1:p3" },
+    );
+    await herdr.runCommand("w1:p3", "/bin/sh '/tmp/run.sh'");
     // Not detected as an agent (e.g. Pi exited, the pane is a shell): refuse rather than type.
     await assert.rejects(herdr.sendToAgent("w1:p3", "[PI Lead] $(rm -rf ~)"));
-    await herdr.closeTab("w1:t2");
+    await herdr.removeWorktree("w1");
     assert.deepEqual(await calls(), [
-      "tab create --workspace w1 --cwd /tmp --label ○ Retry issue 316 Planning Cours… --no-focus",
+      "worktree create --cwd /tmp/repo --branch pi-lead/x-1 --base abc123 --path /tmp/repo-x-1 --label ○ Retry issue 316 Planning Cours… --no-focus",
       "pane run w1:p3 /bin/sh '/tmp/run.sh'",
       "agent prompt w1:p3 [PI Lead] $(rm -rf ~)",
-      "tab close w1:t2",
+      "worktree remove --workspace w1 --force",
     ]);
-    assert.equal((await argv())[0], "[tab][create][--workspace][w1][--cwd][/tmp][--label][○ Retry issue 316 Planning Cours…][--no-focus]");
+    assert.equal(
+      (await argv())[0],
+      "[worktree][create][--cwd][/tmp/repo][--branch][pi-lead/x-1][--base][abc123][--path][/tmp/repo-x-1][--label][○ Retry issue 316 Planning Cours…][--no-focus]",
+    );
   } finally {
     process.env.PATH = previous;
   }

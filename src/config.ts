@@ -31,7 +31,7 @@ export type LeadConfig = {
     /** Below this confidence a judgment is treated as "don't know". */
     minConfidence: number;
   };
-  /** Keep the Herdr tab and clone of a worker that did not finish cleanly. */
+  /** Keep the Herdr worktree workspace of a worker that did not finish cleanly. */
   keepFailedWorkers: boolean;
   /**
    * `confirm`: once a worker report is in the conversation, every host tool
@@ -152,7 +152,7 @@ async function exists(path: string): Promise<boolean> {
  * repository (or a worker's branch merged into it) must not be able to
  * disable the check that protects the host from worker reports. `verify` is
  * the reverse: a command for one project, so only the project file sets it
- * (it runs on the host in the worker's own clone, never in the user's
+ * (it runs on the host in the worker's own worktree, never in the user's
  * checkout).
  *
  * `ignored` has one line per setting dropped by these rules, so the Lead can

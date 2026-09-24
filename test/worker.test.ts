@@ -97,7 +97,7 @@ test("a run that ends on a provider error reports it to the Lead instead of idli
   const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
   const taskPath = join(dir, "task.json");
   const resultPath = join(dir, "result.json");
-  // No clonePath in the task: the leftover commit is skipped and the report still goes out.
+  // No worktreePath in the task: the leftover commit is skipped and the report still goes out.
   await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", branch: "pi-lead/x-1", title: "x", resultPath }));
   worker({
     registerFlag: () => undefined,

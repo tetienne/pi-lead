@@ -28,7 +28,7 @@ function runShell(command: string, cwd: string): Promise<{ exitCode: number; std
 
 /**
  * Loaded only into worker Pi processes (`--no-extensions -e`). The worker runs
- * on the host, cwd the disposable clone (`task.clonePath`): its tools are
+ * on the host, cwd its own git worktree (`task.worktreePath`): its tools are
  * Pi's own built-in ones, with no isolation from the host.
  */
 export default function worker(pi: ExtensionAPI) {
@@ -78,8 +78,8 @@ export default function worker(pi: ExtensionAPI) {
   const commitLeftovers = async () => {
     const current = await loadTask();
     // Without it, execFile would commit in whatever repo Pi was started from.
-    if (!current.clonePath) throw new Error("the task names no clone to commit in");
-    return runShell(COMMIT_LEFTOVERS, current.clonePath);
+    if (!current.worktreePath) throw new Error("the task names no worktree to commit in");
+    return runShell(COMMIT_LEFTOVERS, current.worktreePath);
   };
 
   const writeResult = async (result: WorkerResult) => {
@@ -117,7 +117,7 @@ export default function worker(pi: ExtensionAPI) {
         ctx?.ui.setStatus("pi-lead", `Verifying: ${current.verify}`);
         verification = await runVerification({
           command: current.verify,
-          cwd: current.clonePath,
+          cwd: current.worktreePath,
           ...(current.verifyTimeoutMinutes ? { timeoutMinutes: current.verifyTimeoutMinutes } : {}),
           ...(signal ? { signal } : {}),
         });
@@ -188,7 +188,7 @@ export default function worker(pi: ExtensionAPI) {
         id: current.id,
         seq: ++seq,
         status: "blocked",
-        summary: uncommitted ? `${summary}\nSome changes could not be committed and stay in the clone.` : summary,
+        summary: uncommitted ? `${summary}\nSome changes could not be committed and stay in the worktree.` : summary,
         modelError: error.slice(0, 2_000),
         ...(quota ? { quota } : {}),
         ...(uncommitted ? { uncommitted } : {}),
