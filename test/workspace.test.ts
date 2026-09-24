@@ -33,6 +33,9 @@ test("a worker clone is disposable and its branch comes back by fetch", async ()
   assert.match(collected.commits, /change/);
   assert.match(collected.diffStat, /a\.txt/);
   assert.deepEqual(collected.changedFiles, ["a.txt"]);
+  assert.equal(await gitWorkspace.fileAt({ repoRoot: repo, rev: base, path: "a.txt" }), "one");
+  assert.equal(await gitWorkspace.fileAt({ repoRoot: repo, rev: "pi-lead/x-1", path: "a.txt" }), "two");
+  assert.equal(await gitWorkspace.fileAt({ repoRoot: repo, rev: base, path: "missing.json" }), undefined);
   assert.equal(git(repo, "rev-parse", "--abbrev-ref", "HEAD"), "main", "the user's checkout is untouched");
   assert.equal(git(repo, "log", "-1", "--format=%s", "pi-lead/x-1"), "change");
 

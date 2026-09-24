@@ -4,7 +4,10 @@
  * install scripts, package-manager and toolchain config, direnv, editor tasks,
  * CI workflows and the project's `.pi` folder. Ordinary source files also run
  * when the user tests them; these run implicitly, on checkout, install, `cd`
- * or commit. Lockfiles are left out: judging them means parsing registry URLs.
+ * or commit. Agent instructions (`AGENTS.md`, `CLAUDE.md`, `.claude/`) steer
+ * the next agent that works in the repository, and `.gitmodules` points
+ * submodules at other code. Lockfiles are left out: judging them means parsing
+ * registry URLs. The list is a hint to focus a review, not a security boundary.
  *
  * `**` alone matches any path below; a leading `**` + `/` also matches
  * at any depth; `*` stays within one path segment. Matching ignores case (a
@@ -36,7 +39,14 @@ export const SENSITIVE_PATHS: readonly string[] = [
   ".pre-commit-config.yaml",
   ".vscode/tasks.json",
   ".vscode/settings.json",
+  "**/AGENTS.md",
+  "**/CLAUDE.md",
+  ".claude/**",
+  ".gitmodules",
 ];
+
+/** Flagged only when its `scripts` change (see `packageScriptsChanged`): dependency bumps alone stay quiet. */
+export const PACKAGE_JSON = "**/package.json";
 
 function patternRegExp(pattern: string): RegExp {
   let source = "";
@@ -65,6 +75,44 @@ function patternRegExps(pattern: string): RegExp[] {
 }
 
 const MATCHERS = SENSITIVE_PATHS.map((pattern) => ({ pattern, regexps: patternRegExps(pattern) }));
+
+/** The `files` that `pattern` (one of `SENSITIVE_PATHS`) matches. */
+export function filesMatching(pattern: string, files: readonly string[]): string[] {
+  const regexps = MATCHERS.find((matcher) => matcher.pattern === pattern)?.regexps ?? [];
+  return files.filter((file) => regexps.some((regexp) => regexp.test(file)));
+}
+
+/**
+ * Whether a `package.json`'s `scripts` differ between two versions (undefined:
+ * the file is absent on that side). A file added or removed, a `scripts` field
+ * present on one side only, or content that is not a JSON object all count as
+ * changed.
+ */
+export function packageScriptsChanged(before: string | undefined, after: string | undefined): boolean {
+  if (before === undefined || after === undefined) return true;
+  try {
+    const [a, b]: unknown[] = [JSON.parse(before), JSON.parse(after)];
+    if (!isObject(a) || !isObject(b)) return true;
+    return !deepEqual(a["scripts"], b["scripts"]);
+  } catch {
+    return true;
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, i) => deepEqual(item, b[i]));
+  }
+  if (isObject(a) && isObject(b)) {
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && deepEqual(a[key], b[key]));
+  }
+  return a === b;
+}
 
 /**
  * The patterns (from the fixed list, never the guest-chosen file names) that
