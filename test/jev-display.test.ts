@@ -105,3 +105,8 @@ test("a replayed entry cannot inject escape sequences or overflow the line", () 
   assert.ok(!/[\x00-\x1f]/.test(line!), "no control characters");
   assert.ok([...line!].length <= 40 && /^[\x20-\x7e◆◇▲≥≤→…·]*$/.test(line!), "one column per character, within the width");
 });
+
+test("a line that fits the width is sanitised too", () => {
+  const [line] = renderDecision(decision({ outcome: "x\u001b[31mred漢" }), false, 200);
+  assert.equal(line, "◆ jev · tier x?[31mred?", "escape sequences and wide characters are replaced");
+});
