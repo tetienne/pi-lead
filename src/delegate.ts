@@ -9,7 +9,7 @@ import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.t
 import { parseWorkerResult, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
-import { sensitivePatterns } from "./sensitive-paths.ts";
+import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
 import type { Toolchains } from "./toolchains.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -64,7 +64,7 @@ export type DelegateOutcome = {
     review?: { severity: number; action: ReviewAction };
     failure?: FailureKind;
     quota?: QuotaError;
-    /** Sensitive path patterns the branch touches; informative only, never a status change. */
+    /** Sensitive path patterns the branch touches; a review hint only, never a status change. */
     sensitive?: string[];
   };
 };
@@ -547,6 +547,17 @@ export function createDelegator(deps: DelegateDeps) {
     ...(worker.route.note ? [`Note: ${worker.route.note}`] : []),
   ];
 
+  /** Sensitive patterns the branch touches, keeping `package.json` only when some file's scripts or package manager changed. */
+  const reviewHints = async (worker: Worker, changedFiles: string[]): Promise<string[]> => {
+    const patterns = sensitivePatterns(changedFiles);
+    if (!patterns.includes(PACKAGE_JSON)) return patterns;
+    const read = (rev: string, path: string) => deps.workspace.fileAt({ repoRoot: worker.repoRoot!, rev, path });
+    for (const path of filesMatching(PACKAGE_JSON, changedFiles)) {
+      if (packageRunFieldsChanged(await read(worker.base!, path), await read(worker.branch!, path))) return patterns;
+    }
+    return patterns.filter((pattern) => pattern !== PACKAGE_JSON);
+  };
+
   const settle = async (worker: Worker, result: WorkerResult) => {
     const collected = await deps.workspace.collect({
       repoRoot: worker.repoRoot!,
@@ -567,7 +578,7 @@ export function createDelegator(deps: DelegateDeps) {
     const status =
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
-    const sensitive = sensitivePatterns(collected.changedFiles);
+    const sensitive = await reviewHints(worker, collected.changedFiles);
     const keep = status !== "done" && deps.config.keepFailedWorkers;
     setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
     if (keep) worker.waitingSince = Date.now();
@@ -620,7 +631,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(sensitive.length
           ? [
               "",
-              `Host check: the branch changes files that can run on your machine or in CI, or widen PI Lead's policy (${sensitive.join(", ")}); review them before merging.`,
+              `Host check: review these before merging; they can run on your machine or in CI, or steer future agents: ${sensitive.join(", ")}.`,
             ]
           : []),
         ...(review ? ["", `Jev review severity: ${review.severity.toFixed(1)}/4 → ${review.action}`] : []),

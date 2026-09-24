@@ -36,10 +36,14 @@ you ─► Lead (Pi, your tab)
   you reply, every Lead tool call that can execute or write on your machine
   (bash, write, edit…) asks you first, and is blocked without a UI. Set
   `"leadGuard": "off"` in the global config to disable it. When the fetched
-  branch touches files that run implicitly on your machine or in CI, or widen
-  PI Lead's policy (CI workflows, `package.json`, `.npmrc`, mise and direnv
-  config, git hooks, `.vscode` tasks/settings, `.pi/`…), the report adds a
-  host-generated warning to review them before merging; it never blocks.
+  branch touches files that can run on your machine or in CI, or steer future
+  agents, the report adds a host-generated "Host check" line naming the
+  matched patterns: CI workflows and actions, `package.json` (only when its
+  `scripts` or `packageManager` change), `.npmrc`/`.yarnrc`, mise, direnv, git
+  hooks, `.vscode` tasks/settings, `.pi/`, `.agents/`, `.claude/`,
+  `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` and `.gitmodules`. It is a hint
+  to focus your review, not a security guarantee: ordinary source, tests and
+  lockfiles run too once you use them, and it never blocks.
 - A **worker** is an interactive Pi session in its own Herdr tab. Its
   `read/write/edit/bash/ls/find/grep` tools run inside a Gondolin micro-VM that
   mounts only a throw-away clone of the repository. The guest never sees your
