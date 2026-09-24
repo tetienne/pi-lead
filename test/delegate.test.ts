@@ -19,6 +19,7 @@ import {
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
 import { createJudge, createLedger, type Judge, type WorkerVerdict } from "../src/jev.ts";
 import type { WorkerResult, WorkerTask } from "../src/protocol.ts";
+import type { SandboxService } from "../src/config.ts";
 import type { Toolchains } from "../src/toolchains.ts";
 import type { Workspace } from "../src/workspace.ts";
 
@@ -52,7 +53,48 @@ function fakeWorkspace(log: Log): Workspace {
   };
 }
 
+test("sandbox.services started, then the tab fails to open: its containers are stopped", async (t) => {
+  const log: Log = [];
+  const { services, active } = fakeServices(log);
+  const herdr = fakeHerdr(log, [{ status: "done" }]);
+  herdr.openWorkerTab = async () => {
+    throw new Error("herdr unavailable");
+  };
+  const { delegator, nextOutcome } = await setup(t, { services, herdr, config: { sandbox: { services: ONE_SERVICE } } });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "No tab", task: "t" }, io);
+  assert.equal((await pending).status, "failed");
+  assert.ok(log.some((line) => line.startsWith("services start ")));
+  assert.equal(active.size, 0);
+});
+
 const scriptOf = (command: string) => /^\/bin\/sh '([^']+)'$/.exec(command)![1]!;
+
+/** A fake sandbox.services runtime: records start/stop calls by id, "started" containers by id. */
+function fakeServices(
+  log: Log,
+  options: { failStart?: boolean; leftoverOnStop?: string[] } = {},
+): { services: DelegateDeps["services"]; active: Set<string> } {
+  const active = new Set<string>();
+  return {
+    active,
+    services: {
+      async start(id, requested) {
+        log.push(`services start ${id}`);
+        if (options.failStart) throw new Error("docker not running");
+        active.add(id);
+        return requested.map((service, index) => ({ name: service.name, port: service.port, hostPort: 40_000 + index }));
+      },
+      async stop(id) {
+        log.push(`services stop ${id}`);
+        active.delete(id);
+        return options.leftoverOnStop ?? [];
+      },
+    },
+  };
+}
+
+const ONE_SERVICE: SandboxService[] = [{ name: "postgres", image: "postgres:18-alpine", port: 5432 }];
 
 /**
  * A fake Herdr whose "worker" reads the task file from the launch script and
@@ -140,6 +182,7 @@ async function setup(t: TestContext, options: {
   herdr?: Herdr | false;
   maxWorkers?: number;
   toolchains?: Toolchains;
+  services?: DelegateDeps["services"];
   image?: DelegateDeps["image"];
   seen?: Seen;
   config?: Parameters<typeof mergeConfig>[1];
@@ -162,6 +205,7 @@ async function setup(t: TestContext, options: {
         : options.herdr ?? fakeHerdr(log, options.replies ?? [{ status: "done" }], options.seen, options.herdrOptions),
     workspace: options.workspace ?? fakeWorkspace(log),
     ...(options.toolchains ? { toolchains: options.toolchains } : {}),
+    ...(options.services ? { services: options.services } : {}),
     ...(options.image ? { image: options.image } : {}),
     ...(options.processAlive ? { processAlive: options.processAlive } : {}),
     workerCommand: ({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt],
@@ -725,6 +769,22 @@ const until = async (condition: () => boolean) => {
   assert.ok(condition(), "condition not reached");
 };
 
+test("shutdown stops services of a worker still inside launch() (no tab yet)", async (t) => {
+  const log: Log = [];
+  const { services, active } = fakeServices(log);
+  const herdr = fakeHerdr(log, [{ status: "done" }]);
+  herdr.openWorkerTab = () => new Promise(() => {}); // never resolves: launch() never gets a tabId
+  const { delegator } = await setup(t, { services, herdr, config: { sandbox: { services: ONE_SERVICE } } });
+  await delegator.start({ kind: "implement", title: "Stuck", task: "t" }, io);
+  await until(() => log.some((line) => line.startsWith("services start")));
+  const id = log.find((line) => line.startsWith("services start"))!.slice("services start ".length);
+  assert.equal(delegator.list()[0]!.state, "starting");
+  assert.equal(active.size, 1);
+  await delegator.shutdown();
+  assert.ok(log.includes(`services stop ${id}`));
+  assert.equal(active.size, 0, "the containers are gone even though no tab was ever opened");
+});
+
 test("shutdown closes the tab of a worker waiting on a question", async (t) => {
   const { delegator, log, nextOutcome, outcomes } = await setup(t, { replies: [{ status: "needs_human" }] });
   const first = nextOutcome();
@@ -787,8 +847,12 @@ test("reconcile closes tabs of dead Leads that still exist and removes their dir
   await record("dead-failed", { leadPid: 111, tabId: "w2:t3", paneId: "w2:p3", failed: true });
   await record("alive", { leadPid: 222, tabId: "w1:t9", paneId: "w1:p9" });
   await record("unowned", undefined);
+  const svcLog: Log = [];
+  const { services } = fakeServices(svcLog);
   const { delegator, log, progress } = await setup(t, {
     stateRoot,
+    services,
+    config: { sandbox: { services: ONE_SERVICE } },
     processAlive: (pid) => pid === 222,
     // w2 is gone: Herdr cannot list it.
     herdrOptions: { tabs: { w1: ["w1:t1", "w1:t7", "w1:t9"] } },
@@ -800,6 +864,12 @@ test("reconcile closes tabs of dead Leads that still exist and removes their dir
   const failed = JSON.parse(await readFile(join(stateRoot, "dead-failed", "tab.json"), "utf8"));
   assert.equal(failed.tabId, undefined, "kept for inspection, but its tab is forgotten");
   assert.ok(progress.some((line) => line.includes("closed 1 worker tab left by an earlier Lead")));
+  assert.deepEqual(
+    svcLog.filter((line) => line.startsWith("services stop")).sort(),
+    ["services stop dead-failed", "services stop dead-gone", "services stop dead-open"],
+    "every dead-leadPid record's services are stopped",
+  );
+  assert.ok(!svcLog.some((line) => line === "services stop alive" || line === "services stop unowned"));
 });
 
 test("reconcile keeps every record when Herdr does not answer", async (t) => {
@@ -823,6 +893,103 @@ test("reconcile never touches the task dirs of a Lead that is still running", as
   const other = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: { tabs: { w1: ["tab-1"] } } });
   assert.equal(await other.delegator.reconcile(), 0);
   assert.ok(!other.log.some((line) => line.startsWith("close")));
+});
+
+test("sandbox.services are started before task.json is written, with resolved ports in the task", async (t) => {
+  const log: Log = [];
+  const { services } = fakeServices(log);
+  const seen: Seen = {};
+  const { delegator, nextOutcome } = await setup(t, {
+    seen,
+    services,
+    config: { sandbox: { services: ONE_SERVICE } },
+    replies: [{ status: "done", delayMs: 30 }],
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Uses PG", task: "t" }, io);
+  await pending;
+  assert.ok(log[0]!.startsWith("services start "), "started before the worker's tab opens");
+  assert.deepEqual(seen.task!.services, [{ name: "postgres", port: 5432, hostPort: 40_000 }]);
+});
+
+test("leftover Docker resources after stop are warned about through progress", async (t) => {
+  const log: Log = [];
+  const { services } = fakeServices(log, { leftoverOnStop: ["pi-lead-abc-postgres", "pi-lead-abc"] });
+  const { delegator, nextOutcome, progress } = await setup(t, {
+    services,
+    config: { sandbox: { services: ONE_SERVICE } },
+    replies: [{ status: "done" }],
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Uses PG", task: "t" }, io);
+  await pending;
+  assert.ok(
+    progress.some((line) => line === 'could not remove Docker resources for "Uses PG": pi-lead-abc-postgres, pi-lead-abc'),
+  );
+});
+
+test("sandbox.services are stopped once the worker's tab closes (done)", async (t) => {
+  const log: Log = [];
+  const { services, active } = fakeServices(log);
+  const { delegator, nextOutcome } = await setup(t, { services, config: { sandbox: { services: ONE_SERVICE } }, replies: [{ status: "done" }] });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Uses PG", task: "t" }, io);
+  await pending;
+  assert.equal(active.size, 0);
+  assert.ok(log.some((line) => line.startsWith("services stop ")));
+});
+
+test("sandbox.services stay up while a worker waits on a question, and stop once it is closed", async (t) => {
+  const log: Log = [];
+  const { services, active } = fakeServices(log);
+  const { delegator, nextOutcome } = await setup(t, {
+    services,
+    config: { sandbox: { services: ONE_SERVICE }, keepFailedWorkers: true },
+    replies: [{ status: "blocked" }],
+  });
+  const pending = nextOutcome();
+  const outcome = await delegator.start({ kind: "implement", title: "Blocked", task: "t" }, io);
+  assert.ok(outcome.status === "started");
+  await pending;
+  assert.equal(delegator.list()[0]!.state, "waiting");
+  assert.equal(active.size, 1, "still resumable: its services stay reachable");
+  await delegator.stop(outcome.worker.id);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(active.size, 0, "closing the tab stops its services");
+});
+
+test("sandbox.services fail to start: the worker fails and nothing leaks", async (t) => {
+  const log: Log = [];
+  const { services, active } = fakeServices(log, { failStart: true });
+  const { delegator, nextOutcome } = await setup(t, { services, config: { sandbox: { services: ONE_SERVICE } } });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "No Docker", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.text, /docker not running/);
+  assert.equal(active.size, 0);
+});
+
+test("reconcile stops an orphaned worker's sandbox.services even without Herdr", async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), "pi-lead-state-"));
+  await mkdir(join(stateRoot, "dead-task"));
+  await writeFile(join(stateRoot, "dead-task", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x" }));
+  const log: Log = [];
+  const { services } = fakeServices(log);
+  const { delegator } = await setup(t, { stateRoot, services, herdr: false, processAlive: () => false, config: { sandbox: { services: ONE_SERVICE } } });
+  assert.equal(await delegator.reconcile(), 0);
+  assert.ok(log.includes("services stop dead-task"));
+});
+
+test("reconcile does not call Docker when no sandbox.services are configured", async (t) => {
+  const stateRoot = await mkdtemp(join(tmpdir(), "pi-lead-state-"));
+  await mkdir(join(stateRoot, "dead-task"));
+  await writeFile(join(stateRoot, "dead-task", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x" }));
+  const log: Log = [];
+  const { services } = fakeServices(log);
+  const { delegator } = await setup(t, { stateRoot, services, herdr: false, processAlive: () => false });
+  await delegator.reconcile();
+  assert.ok(!log.some((line) => line.startsWith("services stop")));
 });
 
 test("worker panes get Herdr metadata on every state and an agent name, best-effort", async (t) => {
@@ -923,6 +1090,38 @@ test("a worker out of quota continues on the tier's fallback from its branch, an
   const next = await delegator.start({ kind: "implement", title: "Import", task: "t" }, both);
   assert.match(next.text, /to opencode-go\/glm-5\.3/);
   assert.match(delegator.list()[1]!.route.note!, /quota exhausted: openai-codex until ~\d\d:\d\d/);
+});
+
+test("a worker out of quota with sandbox.services: the old attempt's containers stop and the new one gets fresh ones", async (t) => {
+  const log: Log = [];
+  const { services } = fakeServices(log);
+  const seen: Seen = {};
+  const { delegator, nextOutcome } = await setup(t, {
+    replies: [chatgptLimit, { status: "done" }],
+    herdrOptions: { sharedTurns: true },
+    seen,
+    services,
+    config: {
+      tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high", fallbacks: [{ model: "opencode-go/glm-5.3" }] } },
+      sandbox: { services: ONE_SERVICE },
+    },
+  });
+  const both: DelegateIO = {
+    ...io,
+    lead: { provider: "openai-codex", id: "gpt-6-sol" },
+    available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
+  };
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Export", task: "t" }, both);
+  await pending;
+
+  const starts = log.filter((line) => line.startsWith("services start")).map((line) => line.slice("services start ".length));
+  const stops = log.filter((line) => line.startsWith("services stop")).map((line) => line.slice("services stop ".length));
+  assert.equal(starts.length, 2, "one start per attempt");
+  assert.notEqual(starts[1], starts[0], "the reroute starts a new attempt with its own id");
+  // The first attempt's containers stop on reroute; the second's stop once the worker is done.
+  assert.deepEqual(stops, [starts[0], starts[1]]);
+  assert.deepEqual(seen.task!.services, [{ name: "postgres", port: 5432, hostPort: 40_000 }], "the second attempt's task.json carries services too");
 });
 
 test("without another model a worker out of quota is reported blocked, never sent to a paid balance", async (t) => {

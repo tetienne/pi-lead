@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
-import type { LeadConfig, Tier } from "./config.ts";
+import type { LeadConfig, SandboxService, Tier } from "./config.ts";
 import { isUsageError, workspaceFromPaneId, type Herdr } from "./herdr.ts";
 import { defaultTier, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
@@ -10,6 +10,7 @@ import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type W
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
+import type { StartedService } from "./services.ts";
 import type { Toolchains } from "./toolchains.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
 import type { Workspace } from "./workspace.ts";
@@ -127,6 +128,12 @@ export type DelegateDeps = {
   workspace: Workspace;
   workerCommand: WorkerCommand;
   toolchains?: Toolchains;
+  /** Docker sidecar services (sandbox.services); absent when the host has no way to run them. */
+  services?: {
+    start(id: string, services: readonly SandboxService[]): Promise<StartedService[]>;
+    /** Never rejects; resolves to what is still there after cleanup (empty when everything is gone). */
+    stop(id: string): Promise<string[]>;
+  };
   /** The Gondolin image selector for workers when the config names none (downloads it the first time). */
   image?(progress: (text: string) => void): Promise<string>;
   /** Host directories the guest may read at the same path (skill folders, so skills can reference their files). */
@@ -553,13 +560,26 @@ export function createDelegator(deps: DelegateDeps) {
     }
   };
 
-  /** Close the tab (which kills its Pi and VM), then remove the task dir unless it is kept for inspection. */
+  /** Stop this worker's sandbox containers, if any were started (best-effort, never throws). */
+  const stopServices = async (worker: Worker) => {
+    // Nothing to stop, and no configured services means no reason to call Docker on hosts that don't run it.
+    if (!worker.taskDir || !deps.services || !deps.config.sandbox.services?.length) return;
+    const leftover = await deps.services.stop(basename(worker.taskDir)).catch(() => []);
+    if (leftover.length) progress(`could not remove Docker resources for "${worker.title}": ${leftover.join(", ")}`);
+  };
+
+  /**
+   * Close the tab (which kills its Pi and VM), stop any sandbox containers, then
+   * remove the task dir unless it is kept for inspection. Services stop even when
+   * the dir is kept: the tab (and so any VM using them) is gone either way.
+   */
   const closeAndClean = async (worker: Worker, keepDir = false) => {
     // A rename still in flight must not land after the close (bounded by Herdr's exec timeout).
     await worker.renaming;
     if (worker.tabId) await deps.herdr?.closeTab(worker.tabId).catch(() => undefined);
     worker.tabId = undefined;
     worker.paneId = undefined;
+    await stopServices(worker);
     if (!worker.taskDir) return;
     if (keepDir) await writeRecord(worker); // no tab left to close
     else await deps.workspace.remove(worker.taskDir).catch(() => undefined);
@@ -607,6 +627,11 @@ export function createDelegator(deps: DelegateDeps) {
       progress,
       ...(io.confirm ? { confirm: io.confirm } : {}),
     });
+    const configuredServices = deps.config.sandbox.services;
+    if (configuredServices?.length && !deps.services) {
+      throw new Error("sandbox.services is configured but Docker services support is unavailable");
+    }
+    const services = configuredServices?.length ? await deps.services!.start(basename(worker.taskDir), configuredServices) : undefined;
     const task: WorkerTask = {
       version: 1,
       id: worker.id,
@@ -625,6 +650,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(resources.skills.length || resources.prompts.length || resources.appendSystem ? [resourceDir] : []),
       ],
       ...(toolchainCache ? { toolchainCache } : {}),
+      ...(services ? { services } : {}),
     };
     const taskPath = join(worker.taskDir, "task.json");
     await writeFile(taskPath, JSON.stringify(task, null, 2));
@@ -861,8 +887,13 @@ export function createDelegator(deps: DelegateDeps) {
     worker.verdict = undefined;
     setState(worker, "failed");
     // A kept tab is for inspection only: it is closed when the Lead session ends.
-    if (keep) await writeRecord(worker);
-    else await closeAndClean(worker);
+    // Its sandbox containers are not: nothing left running will use them.
+    if (keep) {
+      await stopServices(worker);
+      await writeRecord(worker);
+    } else {
+      await closeAndClean(worker);
+    }
     report({
       worker: info(worker),
       status: "failed",
@@ -1063,6 +1094,13 @@ export function createDelegator(deps: DelegateDeps) {
           .filter((worker) => worker.tabId)
           .map((worker) => closeAndClean(worker, worker.state === "failed" && deps.config.keepFailedWorkers)),
       );
+      // Still inside launch() when the race timed out: no tab, but its services may already run.
+      // Its taskDir is left alone so a later reconcile still finds the record if a docker run lands after this.
+      await Promise.all(
+        [...workers.values()]
+          .filter((worker) => !["done", "failed", "stopped"].includes(worker.state) && !worker.tabId && worker.taskDir)
+          .map((worker) => stopServices(worker)),
+      );
     },
 
     /**
@@ -1072,9 +1110,6 @@ export function createDelegator(deps: DelegateDeps) {
      * many tabs were closed.
      */
     async reconcile(): Promise<number> {
-      const herdr = deps.herdr;
-      // Nothing can be closed outside Herdr: keep the records for a Lead inside it.
-      if (!herdr) return 0;
       let names: string[];
       try {
         names = await readdir(deps.stateRoot);
@@ -1087,7 +1122,16 @@ export function createDelegator(deps: DelegateDeps) {
         const record = await readRecord(dir);
         if (record && record.leadPid !== process.pid && !processAlive(record.leadPid)) orphans.push({ dir, record });
       }
-      if (orphans.length === 0) return 0;
+      // Independent of Herdr: an orphaned task dir's containers must go even without a tab to close.
+      if (deps.services && deps.config.sandbox.services?.length) {
+        for (const { dir } of orphans) {
+          const leftover = await deps.services.stop(basename(dir)).catch(() => []);
+          if (leftover.length) progress(`could not remove Docker resources for "${basename(dir)}": ${leftover.join(", ")}`);
+        }
+      }
+      const herdr = deps.herdr;
+      // Nothing can be closed outside Herdr: keep the records for a Lead inside it.
+      if (!herdr || orphans.length === 0) return 0;
       // If Herdr does not answer for the Lead's own workspace, try again on the next start.
       const listings = new Map<string, Promise<string[] | undefined>>();
       const tabsIn = (workspace: string) => {

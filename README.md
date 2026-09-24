@@ -177,6 +177,29 @@ npm run sandbox:smoke              # boots a VM and checks the isolation claims
 `allowedHosts` are trusted for downloads only (GET/HEAD and git fetch); any other request, including uploads to an allowlisted host, is
 judged by Jev per path, and when Jev is unsure the worker tab asks you.
 
+`sandbox.services` starts a Docker container per worker, reachable from its VM
+by name (needs Docker; a global or trusted project `.pi/pi-lead.json`):
+
+```json
+{
+  "sandbox": {
+    "services": [
+      { "name": "postgres", "image": "postgres:18-alpine", "port": 5432, "env": { "POSTGRES_PASSWORD": "postgres" } }
+    ]
+  }
+}
+```
+
+The worker reaches it at `postgres:5432` and sees `PI_LEAD_SERVICE_POSTGRES=postgres:5432`
+in its environment. Each worker gets one `--internal` Docker network shared by
+its services, which have no internet access and no published port; a socat
+relay bound to `127.0.0.1` on the host is the only way in, forwarded into the
+VM through Gondolin's `tcp.hosts` mapping,
+which the Lead resolves itself from trusted config only. Containers are
+labelled per worker and removed when its tab closes (or, for one an earlier
+Lead process left behind, on the next session's reconcile). A service can take
+a few seconds to accept connections after the worker starts: clients should retry.
+
 `stuckDetection` watches a worker's shell commands and file changes: when the
 same command fails three times without succeeding, or six commands in a row
 fail, with no file changed through its `write` or `edit` tools in between, the

@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SlashCommandInfo, type Theme } from "@earendil-works/pi-coding-agent";
@@ -19,6 +21,7 @@ import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDe
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
 import { registerReportGuard, WORKER_REPORT_TYPE } from "./report-guard.ts";
+import { startServices, stopServices } from "./services.ts";
 import { createToolchains } from "./toolchains.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
 import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
@@ -101,6 +104,15 @@ export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, r
 
 const WORKER_ACTIONS = ["list", "message", "stop"] as const;
 
+const execFileAsync = promisify(execFile);
+
+/** Only run when sandbox.services is configured (/lead-doctor); nothing else in the Lead needs Docker. */
+const checkDocker = () =>
+  execFileAsync("docker", ["version"], { timeout: 5_000 }).then(
+    () => true,
+    () => false,
+  );
+
 const paint = (theme: Theme): Paint => (color, text) => theme.fg(color, text);
 
 /** The text a tool returned to the model, which the collapsed rendering summarizes. */
@@ -126,8 +138,8 @@ export default function lead(pi: ExtensionAPI) {
   /** `delegate` calls in their start phase, which share Pi's working message. */
   let delegating = 0;
 
-  /** What `/lead-doctor` and the session-start warning look at. */
-  const setupFacts = (ctx: ExtensionContext, config: LeadConfig): SetupFacts => {
+  /** What `/lead-doctor` and the session-start warning look at. `dockerReachable` is checked only by the command (it needs a process call). */
+  const setupFacts = (ctx: ExtensionContext, config: LeadConfig, dockerReachable?: boolean): SetupFacts => {
     const herdr = createHerdrCli();
     const lead = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
     const available = ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id }));
@@ -148,6 +160,7 @@ export default function lead(pi: ExtensionAPI) {
       image: config.sandbox.image
         ? { custom: config.sandbox.image }
         : { released: releaseImageRef(PACKAGE_VERSION), present: hasReleasedImage() },
+      ...(dockerReachable !== undefined ? { docker: { reachable: dockerReachable } } : {}),
     };
   };
 
@@ -208,6 +221,7 @@ export default function lead(pi: ExtensionAPI) {
       workspace: gitWorkspace,
       workerCommand,
       toolchains: createToolchains({ root: join(agentDir, "pi-lead", "toolchains"), judge }),
+      services: { start: startServices, stop: stopServices },
       image: workerImage,
       // So a skill's own files (templates, scripts) resolve inside the VM too.
       readonlyMounts: skillMounts(pi.getCommands()),
@@ -298,7 +312,8 @@ export default function lead(pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       if (!leadConfig) await setup(ctx);
       if (jev) jevUsage = await jev.ledger.usage().catch(() => jevUsage);
-      ctx.ui.notify(doctorReport(setupFacts(ctx, leadConfig!)), "info");
+      const dockerReachable = leadConfig!.sandbox.services?.length ? await checkDocker() : undefined;
+      ctx.ui.notify(doctorReport(setupFacts(ctx, leadConfig!, dockerReachable)), "info");
     },
   });
 

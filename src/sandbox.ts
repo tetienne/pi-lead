@@ -1,6 +1,7 @@
 import { createHttpHooks, ReadonlyProvider, RealFSProvider, VM } from "@earendil-works/gondolin";
 
 import type { LeadConfig } from "./config.ts";
+import type { StartedService } from "./services.ts";
 
 export const GUEST_WORKSPACE = "/workspace";
 export const GUEST_MISE_DIR = "/opt/mise";
@@ -39,12 +40,26 @@ export function guestEnv(withToolchains: boolean): Record<string, string> {
 
 export type Mount = { host: string; readonly?: boolean };
 
+/** `<name>:<port>` -> `127.0.0.1:<hostPort>`, for Gondolin's `tcp.hosts` VM option. */
+export function serviceHosts(services: readonly StartedService[]): Record<string, string> {
+  return Object.fromEntries(services.map((service) => [`${service.name}:${service.port}`, `127.0.0.1:${service.hostPort}`]));
+}
+
+/** `PI_LEAD_SERVICE_<NAME>=<name>:<port>`, one per service, for the guest environment. */
+export function serviceEnv(services: readonly StartedService[]): Record<string, string> {
+  return Object.fromEntries(
+    services.map((service) => [`PI_LEAD_SERVICE_${service.name.toUpperCase().replaceAll("-", "_")}`, `${service.name}:${service.port}`]),
+  );
+}
+
 /** One Gondolin VM with explicit mounts and per-request egress policy. */
 export async function createSandboxVm(options: {
   label: string;
   sandbox: LeadConfig["sandbox"];
   mounts: Record<string, Mount>;
   allowRequest: (request: { method: string; url: string }) => Promise<boolean>;
+  /** `<guestHost>:<port>` -> `127.0.0.1:<hostPort>`, fixed at creation (Lead-started services only). */
+  tcpHosts?: Record<string, string>;
 }): Promise<VM> {
   const { httpHooks } = createHttpHooks({
     // Hosts are decided per request; internal address ranges stay blocked.
@@ -66,5 +81,6 @@ export async function createSandboxVm(options: {
     httpHooks,
     allowWebSockets: false,
     vfs: { mounts },
+    ...(options.tcpHosts && Object.keys(options.tcpHosts).length ? { tcp: { hosts: options.tcpHosts } } : {}),
   });
 }
