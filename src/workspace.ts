@@ -21,6 +21,8 @@ export type Workspace = {
     /** Every path the branch adds, changes, deletes or renames since `base`. */
     changedFiles: string[];
   }>;
+  /** A file's content at `rev` (after `collect` fetched the branch), or undefined when it is absent or unreadable. */
+  fileAt(input: { repoRoot: string; rev: string; path: string }): Promise<string | undefined>;
   remove(path: string): Promise<void>;
 };
 
@@ -59,6 +61,15 @@ export const gitWorkspace: Workspace = {
       git(["diff", "--name-only", "-z", "--no-renames", `${base}...${branch}`], repoRoot),
     ]);
     return { commits, diffStat, changedFiles: names.split("\0").filter(Boolean) };
+  },
+
+  async fileAt({ repoRoot, rev, path }) {
+    // cat-file, not show: plumbing applies no textconv or other configured filter to the guest's blob.
+    try {
+      return await git(["cat-file", "blob", `${rev}:${path}`], repoRoot);
+    } catch {
+      return undefined;
+    }
   },
 
   async remove(path) {

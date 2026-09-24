@@ -1,6 +1,6 @@
 {
   "name": "pi-lead",
-  "version": "0.5.0",
+  "version": "0.6.1",
   "description": "A Pi package that turns one Pi session into an engineering lead delegating to sandboxed workers.",
   "license": "MIT",
   "author": "Thibaut Etienne",

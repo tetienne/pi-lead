@@ -127,7 +127,7 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
     diffStat: " src/a.ts | 3 ++-",
     commits: "abc feat: export",
     changedFiles: ["src/a.ts"],
-    lastTest: { command: "npm test", exitCode: 0 },
+    verification: { command: "npm test", exitCode: 1, outputTail: "1 failing" },
   };
   const calls: Array<{ state: any; questions: Record<string, any> }> = [];
   const met = createJudge({
@@ -140,7 +140,7 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
   assert.match(JSON.stringify(calls[0]!.questions.criterion2), /Has tests/);
   assert.equal(calls[0]!.state.commits, "abc feat: export");
   assert.equal(calls[0]!.state.changedFiles, "src/a.ts");
-  assert.deepEqual({ ...calls[0]!.state.lastTestRun, note: undefined }, { command: "npm test", exitCode: 0, note: undefined });
+  assert.deepEqual({ ...calls[0]!.state.verification, note: undefined }, { command: "npm test", exitCode: 1, outputTail: "1 failing", note: undefined });
 
   const ledger = await ledgerIn();
   const unmet = (verdict: string | undefined) =>
@@ -153,12 +153,12 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
   assert.equal(await unmet(undefined).verdict(evidence), "partial");
   assert.equal(await unmet("needs_human").verdict(evidence), "needs_human");
 
-  // No checklist: today's single question, and no test run is stated as such.
+  // No checklist: today's single question, and no verify command is stated as such.
   const plain: typeof calls = [];
   const single = createJudge({ ask: fakeAsk({ verdict: { choice: "done", confidence: 0.9 }, criterion1: { noul: 0 } }, plain), config: DEFAULT_CONFIG.jev, ledger });
-  assert.equal(await single.verdict({ ...evidence, task: "Add CSV export. AC: test passes.", lastTest: undefined }), "done");
+  assert.equal(await single.verdict({ ...evidence, task: "Add CSV export. AC: test passes.", verification: undefined }), "done");
   assert.deepEqual(Object.keys(plain[0]!.questions), ["verdict"]);
-  assert.equal(plain[0]!.state.lastTestRun, "none recorded");
+  assert.match(plain[0]!.state.verification, /^none: no run of the project's verify command/);
 });
 
 test("intake asks readiness and difficulty in one call", async () => {
@@ -248,30 +248,6 @@ test("egress decisions are banded and cached per method, host and path", async (
   assert.equal(await unsure.egress({ task: "t", method: "POST", url: "https://paste.example/x" }), "ask");
   const deny = createJudge({ ask: fakeAsk({ needed: { noul: 0.02 } }), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
   assert.equal(await deny.egress({ task: "t", method: "POST", url: "https://paste.example/x" }), "deny");
-});
-
-test("the stuck judgment is banded at 0.2/0.8 and sees the ticket, commands, exit codes and output tails", async () => {
-  const calls: any[] = [];
-  const runs = [
-    { command: "npm test", exitCode: 1, output: "FAIL\n" + "y".repeat(2_000) },
-    { command: "npm test", exitCode: -1 },
-  ];
-  const yes = createJudge({ ask: fakeAsk({ stuck: { noul: 0.9 } }, calls), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
-  assert.equal(await yes.stuck({ task: "t".repeat(5_000), runs }), true);
-  const { state, questions } = calls[0];
-  assert.ok(state.ticket.length < 3_100);
-  assert.equal(state.recentCommands.length, 2);
-  assert.equal(state.recentCommands[1].exitCode, -1);
-  assert.equal(state.recentCommands[1].outputTail, undefined);
-  assert.ok(state.recentCommands[0].outputTail.length < 1_100);
-  assert.match(JSON.stringify(questions.stuck), /repeating the same failed approach/);
-
-  for (const [probability, expected] of [[0.1, false], [0.5, undefined], [0.85, true]] as const) {
-    const judge = createJudge({ ask: fakeAsk({ stuck: { noul: probability } }), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
-    assert.equal(await judge.stuck({ task: "t", runs }), expected, String(probability));
-  }
-  const noKey = createJudge({ config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
-  assert.equal(await noKey.stuck({ task: "t", runs }), undefined);
 });
 
 test("the daily budget stops calls once spent, and failures fall back", async () => {
@@ -445,56 +421,23 @@ const judgeWith = async (answers: Record<string, unknown>) => {
   const judge = createJudge({ ask: fakeAsk(answers), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn(), onDecision: (d) => decisions.push(d) });
   return { judge, decisions };
 };
-const shape = ({ at, ms, usd, ...rest }: JevDecision) => {
+const shape = ({ at, ...rest }: JevDecision) => {
   assert.equal(typeof at, "number");
-  assert.equal(typeof ms, "number");
-  assert.ok(usd! > 0);
   return rest;
 };
 
-test("the stuck judgment emits a decision and is charged to its own kind", async () => {
-  const runs = [{ command: "npm test", exitCode: 1 }];
-  const threshold = "no ≤ 0.2 < unsure < 0.8 ≤ yes";
-  for (const [probability, outcome, applied] of [
-    [0.9, "yes", "jev"],
-    [0.1, "no", "jev"],
-    [0.5, "unsure → only a repeated command counts", "fallback"],
-  ] as const) {
-    const { judge, decisions } = await judgeWith({ stuck: { noul: probability } });
-    await judge.stuck({ task: "t", runs });
-    assert.deepEqual(decisions.map(shape), [{ kind: "stuck", outcome, applied, probability, threshold }]);
-  }
-  const ledger = await ledgerIn();
-  await createJudge({ ask: fakeAsk({ stuck: { noul: 0.9 } }), config: DEFAULT_CONFIG.jev, ledger }).stuck({ task: "t", runs });
-  assert.equal((await ledger.usage()).kinds.stuck?.calls, 1);
-  const failing: JevDecision[] = [];
-  const broken = createJudge({
-    ask: async () => {
-      throw new Error("down");
-    },
-    config: DEFAULT_CONFIG.jev,
-    ledger: await ledgerIn(),
-    onDecision: (d) => failing.push(d),
-  });
-  assert.equal(await broken.stuck({ task: "t", runs }), undefined);
-  assert.deepEqual(failing.map(({ kind, outcome, applied }) => ({ kind, outcome, applied })), [
-    { kind: "stuck", outcome: "failing → only a repeated command counts", applied: "fallback" },
-  ]);
-});
-
 test("each judgment emits one decision: applied or fallback", async () => {
-  const minConf = `conf ≥ ${DEFAULT_CONFIG.jev.minConfidence}`;
   {
     const { judge, decisions } = await judgeWith({ difficulty: { score: 2.1, confidence: 0.82 } });
     await judge.modelTier({ task: "t", kind: "implement" });
     assert.deepEqual(decisions.map(shape), [
-      { kind: "tier", outcome: "standard", applied: "jev", confidence: 0.82, threshold: minConf, detail: "difficulty 2.1/4" },
+      { kind: "tier", outcome: "standard", applied: "jev", confidence: 0.82, detail: "difficulty 2.1/4" },
     ]);
   }
   {
     const { judge, decisions } = await judgeWith({ difficulty: { score: 2.1, confidence: 0.3 } });
     await judge.modelTier({ task: "t", kind: "review" });
-    assert.deepEqual(decisions.map(shape), [{ kind: "tier", outcome: "unsure → deep", applied: "fallback", confidence: 0.3, threshold: minConf }]);
+    assert.deepEqual(decisions.map(shape), [{ kind: "tier", outcome: "unsure → deep", applied: "fallback", confidence: 0.3 }]);
   }
   {
     const { judge, decisions } = await judgeWith({ acceptance: { noul: 0.1 }, bounded: { noul: 0.9 }, decided: { noul: 0.9 }, difficulty: { score: 1, confidence: 0.9 } });
@@ -607,10 +550,10 @@ test("a failing, over-budget or unconfigured Jev: fallbacks name the reason, or 
   const none = createJudge({ config: DEFAULT_CONFIG.jev, ledger: await ledgerIn(), onDecision: (d) => decisions.push(d) });
   await none.overlap("a", "b");
   assert.deepEqual(
-    decisions.map((d) => [d.kind, d.applied, d.outcome, d.usd]),
+    decisions.map((d) => [d.kind, d.applied, d.outcome]),
     [
-      ["overlap", "fallback", "failing → waits", undefined],
-      ["tier", "fallback", "over budget → standard", undefined],
+      ["overlap", "fallback", "failing → waits"],
+      ["tier", "fallback", "over budget → standard"],
     ],
   );
 

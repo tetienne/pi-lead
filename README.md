@@ -36,10 +36,14 @@ you ─► Lead (Pi, your tab)
   you reply, every Lead tool call that can execute or write on your machine
   (bash, write, edit…) asks you first, and is blocked without a UI. Set
   `"leadGuard": "off"` in the global config to disable it. When the fetched
-  branch touches files that run implicitly on your machine or in CI, or widen
-  PI Lead's policy (CI workflows, `package.json`, `.npmrc`, mise and direnv
-  config, git hooks, `.vscode` tasks/settings, `.pi/`…), the report adds a
-  host-generated warning to review them before merging; it never blocks.
+  branch touches files that can run on your machine or in CI, or steer future
+  agents, the report adds a host-generated "Host check" line naming the
+  matched patterns: CI workflows and actions, `package.json` (only when its
+  `scripts` or `packageManager` change), `.npmrc`/`.yarnrc`, mise, direnv, git
+  hooks, `.vscode` tasks/settings, `.pi/`, `.agents/`, `.claude/`,
+  `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` and `.gitmodules`. It is a hint
+  to focus your review, not a security guarantee: ordinary source, tests and
+  lockfiles run too once you use them, and it never blocks.
 - A **worker** is an interactive Pi session in its own Herdr tab. Its
   `read/write/edit/bash/ls/find/grep` tools run inside a Gondolin micro-VM that
   mounts only a throw-away clone of the repository. The guest never sees your
@@ -49,10 +53,9 @@ you ─► Lead (Pi, your tab)
   trust the project, but no host-side extensions except Herdr's Pi
   integration (working/idle badges). It can search the web with `web_search`
   through your ChatGPT subscription (see
-  [Web access for workers](#web-access-for-workers)). When an implement, prototype or debug
-  worker finishes `done` with no recorded test run, or a failing last one,
-  `finish` sends it back once to run the tests or report `partial`; the next
-  `finish` goes through (`"steerUnverifiedDone": false` disables this).
+  [Web access for workers](#web-access-for-workers)). When the project names a
+  `verify` command, PI Lead runs it itself when code work finishes (see
+  [Verify](#verify)).
 - **Toolchains** come from the project's mise config: the first worker runs
   `mise install` in a sandbox into a per-project cache, later workers mount it
   read-only and start instantly. (Your Mac's own mise cache holds macOS
@@ -62,7 +65,8 @@ you ─► Lead (Pi, your tab)
   answer to an action. Without a key, documented defaults apply.
 
 Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
-[ADR 0006](docs/adr/0006-workers-mirror-the-lead.md) and
+[ADR 0006](docs/adr/0006-workers-mirror-the-lead.md),
+[ADR 0007](docs/adr/0007-verify-with-a-host-chosen-command.md) and
 [spec v2](.scratch/pi-lead/spec-v2.md).
 
 ## Requirements
@@ -83,14 +87,31 @@ Design record: [ADR 0005](docs/adr/0005-lead-is-a-tool-driven-conversation.md),
 
 <!-- x-release-please-start-version -->
 ```bash
-pi install -l git:github.com/tetienne/pi-lead@v0.5.0
+pi install -l git:github.com/tetienne/pi-lead@v0.6.1
 ```
 <!-- x-release-please-end -->
 
 ## Configure
 
-`~/.pi/agent/pi-lead.json` (a trusted project can override it in
-`.pi/pi-lead.json`). Everything is optional:
+Two files, both optional:
+
+- `~/.pi/agent/pi-lead.json` (global): every key except `verify`.
+- `.pi/pi-lead.json` in the project: overrides the global file, key by key,
+  and is the only place for `verify`. It cannot set `leadGuard`, and it is
+  read only when Pi trusts the project.
+
+Pi trusts a project on its own when nothing in it needs trust: its `.pi` holds
+only `pi-lead.json` and there is no `.agents/skills` in it or a parent folder.
+Otherwise (`.pi/settings.json`, `.pi/extensions`, `.pi/skills`, prompts,
+`.agents/skills` and similar) Pi asks at startup, unless a saved decision or
+`defaultProjectTrust` decides, and print and RPC modes never ask. To trust it
+later, run `/trust` and restart Pi, or start Pi with `--approve` for one run
+(see Pi's `docs/security.md`). A
+setting that is ignored (`verify` in the global file, `leadGuard` in the
+project file, or the whole project file of an untrusted project) is reported
+with a warning when the session starts.
+
+A global file, for example:
 
 ```json
 {
@@ -104,12 +125,12 @@ pi install -l git:github.com/tetienne/pi-lead@v0.5.0
   },
   "maxWorkers": 2,
   "sandbox": { "allowedHosts": ["registry.npmjs.org", "*.crates.io"] },
-  "jev": { "via": "openrouter", "dailyBudgetUsd": 1, "display": "normal" },
+  "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
   "keepFailedWorkers": true,
   "leadGuard": "confirm",
   "waitingTimeoutMinutes": 120,
   "stuckDetection": true,
-  "steerUnverifiedDone": true
+  "verifyTimeoutMinutes": 15
 }
 ```
 
@@ -137,6 +158,12 @@ npm run sandbox:smoke              # boots a VM and checks the isolation claims
 
 `allowedHosts` are trusted for downloads only (GET/HEAD and git fetch); any other request, including uploads to an allowlisted host, is
 judged by Jev per path, and when Jev is unsure the worker tab asks you.
+
+`stuckDetection` watches a worker's shell commands and file changes: when the
+same command fails three times without succeeding, or six commands in a row
+fail, with no file changed through its `write` or `edit` tools in between, the
+worker is told once per prompt to step back or finish as `blocked`. A test-first loop (edit, tests fail, edit) never counts. It is never
+stopped automatically, and Jev is not involved.
 
 ### Web access for workers
 
@@ -207,11 +234,29 @@ Then ask the Lead in plain language:
 - "Find out why `pnpm install` fails with ERR_PNPM_BAD_PM_VERSION since
   yesterday" → a `debug` worker uses `web_search` for recent reports.
 
-`stuckDetection` watches a worker's shell commands: when the same command fails
-three times in a row, or its last six commands all fail, Jev is asked whether
-it is repeating a failed approach; if so the worker is told to step back, and
-the second time to finish as `blocked` (with a warning in its tab). It is never
-stopped automatically. Without Jev, only the same-command case counts.
+### Verify
+
+A trusted project names the command that proves its work in
+`.pi/pi-lead.json` (only there: the global config and untrusted projects
+cannot set it, and PI Lead warns when either tries):
+
+```json
+{ "verify": "npm run typecheck && npm test" }
+```
+
+When an implement, prototype or debug worker calls `finish` with `done` or
+`partial`, PI Lead's worker extension (host-side code, not the model) commits
+what is left, then runs `verify` in the worker's VM at `/workspace`, with the
+bash tool's shell and environment, for at most `verifyTimeoutMinutes`. A
+non-zero exit (or a timeout) makes the result at most `partial`, whatever the
+worker or Jev says. The report states the command and exit code; the output's
+tail sits in the untrusted worker block and goes to Jev's verdict. Without
+`verify`, the report says the work is unverified.
+
+The worker controls the repository, so it can change what `verify` runs (a
+`package.json` script, a test file): `verify` catches honest mistakes, and the
+sensitive-path review hint (changed `package.json` scripts, CI, `.pi` and
+similar) points at the dishonest ones. Review both before merging.
 
 ### Seeing Jev
 
@@ -227,16 +272,10 @@ the Lead makes gets one dim line in the transcript, which the model never sees:
 ```
 
 `◆` Jev decided and its answer applied, `◇` Jev was unsure, failing or over
-budget and the default applied, `▲` Jev overrode the worker. Pi's expanded
-view adds confidence, threshold, latency and cost. Worker tabs show their
-egress and stuck-loop decisions as notifications. `/jev` lists today's calls and spend by kind
-and this session's last 20 decisions.
-
-`jev.display` sets how much shows: `normal` (default) shows every Lead
-judgment, and in worker tabs every stuck-loop check and only denied or
-questioned egress (allowed egress is just counted); `quiet` shows only `◇`,
-`▲`, denied egress and a worker found stuck; `verbose` also shows allowed
-egress.
+budget and the default applied, `▲` Jev overrode the worker. Worker tabs
+notify only egress Jev denied or put to you; allowed egress is just counted.
+`/jev` lists today's calls and spend by kind and this session's last 20
+decisions.
 
 ## Develop
 

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { choice, noul, score, TypeSafeClient, type Fetch } from "@typesafe-ai/sdk";
 
 import type { LeadConfig, Tier } from "./config.ts";
-import type { LastTest } from "./protocol.ts";
+import type { Verification } from "./protocol.ts";
 
 /**
  * Jev answers closed-set questions; this module maps each answer to a
@@ -24,7 +24,7 @@ export type TierJudgment = { tier: Tier; difficulty: number };
 export type ReadinessJudgment = { ready: boolean; missing: string[] };
 
 /** What a Jev call was about; `tier` covers both `modelTier` and `intake`. */
-export const JEV_KINDS = ["tier", "overlap", "verdict", "review", "failure", "egress", "stuck"] as const;
+export const JEV_KINDS = ["tier", "overlap", "verdict", "review", "failure", "egress"] as const;
 export type JevKind = (typeof JEV_KINDS)[number];
 
 /**
@@ -42,11 +42,7 @@ export type JevDecision = {
   confidence?: number;
   /** Of a yes/no answer. */
   probability?: number;
-  /** The confidence floor or probability band the answer was held to. */
-  threshold?: string;
   detail?: string;
-  usd?: number;
-  ms?: number;
   at: number;
 };
 
@@ -71,18 +67,16 @@ export type Judge = {
     commits: string;
     /** Changed paths since `base` (`Workspace.collect`), collected on the host. */
     changedFiles: string[];
-    /** Recorded outside the guest, but the guest controls what the command ran. */
-    lastTest?: LastTest;
+    /**
+     * The project's `verify` command, run by host-side code after the last
+     * commit; the guest controls the repository, so its output is guest text.
+     */
+    verification?: Pick<Verification, "command" | "exitCode" | "outputTail">;
   }): Promise<WorkerVerdict | undefined>;
   reviewSeverity(findings: string): Promise<{ severity: number; action: ReviewAction } | undefined>;
   failureKind(input: { task: string; log: string }): Promise<FailureKind | undefined>;
   overlap(a: string, b: string): Promise<boolean | undefined>;
-  /** Is a worker repeating the same failed approach? `undefined`: don't know. */
-  stuck(input: { task: string; runs: readonly ShellRun[] }): Promise<boolean | undefined>;
 };
-
-/** A worker shell command as the host-side bash wrapper saw it. */
-export type ShellRun = { command: string; exitCode: number; output?: string };
 
 /** Minimal shape of `TypeSafeClient.systemOne`, injectable for tests. */
 export type AskJev = (
@@ -309,8 +303,8 @@ export function describeRequest(method: string, url: string, max = 80): string {
   return `${verb} ${target.length > max ? `${target.slice(0, max - 1)}…` : target}`;
 }
 
-type Call = { answers?: Record<string, unknown>; usd?: number; ms?: number; failure?: JevProblem["kind"] };
-type DecisionInput = Omit<JevDecision, "at" | "usd" | "ms">;
+type Call = { answers?: Record<string, unknown>; failure?: JevProblem["kind"] };
+type DecisionInput = Omit<JevDecision, "at">;
 
 const FALLBACK_REASON: Record<JevProblem["kind"] | "unsure", string> = { unsure: "unsure", budget: "over budget", error: "failing" };
 
@@ -335,20 +329,13 @@ export function createJudge(options: {
       // A broken notifier must not turn a fallback into a crash.
     }
   };
-  const minConfidence = `conf ≥ ${config.minConfidence}`;
 
   /** For a fallback, `outcome` names the default that applies; the reason is prefixed here. */
   const emit = (call: Call | undefined, decision: DecisionInput) => {
     if (!call || !onDecision) return;
     const outcome = decision.applied === "fallback" ? `${FALLBACK_REASON[call.failure ?? "unsure"]} → ${decision.outcome}` : decision.outcome;
     try {
-      onDecision({
-        ...decision,
-        outcome,
-        ...(call.usd !== undefined ? { usd: call.usd } : {}),
-        ...(call.ms !== undefined ? { ms: call.ms } : {}),
-        at: Date.now(),
-      });
+      onDecision({ ...decision, outcome, at: Date.now() });
     } catch {
       // Display only: never let it change a decision.
     }
@@ -361,12 +348,9 @@ export function createJudge(options: {
         report("budget", `Jev's daily budget ($${config.dailyBudgetUsd}) is spent`);
         return { failure: "budget" };
       }
-      const started = Date.now();
       const result = await ask(state, questions, AbortSignal.timeout(15_000));
-      const ms = Date.now() - started;
-      const usd = (result.inputTokens / 1_000_000) * config.inputUsdPerMillion;
-      await ledger.charge(usd, kind);
-      return { answers: result.answers, usd, ms };
+      await ledger.charge((result.inputTokens / 1_000_000) * config.inputUsdPerMillion, kind);
+      return { answers: result.answers };
     } catch (error) {
       const text = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim() || "unknown error";
       report("error", text.length > 200 ? `${text.slice(0, 200)}…` : text);
@@ -386,7 +370,6 @@ export function createJudge(options: {
       outcome: judged ? judged.tier : defaultTier(kind),
       applied: judged ? "jev" : "fallback",
       ...confidence(answer),
-      threshold: minConfidence,
       ...(detail ? { detail } : {}),
     };
   };
@@ -416,7 +399,7 @@ export function createJudge(options: {
       const readiness = checkReadiness ? readinessOf(answers) : undefined;
       const tier = tierOf(answers?.difficulty, kind, config.minConfidence);
       if (readiness && !readiness.ready) {
-        emit(call, { kind: "tier", outcome: "not ready", applied: "jev", detail: `missing ${readiness.missing.join(", ")}`, threshold: "p ≤ 0.35" });
+        emit(call, { kind: "tier", outcome: "not ready", applied: "jev", detail: `missing ${readiness.missing.join(", ")}` });
       } else {
         emit(call, tierDecision(answers?.difficulty, kind, tier, !checkReadiness ? undefined : readiness ? "ready" : "readiness unsure"));
       }
@@ -453,17 +436,16 @@ export function createJudge(options: {
         outcome: decision === "ask" ? "asks you" : decision,
         applied: decision === "ask" ? "fallback" : "jev",
         ...(probability !== undefined ? { probability } : {}),
-        threshold: "deny ≤ 0.15 < ask < 0.85 ≤ allow",
         detail: describeRequest(method, url),
       });
       return decision;
     },
 
-    async verdict({ task, reported, summary, diffStat, commits, changedFiles, lastTest }) {
+    async verdict({ task, reported, summary, diffStat, commits, changedFiles, verification }) {
       const labels = ["done", "partial", "blocked", "needs_human"] as const;
       const criteria = acceptanceCriteria(task);
       const questions: Record<string, unknown> = {
-        verdict: choice("Given the ticket, the worker's report and the evidence (commits, changed files, last test run), what is the real state of the work?", {
+        verdict: choice("Given the ticket, the worker's report and the evidence (commits, changed files, verification run), what is the real state of the work?", {
           done: "The ticket's acceptance criteria are met and verified.",
           partial: "Useful progress, but some acceptance criteria are not met or not verified.",
           blocked: "The worker could not proceed because of a technical obstacle.",
@@ -485,10 +467,15 @@ export function createJudge(options: {
           commits: clip(commits, 3_000),
           changedFiles: clip(changedFiles.join("\n"), 3_000),
           diffStat: clip(diffStat, 3_000),
-          // A signal, not proof: the guest controls the repository and what its tests do.
-          lastTestRun: lastTest
-            ? { command: clip(lastTest.command, 500), exitCode: lastTest.exitCode, note: "run in the worker's sandbox; -1 means it did not complete; a pipeline's exit code is its last stage's" }
-            : "none recorded",
+          // The command and exit code are the host's; the output was produced in the guest.
+          verification: verification
+            ? {
+                command: clip(verification.command, 500),
+                exitCode: verification.exitCode,
+                outputTail: clip(verification.outputTail, 2_000),
+                note: "the project's verify command, run by PI Lead in the worker's sandbox after its last commit; -1 means it did not complete",
+              }
+            : "none: no run of the project's verify command for this result",
         },
         questions,
       );
@@ -501,7 +488,7 @@ export function createJudge(options: {
       // An unmet criterion makes Jev's verdict at most partial; blocked and needs_human stand.
       const final = unmet.length > 0 && (verdict === undefined || verdict === "done") ? "partial" : verdict;
       const unmetDetail = unmet.length ? `${unmet.length > 1 ? "criteria" : "criterion"} ${unmet.join(", ")} not met` : undefined;
-      const common = { kind: "verdict" as const, ...confidence(answers?.verdict), threshold: minConfidence };
+      const common = { kind: "verdict" as const, ...confidence(answers?.verdict) };
       if (final === undefined) emit(call, { ...common, outcome: `${reported} stands`, applied: "fallback" });
       else if (VERDICT_ORDER.indexOf(final) > VERDICT_ORDER.indexOf(reported)) {
         emit(call, { ...common, outcome: `${reported} → ${final}`, applied: "overridden", ...(unmetDetail ? { detail: unmetDetail } : {}) });
@@ -519,7 +506,7 @@ export function createJudge(options: {
         { severity: score("How severe are the most serious findings in this code review?", SEVERITY_RUBRIC) },
       );
       const severity = scoreOf(call?.answers?.severity, SEVERITY_RUBRIC.length, config.minConfidence);
-      const common = { kind: "review" as const, ...confidence(call?.answers?.severity), threshold: minConfidence };
+      const common = { kind: "review" as const, ...confidence(call?.answers?.severity) };
       if (severity === undefined) {
         emit(call, { ...common, outcome: "no severity", applied: "fallback" });
         return undefined;
@@ -549,7 +536,6 @@ export function createJudge(options: {
         outcome: kind ?? "not transient",
         applied: kind ? "jev" : "fallback",
         ...confidence(call?.answers?.kind),
-        threshold: minConfidence,
       });
       return kind;
     },
@@ -567,43 +553,8 @@ export function createJudge(options: {
         outcome: overlaps === undefined ? "waits" : overlaps ? "overlaps → waits" : "independent → parallel",
         applied: overlaps === undefined ? "fallback" : "jev",
         ...(probability !== undefined ? { probability } : {}),
-        threshold: "overlaps at p ≥ 0.5",
       });
       return overlaps;
-    },
-
-    async stuck({ task, runs }) {
-      const call = await run(
-        "stuck",
-        {
-          ticket: clip(task, 3_000),
-          // Oldest first; recorded on the host, output is the tail of stdout and stderr.
-          recentCommands: runs.map((entry) => ({
-            command: clip(entry.command, 500),
-            exitCode: entry.exitCode,
-            ...(entry.output ? { outputTail: clip(entry.output, 1_000) } : {}),
-          })),
-          note: "exit code -1 means the command did not complete (timeout, abort)",
-        },
-        {
-          stuck: noul("Is this coding agent repeating the same failed approach without changing strategy?", {
-            true: "It retries the same or trivially varied commands and gets the same failure.",
-            false: "Each attempt changes something meaningful, or the failures are expected steps (e.g. red tests before a fix).",
-          }),
-        },
-      );
-      const probability = noulOf(call?.answers?.stuck);
-      const answer = probability === undefined ? "unsure" : band(probability);
-      const stuck = answer === "unsure" ? undefined : answer === "yes";
-      emit(call, {
-        kind: "stuck",
-        // The worker's fallback (stuck.ts): only the same command failing again counts.
-        outcome: stuck === undefined ? "only a repeated command counts" : stuck ? "yes" : "no",
-        applied: stuck === undefined ? "fallback" : "jev",
-        ...(probability !== undefined ? { probability } : {}),
-        threshold: "no ≤ 0.2 < unsure < 0.8 ≤ yes",
-      });
-      return stuck;
     },
   };
 }

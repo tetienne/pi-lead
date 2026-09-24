@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.6.1](https://github.com/tetienne/pi-lead/compare/v0.6.0...v0.6.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* warn when a PI Lead setting is ignored ([#27](https://github.com/tetienne/pi-lead/issues/27)) ([21378ff](https://github.com/tetienne/pi-lead/commit/21378ff843ef301febd91a34fded05c9399652fa))
+
+## [0.6.0](https://github.com/tetienne/pi-lead/compare/v0.5.0...v0.6.0) (2026-09-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* `steerUnverifiedDone` is removed, along with the shell-history heuristic behind it (`isTestCommand`, `lastTest`, the send-back of an unverified `done`): guessing whether the model tested from its commands was unsound (`npm test || true`, unknown runners, stale runs).
+* trim the Jev display and drop jev.display ([#26](https://github.com/tetienne/pi-lead/issues/26))
+
+### Features
+
+* verify worker results with a host-run project command ([#25](https://github.com/tetienne/pi-lead/issues/25)) ([6ff99d0](https://github.com/tetienne/pi-lead/commit/6ff99d0a51b82a8229e3f7dd01d31fbc6f20a259))
+
+
+### Bug Fixes
+
+* make the sensitive-path check a quieter review hint ([#24](https://github.com/tetienne/pi-lead/issues/24)) ([82238a8](https://github.com/tetienne/pi-lead/commit/82238a848e889490d168ac7399a61608dc4323d6))
+* sanitise Jev transcript lines that fit the terminal ([#21](https://github.com/tetienne/pi-lead/issues/21)) ([645db89](https://github.com/tetienne/pi-lead/commit/645db8955b4568e908b3bdc741cf816d988e1f62))
+
+
+### Code Refactoring
+
+* trim the Jev display and drop jev.display ([#26](https://github.com/tetienne/pi-lead/issues/26)) ([d64643a](https://github.com/tetienne/pi-lead/commit/d64643ac01d77d5d756cbf7c7859f3a469cf2eb0))
+
 ## [0.5.0](https://github.com/tetienne/pi-lead/compare/v0.4.0...v0.5.0) (2026-09-23)
 
 
