@@ -421,26 +421,23 @@ const judgeWith = async (answers: Record<string, unknown>) => {
   const judge = createJudge({ ask: fakeAsk(answers), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn(), onDecision: (d) => decisions.push(d) });
   return { judge, decisions };
 };
-const shape = ({ at, ms, usd, ...rest }: JevDecision) => {
+const shape = ({ at, ...rest }: JevDecision) => {
   assert.equal(typeof at, "number");
-  assert.equal(typeof ms, "number");
-  assert.ok(usd! > 0);
   return rest;
 };
 
 test("each judgment emits one decision: applied or fallback", async () => {
-  const minConf = `conf ≥ ${DEFAULT_CONFIG.jev.minConfidence}`;
   {
     const { judge, decisions } = await judgeWith({ difficulty: { score: 2.1, confidence: 0.82 } });
     await judge.modelTier({ task: "t", kind: "implement" });
     assert.deepEqual(decisions.map(shape), [
-      { kind: "tier", outcome: "standard", applied: "jev", confidence: 0.82, threshold: minConf, detail: "difficulty 2.1/4" },
+      { kind: "tier", outcome: "standard", applied: "jev", confidence: 0.82, detail: "difficulty 2.1/4" },
     ]);
   }
   {
     const { judge, decisions } = await judgeWith({ difficulty: { score: 2.1, confidence: 0.3 } });
     await judge.modelTier({ task: "t", kind: "review" });
-    assert.deepEqual(decisions.map(shape), [{ kind: "tier", outcome: "unsure → deep", applied: "fallback", confidence: 0.3, threshold: minConf }]);
+    assert.deepEqual(decisions.map(shape), [{ kind: "tier", outcome: "unsure → deep", applied: "fallback", confidence: 0.3 }]);
   }
   {
     const { judge, decisions } = await judgeWith({ acceptance: { noul: 0.1 }, bounded: { noul: 0.9 }, decided: { noul: 0.9 }, difficulty: { score: 1, confidence: 0.9 } });
@@ -553,10 +550,10 @@ test("a failing, over-budget or unconfigured Jev: fallbacks name the reason, or 
   const none = createJudge({ config: DEFAULT_CONFIG.jev, ledger: await ledgerIn(), onDecision: (d) => decisions.push(d) });
   await none.overlap("a", "b");
   assert.deepEqual(
-    decisions.map((d) => [d.kind, d.applied, d.outcome, d.usd]),
+    decisions.map((d) => [d.kind, d.applied, d.outcome]),
     [
-      ["overlap", "fallback", "failing → waits", undefined],
-      ["tier", "fallback", "over budget → standard", undefined],
+      ["overlap", "fallback", "failing → waits"],
+      ["tier", "fallback", "over budget → standard"],
     ],
   );
 

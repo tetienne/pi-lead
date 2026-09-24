@@ -1,4 +1,3 @@
-import type { JevDisplay } from "./config.ts";
 import { JEV_KINDS, type JevDecision, type JevUsage } from "./jev.ts";
 
 /**
@@ -16,27 +15,15 @@ export const JEV_ENTRY = "pi-lead-jev";
 /** Decisions `/jev` lists. */
 export const RECENT_DECISIONS = 20;
 
-const DISPLAYS: readonly JevDisplay[] = ["quiet", "normal", "verbose"];
-
-export function displayMode(value: unknown): JevDisplay {
-  return DISPLAYS.includes(value as JevDisplay) ? (value as JevDisplay) : "normal";
-}
-
-export function glyph(decision: Pick<JevDecision, "applied">): string {
+function glyph(decision: Pick<JevDecision, "applied">): string {
   return decision.applied === "fallback" ? "◇" : decision.applied === "overridden" ? "▲" : "◆";
 }
 
-/** Egress Jev allowed: by far the most frequent decision, and the least interesting. */
-const isEgressAllow = (decision: JevDecision) => decision.kind === "egress" && decision.applied === "jev" && decision.outcome === "allow";
-const isEgressDeny = (decision: JevDecision) => decision.kind === "egress" && decision.applied === "jev" && decision.outcome === "deny";
-
-/** Whether a decision gets its own line (transcript in the Lead, notification in a worker tab). */
-export function shouldShow(decision: JevDecision, display: JevDisplay): boolean {
-  if (display === "verbose") return true;
-  if (display === "normal") return !isEgressAllow(decision);
-  // quiet: only what did not go Jev's way and egress that did not go through.
-  return decision.applied !== "jev" || isEgressDeny(decision);
-}
+/**
+ * Whether a decision gets its own line (transcript in the Lead, notification in
+ * a worker tab): every Lead decision, but egress only when not allowed.
+ */
+export const shouldShow = (decision: JevDecision) => decision.kind !== "egress" || decision.outcome !== "allow";
 
 /** Is a stored entry (possibly from another version) a decision this code can render? */
 export function isDecision(value: unknown): value is JevDecision {
@@ -48,8 +35,8 @@ export function isDecision(value: unknown): value is JevDecision {
     typeof decision.outcome === "string" &&
     (decision.applied === "jev" || decision.applied === "fallback" || decision.applied === "overridden") &&
     typeof decision.at === "number" &&
-    (["confidence", "probability", "usd", "ms"] as const).every((key) => decision[key] === undefined || typeof decision[key] === "number") &&
-    (["threshold", "detail"] as const).every((key) => decision[key] === undefined || typeof decision[key] === "string")
+    (["confidence", "probability"] as const).every((key) => decision[key] === undefined || typeof decision[key] === "number") &&
+    (decision.detail === undefined || typeof decision.detail === "string")
   );
 }
 
@@ -65,19 +52,6 @@ export function decisionLine(decision: JevDecision): string {
   return `${glyph(decision)} jev · ${decision.kind} ${decision.outcome}${notes.length ? ` (${notes.join(", ")})` : ""}`;
 }
 
-/** The expanded view's second line: what the answer was held to and what it cost. */
-export function decisionDetails(decision: JevDecision): string {
-  return [
-    decision.confidence !== undefined ? `confidence ${fixed(decision.confidence)}` : undefined,
-    decision.probability !== undefined ? `probability ${fixed(decision.probability)}` : undefined,
-    decision.threshold ? `threshold ${decision.threshold}` : undefined,
-    decision.ms !== undefined ? `${Math.round(decision.ms)} ms` : undefined,
-    decision.usd !== undefined ? `$${fixed(decision.usd, 6)}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-}
-
 /**
  * Printable ASCII and the few symbols these lines use: all one terminal column
  * wide. A stored entry is replayed from the session file, so anything else
@@ -91,11 +65,8 @@ function fit(line: string, width: number): string {
   return chars.length <= width ? chars.join("") : `${chars.slice(0, Math.max(0, width - 1)).join("")}…`;
 }
 
-/** Lines of the transcript entry, each at most `width` columns, before theming. */
-export function renderDecision(decision: JevDecision, expanded: boolean, width: number): string[] {
-  const details = expanded ? decisionDetails(decision) : "";
-  return [decisionLine(decision), ...(details ? [`  ${details}`] : [])].map((line) => fit(line, width));
-}
+/** The transcript entry's line, at most `width` columns, before theming. */
+export const renderDecision = (decision: JevDecision, width: number) => fit(decisionLine(decision), width);
 
 export type StatusLevel = "dim" | "warning" | "error";
 
