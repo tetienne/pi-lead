@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/tetienne/pi-lead/compare/v0.7.0...v0.8.0) (2026-09-24)
+
+
+### Features
+
+* make worker sidecar services available on main ([#39](https://github.com/tetienne/pi-lead/issues/39)) ([7ff298f](https://github.com/tetienne/pi-lead/commit/7ff298fc98805d1d01705caee7e563789419c4ef))
+
+
+### Bug Fixes
+
+* keep skill mounts under kernel cmdline limit ([#35](https://github.com/tetienne/pi-lead/issues/35)) ([be664d7](https://github.com/tetienne/pi-lead/commit/be664d7c6f0be36576460d6bcb8be8dc406c7833))
+* let worker git use its clone and stop extra worktrees ([#37](https://github.com/tetienne/pi-lead/issues/37)) ([106ebf0](https://github.com/tetienne/pi-lead/commit/106ebf071dfb1f455f347a5b3b781bd3a6ad9b38))
+
 ## [0.7.0](https://github.com/tetienne/pi-lead/compare/v0.6.1...v0.7.0) (2026-09-24)
 
 
