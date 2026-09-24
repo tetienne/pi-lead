@@ -22,14 +22,21 @@ export type Herdr = {
   reportMetadata(paneId: string, metadata: PaneMetadata): Promise<void>;
   /** Name the agent in a pane (live-unique); fails until Herdr has detected the agent. */
   renameAgent(paneId: string, name: string): Promise<void>;
+  /** Relabel a tab (the worker's state glyph and title). */
+  renameTab(tabId: string, label: string): Promise<void>;
+  /** A Herdr toast, for a worker that stopped and needs the user. */
+  notify(title: string, sound: "request" | "none"): Promise<void>;
 };
 
 export type PaneMetadata = {
   title: string;
   displayAgent: string;
   tokens: Record<string, string>;
-  /** Shown instead of "working" while the agent works. */
+  /** Shown instead of "working" while the agent works, and instead of "idle" once it stopped. */
   workingLabel: string;
+  idleLabel: string;
+  /** Orders reports: Herdr ignores one older than the last it applied. */
+  seq: number;
 };
 
 /** `--agent pi` makes Herdr apply the presentation fields only while a Pi occupies the pane. */
@@ -89,7 +96,7 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     async listTabs(inWorkspace) {
       return collectStrings(await herdr(["tab", "list", "--workspace", inWorkspace]), "tab_id");
     },
-    async reportMetadata(paneId, { title, displayAgent, tokens, workingLabel }) {
+    async reportMetadata(paneId, { title, displayAgent, tokens, workingLabel, idleLabel, seq }) {
       // argv, never a shell: titles and branches are user/model text.
       await herdr([
         "pane",
@@ -106,10 +113,20 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
         ...Object.entries(tokens).flatMap(([name, value]) => ["--token", `${name}=${value}`]),
         "--state-label",
         `working=${workingLabel}`,
+        "--state-label",
+        `idle=${idleLabel}`,
+        "--seq",
+        String(seq),
       ]);
     },
     async renameAgent(paneId, name) {
       await herdr(["agent", "rename", paneId, name]);
+    },
+    async renameTab(tabId, label) {
+      await herdr(["tab", "rename", tabId, label]);
+    },
+    async notify(title, sound) {
+      await herdr(["notification", "show", title, "--sound", sound]);
     },
   };
 }

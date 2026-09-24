@@ -54,6 +54,15 @@ you ─► Lead (Pi, your tab)
   integration (working/idle badges). When the project names a `verify`
   command, PI Lead runs it itself when code work finishes (see
   [Verify](#verify)).
+- **Seeing workers.** Each worker tab's label starts with its state:
+  `○` queued or starting, `●` running, `?` waiting for your answer, `~` partly
+  done, `✗` blocked or failed, `✓` done, `-` stopped (e.g. `? Add CSV export`).
+  A worker that stops and needs you also raises a Herdr notification; only a
+  question plays a sound. Titles are reduced to letters, digits and plain
+  punctuation, and notifications never quote the worker. The Lead's status
+  line counts live workers (`● 2 running · 1 needs you`, in the warning colour
+  while one waits on you), and events such as "started on…" or "waits for a
+  free worker slot" appear as dim transcript lines that the model never sees.
 - **Toolchains** come from the project's mise config: the first worker runs
   `mise install` in a sandbox into a per-project cache, later workers mount it
   read-only and start instantly. (Your Mac's own mise cache holds macOS

@@ -45,16 +45,22 @@ test("tab listing, pane metadata and agent names go through argv, never a shell"
       title: "Fix $(whoami) bug",
       displayAgent: "pi-lead debug",
       tokens: { model: "anthropic/claude-opus-5-5", thinking: "high", branch: "pi-lead/fix-bug-abc123", worker: "abcdef12", state: "running" },
-      workingLabel: "debug: Fix $(whoami) bug",
+      workingLabel: "debug · claude-opus-5-5 · high",
+      idleLabel: "needs your answer",
+      seq: 42,
     });
     await herdr.renameAgent("w1:p3", "lead-fix-bug-abcd");
+    await herdr.renameTab("w1:t2", "? Fix $(whoami) bug");
+    await herdr.notify("? Fix bug: needs your answer", "request");
     assert.deepEqual(await argv(), [
       "[tab][list][--workspace][w1]",
       "[pane][report-metadata][w1:p3][--source][custom:pi-lead][--agent][pi][--title][Fix $(whoami) bug]" +
         "[--display-agent][pi-lead debug][--token][model=anthropic/claude-opus-5-5][--token][thinking=high]" +
         "[--token][branch=pi-lead/fix-bug-abc123][--token][worker=abcdef12][--token][state=running]" +
-        "[--state-label][working=debug: Fix $(whoami) bug]",
+        "[--state-label][working=debug · claude-opus-5-5 · high][--state-label][idle=needs your answer][--seq][42]",
       "[agent][rename][w1:p3][lead-fix-bug-abcd]",
+      "[tab][rename][w1:t2][? Fix $(whoami) bug]",
+      "[notification][show][? Fix bug: needs your answer][--sound][request]",
     ]);
   } finally {
     process.env.PATH = previous;

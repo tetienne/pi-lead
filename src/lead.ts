@@ -15,6 +15,7 @@ import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDe
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
 import { registerReportGuard } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
+import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
 import { gitWorkspace } from "./workspace.ts";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -96,7 +97,6 @@ export default function lead(pi: ExtensionAPI) {
   let ui: ExtensionContext["ui"] | undefined;
   // One per Lead: parallel delegations share a single first-time download.
   const workerImage = createWorkerImage();
-  let lastProgress = "";
   let closed = false;
   let hasUI = false;
   /** Set only when Jev is configured: the status segment and `/jev` read the shared ledger. */
@@ -108,13 +108,9 @@ export default function lead(pi: ExtensionAPI) {
   registerReportGuard(pi);
 
   const status = () => {
-    const workers = delegator?.list() ?? [];
-    const running = workers.filter((w) => w.state === "queued" || w.state === "starting" || w.state === "running").length;
-    const waiting = workers.filter((w) => w.state === "waiting").length;
     const parts: string[] = [];
-    if (running || waiting) {
-      parts.push(`workers: ${running} running${waiting ? ` · ${waiting} waiting for you` : ""}${lastProgress ? ` · ${lastProgress}` : ""}`);
-    }
+    const counts = workerCounts(delegator?.list() ?? []);
+    if (counts) parts.push(hasUI && ui && counts.needsYou ? ui.theme.fg("warning", counts.text) : counts.text);
     if (hasUI && ui && jev && jevUsage) {
       const segment = jevStatus(jevUsage, jev.budgetUsd);
       parts.push(ui.theme.fg(segment.level, segment.text));
@@ -179,7 +175,9 @@ export default function lead(pi: ExtensionAPI) {
         );
       },
       onProgress(text) {
-        lastProgress = text;
+        if (closed) return;
+        // A transcript line, not the footer: the footer only counts.
+        pi.appendEntry(PROGRESS_ENTRY, { text });
         status();
       },
     });
@@ -217,6 +215,11 @@ export default function lead(pi: ExtensionAPI) {
       invalidate: () => undefined,
     };
   });
+
+  pi.registerEntryRenderer<{ text?: unknown }>(PROGRESS_ENTRY, (entry, _options, theme) => ({
+    render: (width: number) => [theme.fg("dim", renderProgress(entry.data?.text, width))],
+    invalidate: () => undefined,
+  }));
 
   pi.registerCommand("jev", {
     description: "Jev's calls and spend today, and this session's last decisions",

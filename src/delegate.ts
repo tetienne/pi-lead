@@ -11,6 +11,7 @@ import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
 import type { Toolchains } from "./toolchains.ts";
+import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
 import type { Workspace } from "./workspace.ts";
 
 export type DelegateParams = {
@@ -99,7 +100,7 @@ export type DelegateDeps = {
   stateRoot: string;
   /** Called for every result: first finish, each later finish, failures and stops. */
   onOutcome(outcome: DelegateOutcome): void;
-  /** Short progress lines for the Lead's status bar. */
+  /** Short progress lines, one per event (started, queued, rerouted), for the Lead's transcript. */
   onProgress?(text: string): void;
   pollMs?: number;
   heartbeatMs?: number;
@@ -163,6 +164,10 @@ type Worker = WorkerInfo & {
   createdAt?: string;
   /** When the worker started waiting on a question (waitingTimeoutMinutes). */
   waitingSince?: number;
+  /** Verdict of the last finish, which says why a waiting worker waits. */
+  verdict?: WorkerVerdict;
+  /** The tab's current label, so a state change renames it only when the label changes. */
+  tabLabel?: string;
   /** Herdr agent name: set once, tried at most twice per tab. */
   named: boolean;
   renameTries: number;
@@ -294,13 +299,24 @@ export function createDelegator(deps: DelegateDeps) {
   const agentName = (worker: Worker) =>
     `lead-${slugify(worker.title).slice(0, 22).replace(/-+$/, "")}-${worker.id.slice(0, 4)}`;
 
-  /** Title, sidebar name and tokens of the worker's pane, reported on every state change. */
+  /** Increasing across Lead restarts, so Herdr never keeps an older report over a newer one. */
+  let metadataSeq = 0;
+  const nextSeq = () => (metadataSeq = Math.max(metadataSeq + 1, now()));
+
+  /** Title, sidebar name, tokens and tab label of the worker's pane, reported on every state change. */
   const describe = (worker: Worker) => {
     const paneId = worker.paneId;
     if (!paneId) return;
+    const tabId = worker.tabId;
+    const label = tabLabel(worker);
+    if (tabId && label !== worker.tabLabel) {
+      worker.tabLabel = label;
+      bestEffort(() => deps.herdr?.renameTab(tabId, label));
+    }
+    const labels = stateLabels(worker, worker.route);
     bestEffort(() =>
       deps.herdr?.reportMetadata(paneId, {
-        title: worker.title,
+        title: plainTitle(worker.title),
         displayAgent: `pi-lead ${worker.kind}`,
         tokens: {
           model: worker.route.model,
@@ -309,14 +325,21 @@ export function createDelegator(deps: DelegateDeps) {
           worker: worker.id.slice(0, 8),
           state: worker.state,
         },
-        workingLabel: `${worker.kind}: ${worker.title}`,
+        workingLabel: labels.working,
+        idleLabel: labels.idle,
+        seq: nextSeq(),
       }),
     );
   };
 
   const setState = (worker: Worker, state: WorkerState) => {
     worker.state = state;
+    // Only a finish says why a worker waits; any other state starts from none.
+    if (state !== "waiting" && state !== "done" && state !== "failed") worker.verdict = undefined;
     describe(worker);
+    // A worker that stopped and needs the user may sit in a background tab: say so outside the Lead too.
+    const notice = attentionNotice(worker);
+    if (notice) bestEffort(() => deps.herdr?.notify(notice.title, notice.sound));
   };
 
   /** `agent rename` only works once Herdr has detected the Pi, so it gets one retry. */
@@ -387,16 +410,19 @@ export function createDelegator(deps: DelegateDeps) {
   };
 
   const waitForSlot = async (worker: Worker) => {
+    let waitNote: string | undefined;
     while (true) {
       const others = busy().filter((other) => other !== worker);
       const blockers: Worker[] = [];
       for (const other of others) if (await mustWaitFor(other, worker)) blockers.push(other);
       if (blockers.length === 0 && others.length < deps.config.maxWorkers) return;
-      progress(
+      const note =
         blockers.length > 0
           ? `"${worker.title}" waits for overlapping "${blockers.map((b) => b.title).join('", "')}"`
-          : `"${worker.title}" waits for a free worker slot`,
-      );
+          : `"${worker.title}" waits for a free worker slot`;
+      // Re-checked every heartbeat: a transcript line only when the reason changes.
+      if (note !== waitNote) progress(note);
+      waitNote = note;
       await Promise.race([
         ...(blockers.length ? blockers : others).map((b) => b.done),
         sleep(heartbeatMs, worker.controller.signal),
@@ -432,11 +458,8 @@ export function createDelegator(deps: DelegateDeps) {
       const exit = (await readIfPresent(worker.exitPath!))?.trim();
       if (exit) throw new Error(`worker Pi exited (status ${exit}) without calling finish`);
       if (Date.now() - lastBeat >= heartbeatMs) {
-        if (worker.state === "running") {
-          progress(`"${worker.title}" is working in its Herdr tab`);
-          // By now Herdr has detected the Pi, if the name failed at tab creation.
-          nameAgent(worker);
-        }
+        // By now Herdr has detected the Pi, if the name failed at tab creation.
+        if (worker.state === "running") nameAgent(worker);
         lastBeat = Date.now();
       }
       // An unanswered question must not keep a VM up forever: the abort ends in `fail`.
@@ -547,8 +570,9 @@ export function createDelegator(deps: DelegateDeps) {
     // `herdr pane run` types one command line into the tab's shell. That
     // shell's cwd is the task directory, never the clone: a prompt running
     // `git status` must not execute guest-planted git config on the host.
+    worker.tabLabel = tabLabel(worker);
     ({ tabId: worker.tabId, paneId: worker.paneId } = await deps.herdr!.openWorkerTab({
-      label,
+      label: worker.tabLabel,
       cwd: worker.taskDir,
       command: `/bin/sh ${shellQuote(script)}`,
     }));
@@ -603,6 +627,7 @@ export function createDelegator(deps: DelegateDeps) {
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
     const sensitive = await reviewHints(worker, collected.changedFiles);
     const keep = status !== "done" && deps.config.keepFailedWorkers;
+    worker.verdict = status;
     setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
     if (keep) worker.waitingSince = Date.now();
     else await closeAndClean(worker);
@@ -730,6 +755,7 @@ export function createDelegator(deps: DelegateDeps) {
     }
     const failure = await deps.judge.failureKind({ task: worker.params.task, log: errorText(error) });
     const keep = deps.config.keepFailedWorkers;
+    worker.verdict = undefined;
     setState(worker, "failed");
     // A kept tab is for inspection only: it is closed when the Lead session ends.
     if (keep) await writeRecord(worker);

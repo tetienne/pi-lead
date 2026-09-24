@@ -98,6 +98,12 @@ function fakeHerdr(
       log.push(`rename ${paneId} ${name}`);
       if (renameFailures-- > 0) throw new Error("agent_not_found");
     },
+    async renameTab(tabId, label) {
+      log.push(`label ${tabId} ${label}`);
+    },
+    async notify(title, sound) {
+      log.push(`notify ${title} (${sound})`);
+    },
     async openWorkerTab({ label, command }) {
       const tabId = `tab-${++tabs}`;
       const paneId = `pane-${tabs}`;
@@ -204,7 +210,7 @@ test("delegate returns at once; the result arrives later, then the worker is cle
   assert.match(outcome.text, /Branch: pi-lead\/add-csv-export-/);
   assert.match(outcome.text, /src\/a\.ts/);
   assert.match(outcome.text, /anthropic\/claude-sonnet-5 · thinking medium · tier standard \(default tier; Jev unavailable\)/);
-  assert.deepEqual(lifecycle(log), ["open lead: Add CSV export", "close tab-1", "remove clone"]);
+  assert.deepEqual(lifecycle(log), ["open ○ Add CSV export", "close tab-1", "remove clone"]);
   assert.equal(delegator.list()[0]!.state, "done");
 });
 
@@ -220,6 +226,8 @@ test("a worker waiting on a question gets the relayed answer and reports again",
   assert.match(question.text, /relay what it needs with `worker`/);
   assert.equal(delegator.list()[0]!.state, "waiting");
   assert.ok(!log.some((line) => line.startsWith("close")), "tab stays open");
+  // The tab says it waits on the user, and a toast with a fixed phrase (never the question) calls them.
+  assert.deepEqual(log.filter((line) => /^(label|notify)/.test(line)), ["label tab-1 ● Dates", "label tab-1 ? Dates", "notify ? Dates: needs your answer (request)"]);
 
   const second = nextOutcome();
   assert.match(await delegator.message(started.worker.id.slice(0, 8), "ISO 8601, please"), /Sent to "Dates"/);
@@ -490,7 +498,7 @@ test("overlapping code tickets run one after the other", async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 5));
   await delegator.start({ kind: "implement", title: "Two", task: "b" }, io);
   await Promise.all(both);
-  assert.ok(log.indexOf("close tab-1") < log.indexOf("open lead: Two"));
+  assert.ok(log.indexOf("close tab-1") < log.indexOf("open ○ Two"));
   assert.ok(progress.some((line) => line.includes('waits for overlapping "One"')));
 });
 
@@ -500,7 +508,7 @@ test("independent tickets run in parallel", async (t) => {
   await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
   await delegator.start({ kind: "implement", title: "Two", task: "b" }, io);
   await Promise.all(both);
-  assert.ok(log.indexOf("open lead: Two") < log.indexOf("close tab-1"));
+  assert.ok(log.indexOf("open ○ Two") < log.indexOf("close tab-1"));
 });
 
 test("without Herdr or with a bad branch name nothing starts", async (t) => {
@@ -617,7 +625,7 @@ test("queued overlapping tickets start one at a time, in order", async (t) => {
   for (const title of ["A", "B", "C"]) await delegator.start({ kind: "implement", title, task: title }, io);
   await Promise.all(all);
   const opens = lifecycle(log).filter((line) => !line.startsWith("remove"));
-  assert.deepEqual(opens, ["open lead: A", "close tab-1", "open lead: B", "close tab-2", "open lead: C", "close tab-3"]);
+  assert.deepEqual(opens, ["open ○ A", "close tab-1", "open ○ B", "close tab-2", "open ○ C", "close tab-3"]);
 });
 
 test("a queued worker can be stopped before its turn", async (t) => {
@@ -644,7 +652,7 @@ test("shutdown closes the tab of a worker waiting on a question", async (t) => {
   await first;
   assert.ok(!log.includes("close tab-1"));
   await delegator.shutdown();
-  assert.deepEqual(lifecycle(log), ["open lead: Ask", "close tab-1", "remove clone"]);
+  assert.deepEqual(lifecycle(log), ["open ○ Ask", "close tab-1", "remove clone"]);
   assert.equal(outcomes.at(-1)?.status, "stopped");
 });
 
@@ -727,7 +735,7 @@ test("reconcile keeps every record when Herdr does not answer", async (t) => {
 test("reconcile never touches the task dirs of a Lead that is still running", async (t) => {
   const { delegator, log, stateRoot } = await setup(t, { replies: ["silent"], herdrOptions: { tabs: { w1: ["tab-1"] } } });
   await delegator.start({ kind: "research", title: "Live", task: "q" }, io);
-  await until(() => log.includes("open lead: Live"));
+  await until(() => log.includes("open ○ Live"));
   await until(() => log.some((line) => line.startsWith("meta")));
   const [dir] = await readdir(stateRoot);
   assert.equal(JSON.parse(await readFile(join(stateRoot, dir!, "tab.json"), "utf8")).tabId, "tab-1");
@@ -760,7 +768,12 @@ test("worker panes get Herdr metadata on every state and an agent name, best-eff
     "meta pane-1 state=done",
     "close tab-1",
   ]);
-  assert.deepEqual(seen.metadata![0], {
+  assert.deepEqual(log.filter((line) => /^(open|label|notify)/.test(line)), ["open ○ Add CSV export", "label tab-1 ● Add CSV export", "label tab-1 ✓ Add CSV export"]);
+  const seqs = seen.metadata!.map((metadata) => metadata.seq);
+  assert.deepEqual(seqs, [...seqs].sort((a, b) => a - b));
+  assert.equal(new Set(seqs).size, seqs.length, "every report carries a newer seq");
+  const { seq: _seq, ...first } = seen.metadata![0]!;
+  assert.deepEqual(first, {
     title: "Add CSV export",
     displayAgent: "pi-lead implement",
     tokens: {
@@ -770,8 +783,10 @@ test("worker panes get Herdr metadata on every state and an agent name, best-eff
       worker: id.slice(0, 8),
       state: "starting",
     },
-    workingLabel: "implement: Add CSV export",
+    workingLabel: "implement · claude-sonnet-5 · medium",
+    idleLabel: "idle",
   });
+  assert.equal(seen.metadata!.at(-1)!.idleLabel, "done");
 });
 
 test("failing Herdr metadata never affects the worker", async (t) => {
@@ -824,7 +839,7 @@ test("a worker out of quota continues on the tier's fallback from its branch, an
   assert.match(outcome.text, new RegExp(`Note: openai-codex/gpt-6-sol ran out of quota; continued on opencode-go/glm-5\\.3 from ${first}`));
   assert.match(seen.script!, /'--model' 'opencode-go\/glm-5\.3'/);
   assert.match(seen.script!, /ran out of model quota on this task/);
-  assert.deepEqual(lifecycle(log), ["open lead: Export", "close tab-1", "remove clone", "open lead: Export", "close tab-2", "remove clone"]);
+  assert.deepEqual(lifecycle(log), ["open ○ Export", "close tab-1", "remove clone", "open ○ Export", "close tab-2", "remove clone"]);
 
   const next = await delegator.start({ kind: "implement", title: "Import", task: "t" }, both);
   assert.match(next.text, /to opencode-go\/glm-5\.3/);
