@@ -292,7 +292,7 @@ Pi integration or a missing Jev key gives one `notify` warning with the fix.
 
 1. Footer, tab glyphs and renames, `--seq` plus fixed state labels, and the
    `needs_human` notification. **Done** (`src/worker-display.ts`).
-2. `renderCall` / `renderResult` for `delegate` and `worker`.
+2. `renderCall` / `renderResult` for `delegate` and `worker`. **Done** (`src/tool-display.ts`).
 3. The report card, with `details` passed through.
 4. The startup warning and `/lead-doctor`, working messages, worker session
    names.

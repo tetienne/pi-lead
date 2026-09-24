@@ -52,6 +52,8 @@ export type WorkerInfo = {
   branch?: string;
   route: WorkerRoute;
   tabOpen: boolean;
+  /** Verdict of the last finish, which says why a waiting worker waits. */
+  verdict?: WorkerVerdict;
 };
 
 export type DelegateOutcome = {
@@ -164,8 +166,6 @@ type Worker = WorkerInfo & {
   createdAt?: string;
   /** When the worker started waiting on a question (waitingTimeoutMinutes). */
   waitingSince?: number;
-  /** Verdict of the last finish, which says why a waiting worker waits. */
-  verdict?: WorkerVerdict;
   /** The tab's current label, so a state change renames it only when the label changes. */
   tabLabel?: string;
   /** Herdr agent name: set once, tried at most twice per tab. */
@@ -262,6 +262,7 @@ export function createDelegator(deps: DelegateDeps) {
     route: worker.route,
     tabOpen: worker.tabId !== undefined,
     ...(worker.branch ? { branch: worker.branch } : {}),
+    ...(worker.verdict ? { verdict: worker.verdict } : {}),
   });
 
   const waitingTimeoutMs = deps.config.waitingTimeoutMinutes * 60_000;

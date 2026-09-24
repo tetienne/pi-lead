@@ -3,11 +3,12 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SlashCommandInfo } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SlashCommandInfo, type Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { loadConfig, type LeadConfig } from "./config.ts";
-import { createDelegator, type Delegator, type WorkerCommand } from "./delegate.ts";
+import { createDelegator, type Delegator, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
 import { createWorkerImage } from "./image.ts";
@@ -15,6 +16,7 @@ import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDe
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
 import { registerReportGuard } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
+import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
 import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
 import { gitWorkspace } from "./workspace.ts";
 
@@ -91,6 +93,12 @@ export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, r
 };
 
 const WORKER_ACTIONS = ["list", "message", "stop"] as const;
+
+const paint = (theme: Theme): Paint => (color, text) => theme.fg(color, text);
+
+/** The text a tool returned to the model, which the collapsed rendering summarizes. */
+const resultText = (result: { content: ReadonlyArray<{ type: string; text?: string }> }) =>
+  result.content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
 
 export default function lead(pi: ExtensionAPI) {
   let delegator: Delegator | undefined;
@@ -268,6 +276,9 @@ export default function lead(pi: ExtensionAPI) {
       status();
       return { content: [{ type: "text", text: started.text }], details: started };
     },
+    renderCall: (args, theme) => new Text(delegateCall(args, paint(theme)), 0, 0),
+    renderResult: (result, { expanded, isPartial }, theme) =>
+      new Text(isPartial ? theme.fg("dim", "delegating…") : delegateResult(result.details, resultText(result), expanded, paint(theme)), 0, 0),
   });
 
   pi.registerTool({
@@ -284,8 +295,10 @@ export default function lead(pi: ExtensionAPI) {
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
       let text: string;
+      let details: { workers: WorkerInfo[] } | undefined;
       if (params.action === "list") {
         const workers = current.list();
+        details = { workers };
         text = workers.length
           ? workers
               .map((w) => `- [${w.id.slice(0, 8)}] ${w.title} · ${w.kind} · ${w.state}${w.branch ? ` · ${w.branch}` : ""} · ${w.route.model}`)
@@ -299,7 +312,10 @@ export default function lead(pi: ExtensionAPI) {
         text = await current.stop(params.id);
       }
       status();
-      return { content: [{ type: "text", text }], details: undefined };
+      return { content: [{ type: "text", text }], details };
     },
+    renderCall: (args, theme) => new Text(workerCall(args, paint(theme)), 0, 0),
+    renderResult: (result, { isPartial }, theme) =>
+      new Text(isPartial ? theme.fg("dim", "…") : workerResult(result.details, resultText(result), paint(theme)), 0, 0),
   });
 }
