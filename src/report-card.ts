@@ -1,4 +1,4 @@
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import type { ReportCard } from "./delegate.ts";
 import type { WorkerVerdict } from "./jev.ts";
@@ -67,23 +67,50 @@ function isCard(value: unknown): value is ReportCard {
   );
 }
 
-/** Worker text for the card: every line, uncut (the model reads all of it), cleaned of escapes and controls. */
-const cleanWorkerText = (text: string) => cleanLines(text, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER);
+/**
+ * Worker text for the card: every line, uncut (the model reads all of it),
+ * cleaned of escapes and controls. Tabs become spaces, since the terminal's
+ * tab stops would push text past the gutter; invisible characters (zero-width,
+ * BOM, Unicode tags) become `·`, so text the model can read never renders as nothing.
+ */
+const cleanWorkerText = (text: string) =>
+  cleanLines(text.replace(/\t/g, "   ").replace(INVISIBLE, "·"), Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER);
+
+const INVISIBLE = /[\u200b-\u200f\u2060-\u2064\ufeff\u{e0000}-\u{e007f}]/gu;
 
 const GUTTER = "  │ ";
+const NARROW_GUTTER = "│";
 
 /**
- * The worker's lines wrapped to `width`, with the painted gutter on every
+ * The worker's lines, cleaned and wrapped to `width`, with the painted gutter on every
  * row, wrapped ones included: no row of worker text can pass for a host line.
+ * No row is ever wider than `width`, which Pi would abort on.
  */
 export function gutterLines(said: string, width: number, paint: Paint): string[] {
-  const inner = Math.max(1, width - GUTTER.length);
-  const rows = [paint("muted", "  worker says (untrusted):")];
-  for (const line of said.split("\n")) {
+  const columns = Math.max(1, width);
+  const gutter = columns >= 12 ? GUTTER : NARROW_GUTTER;
+  const inner = Math.max(1, columns - visibleWidth(gutter));
+  const rows = wrapTextWithAnsi("  worker says (untrusted):", columns).map((row) => paint("muted", row));
+  for (const line of cleanWorkerText(said).split("\n")) {
     const wrapped = line.trim() ? wrapTextWithAnsi(line.trimStart(), inner) : [""];
-    for (const row of wrapped) rows.push(`${paint("muted", GUTTER)}${row}`);
+    // A two-column character cannot fit a one-column row: only then is a row clipped.
+    for (const row of wrapped) rows.push(`${paint("muted", gutter)}${visibleWidth(row) > inner ? truncateToWidth(row, inner, "") : row}`);
   }
-  return rows;
+  return rows.map((row) => (visibleWidth(row) > columns ? truncateToWidth(row, columns, "") : row));
+}
+
+/** The gutter block as a component, re-wrapped only when the text or the width changes. */
+export function gutterBlock(said: string, paint: Paint): { render(width: number): string[]; invalidate(): void } {
+  let cached: { width: number; rows: string[] } | undefined;
+  return {
+    render(width) {
+      if (cached?.width !== width) cached = { width, rows: gutterLines(said, width, paint) };
+      return cached.rows;
+    },
+    invalidate() {
+      cached = undefined;
+    },
+  };
 }
 
 /** A card in three parts: host lines, the worker's own lines (drawn behind a gutter), host lines. */
@@ -127,7 +154,7 @@ export function renderCard(details: unknown, content: string, expanded: boolean,
 
   const block = untrustedBlock(content);
   const said = block ?? card.summary;
-  const parts: CardParts = { head: lines.join("\n"), ...(said?.trim() ? { said: cleanWorkerText(said) } : {}) };
+  const parts: CardParts = { head: lines.join("\n"), ...(said?.trim() ? { said } : {}) };
   if (expanded) {
     // The full text around the block, as the model reads it; the block itself stays behind the gutter.
     const open = content.indexOf("<worker-report untrusted>");
@@ -136,7 +163,8 @@ export function renderCard(details: unknown, content: string, expanded: boolean,
     const after = block === undefined ? "" : content.slice(close + "</worker-report>".length);
     return {
       head: `${parts.head}\n\n${paint("dim", cleanWorkerText(before.replace(/\n+$/, "")))}`,
-      ...(parts.said ? { said: parts.said } : {}),
+      // Without a block (a failure), the full text above already holds the error.
+      ...(parts.said && block !== undefined ? { said: parts.said } : {}),
       ...(after.trim() ? { tail: paint("dim", cleanWorkerText(after.replace(/^\n+/, ""))) } : {}),
     };
   }

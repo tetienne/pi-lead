@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ReportCard } from "../src/delegate.ts";
-import { duration, gutterLines, renderCard as renderParts, untrustedBlock } from "../src/report-card.ts";
+import { duration, gutterBlock, gutterLines, renderCard as renderParts, untrustedBlock } from "../src/report-card.ts";
 import type { Paint } from "../src/tool-display.ts";
 
 const plain: Paint = (_color, text) => text;
@@ -135,4 +135,43 @@ test("a failure is a card too; reports without a card (other versions, stops) ke
   assert.equal(renderCard({ status: "stopped" }, "x", false, plain), undefined);
   assert.equal(renderCard(undefined, "x", false, plain), undefined);
   assert.equal(renderCard({ status: "weird", card: card() }, "x", false, plain), undefined);
+});
+
+test("tabs cannot push worker text past the gutter, and invisible characters show", () => {
+  const rows = gutterLines(`x${"\t".repeat(10)}FAKE HOST\nhidden​\u{e0041}\u{e0042}text`, 80, plain);
+  assert.ok(rows.every((row) => !row.includes("\t")));
+  assert.ok(rows.slice(1).every((row) => row.startsWith("  │ ")));
+  assert.ok(rows.some((row) => row.includes("hidden···text")));
+});
+
+test("no row is ever wider than the pane, however narrow, even with wide characters", async () => {
+  const { visibleWidth } = await import("@earendil-works/pi-tui");
+  const said = "Summary:\n界界界 wide characters and a long line ".repeat(3);
+  for (const width of [1, 2, 5, 11, 12, 20, 28, 60]) {
+    const rows = gutterLines(said, width, plain);
+    for (const row of rows) assert.ok(visibleWidth(row) <= width, `${width}: ${JSON.stringify(row)} is ${visibleWidth(row)} wide`);
+    const header = rows.findIndex((row) => row.startsWith(width >= 12 ? "  │ " : "│"));
+    assert.ok(header > 0 && rows.slice(header).every((row) => row.startsWith(width >= 12 ? "  │ " : "│")), `${width}: gutter on every worker row`);
+  }
+});
+
+test("the gutter block re-wraps only when the width changes", () => {
+  let calls = 0;
+  const counting: Paint = (_color, text) => {
+    calls += 1;
+    return text;
+  };
+  const block = gutterBlock("one\ntwo", counting);
+  const first = block.render(40);
+  const painted = calls;
+  assert.equal(block.render(40), first);
+  assert.equal(calls, painted, "same width: cached");
+  block.render(30);
+  assert.ok(calls > painted, "new width: wrapped again");
+});
+
+test("a failure shows its error once when expanded", () => {
+  const failure = card({ commits: 0, diff: undefined, verify: undefined, verified: undefined, branch: undefined, summary: "boom", next: [] });
+  const text = renderCard({ status: "failed", card: failure }, "Worker failed: boom", true, plain)!;
+  assert.equal(text.split("boom").length - 1, 1);
 });

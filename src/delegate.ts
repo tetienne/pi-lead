@@ -226,7 +226,8 @@ export function slugify(text: string): string {
 
 /** Worker text never closes (or opens) the report's untrusted block, for the model or the card. */
 export function unmarked(text: string): string {
-  return text.replace(/<(\/?)(worker-report)/gi, "‹$1$2");
+  // Also the look-alikes a model might read as the marker: spaces, full-width `＜`, other dashes, invisible joiners.
+  return text.replace(/[<＜]\s*(\/?)\s*(worker[\s\u2010-\u2015\u200b-\u200d\u2060-]{0,3}report)/giu, "‹$1$2");
 }
 
 export function isSafeBranchName(name: string): boolean {

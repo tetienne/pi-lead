@@ -16,7 +16,7 @@ import { createWorkerImage, hasReleasedImage, PACKAGE_VERSION, releaseImageRef }
 import { resolveRoute } from "./model-routing.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
-import { gutterLines, renderCard } from "./report-card.ts";
+import { gutterBlock, renderCard } from "./report-card.ts";
 import { registerReportGuard, WORKER_REPORT_TYPE } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
@@ -277,7 +277,7 @@ export default function lead(pi: ExtensionAPI) {
     const box = new Box(outputPad, 1, (line) => theme.bg("customMessageBg", line));
     box.addChild(new Text(card.head, 0, 0));
     const said = card.said;
-    if (said !== undefined) box.addChild({ render: (width: number) => gutterLines(said, width, paint(theme)), invalidate: () => undefined });
+    if (said !== undefined) box.addChild(gutterBlock(said, paint(theme)));
     if (card.tail) box.addChild(new Text(card.tail, 0, 0));
     return box;
   });
