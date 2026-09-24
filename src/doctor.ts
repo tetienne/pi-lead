@@ -20,6 +20,8 @@ export type SetupFacts = {
   verify?: string;
   /** A custom image selector from the config, or whether the released image is in Gondolin's store. */
   image: { custom: string } | { released: string; present: boolean };
+  /** Whether `docker version` succeeds, checked only when sandbox.services is configured. */
+  docker?: { reachable: boolean };
 };
 
 /** One line per problem that stops workers or degrades them, for a warning at session start. */
@@ -60,6 +62,7 @@ export function doctorReport(facts: SetupFacts): string {
     `  jev      ${jev}`,
     `  image    ${image}`,
     `  verify   ${verify}`,
+    ...(facts.docker ? [`  docker   ${facts.docker.reachable ? "✓ reachable" : "! not reachable: sandbox.services needs Docker running"}`] : []),
     `  workers  up to ${facts.maxWorkers} at once`,
     ...facts.tiers.map((entry, index) => `  ${index === 0 ? "tiers   " : "        "} ${routeLine(entry)}`),
   ].join("\n");
