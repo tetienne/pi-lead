@@ -47,7 +47,9 @@ you ─► Lead (Pi, your tab)
   any Pi provider or subscription works. A worker is a Pi like the Lead: same
   skills, prompts and `AGENTS.md`, plus the repository's own skills when you
   trust the project, but no host-side extensions except Herdr's Pi
-  integration (working/idle badges). When an implement, prototype or debug
+  integration (working/idle badges). It can search the web with `web_search`
+  through your ChatGPT subscription (see
+  [Web access for workers](#web-access-for-workers)). When an implement, prototype or debug
   worker finishes `done` with no recorded test run, or a failing last one,
   `finish` sends it back once to run the tests or report `partial`; the next
   `finish` goes through (`"steerUnverifiedDone": false` disables this).
@@ -135,6 +137,75 @@ npm run sandbox:smoke              # boots a VM and checks the isolation claims
 
 `allowedHosts` are trusted for downloads only (GET/HEAD and git fetch); any other request, including uploads to an allowlisted host, is
 judged by Jev per path, and when Jev is unsure the worker tab asks you.
+
+### Web access for workers
+
+Workers load no host-side extensions, so web tools installed in your own Pi
+(pi-web-access, context-mode, an MCP server…) do not reach them. Two ways in
+stay within the sandbox policy.
+
+**`web_search` (built in).** Every worker has a `web_search` tool when you are
+logged in to Pi with a ChatGPT subscription (`/login` → OpenAI Codex). It sends
+one request with OpenAI's hosted web search through Pi's own Codex transport:
+the search runs at OpenAI, nothing is fetched from your machine or the VM, and
+the token never reaches the guest. It uses the worker's model when that is an
+`openai-codex` model, otherwise any `openai-codex` model you are logged in to;
+it never falls back to another provider (an OpenAI API key, OpenCode Go, a
+gateway), and a Codex provider pointed at a host other than `chatgpt.com` is
+refused. Without a Codex login the tool is hidden. The answer comes back
+wrapped in `<web-search-results untrusted>` with its source URLs, and each
+search counts against your ChatGPT usage. Queries do not go through the VM's
+egress policy: OpenAI already sees the worker's context, but the pages its
+search visits are chosen by the model, so a query written from untrusted code
+can carry text to a third-party site.
+
+**Context7 (up-to-date library docs).** [Context7](https://context7.com)'s API
+is plain HTTPS GET, so allowlisting it lets workers query it without asking
+Jev or you. `allowedHosts` replaces the default list, so keep the defaults:
+
+```json
+{
+  "sandbox": {
+    "allowedHosts": [
+      "registry.npmjs.org", "pypi.org", "files.pythonhosted.org",
+      "github.com", "codeload.github.com", "objects.githubusercontent.com",
+      "context7.com"
+    ]
+  }
+}
+```
+
+Then tell workers about it in the consuming project's `AGENTS.md` (workers
+read the same `AGENTS.md` as the Lead):
+
+```markdown
+## Library documentation
+
+Before using a third-party API, check its current docs with Context7:
+
+    # find the library ID
+    CTX7_TELEMETRY_DISABLED=1 npx -y ctx7 library nextjs "middleware"
+    # fetch the docs for a topic
+    CTX7_TELEMETRY_DISABLED=1 npx -y ctx7 docs /vercel/next.js "middleware authentication"
+
+Without Node, the same with curl (JSON):
+
+    curl -s "https://context7.com/api/v2/libs/search?libraryName=prisma&query=relations"
+    curl -s "https://context7.com/api/v2/context?libraryId=/prisma/prisma&query=one-to-many%20relations"
+```
+
+`CTX7_TELEMETRY_DISABLED` stops the CLI's usage event, a POST that Jev would
+otherwise have to judge. Queries are anonymous and rate-limited; keep your
+Context7 API key out of the VM.
+
+Then ask the Lead in plain language:
+
+- "Research how Prisma 7 handles one-to-many relations and write it up" → a
+  `research` worker reads the docs through Context7 and cites them.
+- "Add rate limiting to the API with the current Hono middleware" → the
+  `implement` worker checks Hono's docs before writing code.
+- "Find out why `pnpm install` fails with ERR_PNPM_BAD_PM_VERSION since
+  yesterday" → a `debug` worker uses `web_search` for recent reports.
 
 `stuckDetection` watches a worker's shell commands: when the same command fails
 three times in a row, or its last six commands all fail, Jev is asked whether

@@ -14,6 +14,7 @@ import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount 
 import { createEgressPolicy } from "./egress.ts";
 import { isTestCommand, registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
 import { createStuckDetector } from "./stuck.ts";
+import { registerWebSearch } from "./web-search.ts";
 
 /**
  * Why a `done` finish is not backed by a passing test run, or undefined when
@@ -130,6 +131,8 @@ export default function worker(pi: ExtensionAPI) {
     if (isTestCommand(command)) lastTest = { command: command.slice(0, 500), exitCode };
     if (task && task.stuckDetection !== false) void stuck.record({ command, exitCode, output: outputTail }).catch(() => undefined);
   });
+
+  registerWebSearch(pi);
 
   /**
    * Commit anything left in the tree, inside the guest, so the host only ever
