@@ -47,10 +47,9 @@ you ─► Lead (Pi, your tab)
   any Pi provider or subscription works. A worker is a Pi like the Lead: same
   skills, prompts and `AGENTS.md`, plus the repository's own skills when you
   trust the project, but no host-side extensions except Herdr's Pi
-  integration (working/idle badges). When an implement, prototype or debug
-  worker finishes `done` with no recorded test run, or a failing last one,
-  `finish` sends it back once to run the tests or report `partial`; the next
-  `finish` goes through (`"steerUnverifiedDone": false` disables this).
+  integration (working/idle badges). When the project names a `verify`
+  command, PI Lead runs it itself when code work finishes (see
+  [Verify](#verify)).
 - **Toolchains** come from the project's mise config: the first worker runs
   `mise install` in a sandbox into a per-project cache, later workers mount it
   read-only and start instantly. (Your Mac's own mise cache holds macOS
@@ -107,7 +106,7 @@ pi install -l git:github.com/tetienne/pi-lead@v0.5.0
   "leadGuard": "confirm",
   "waitingTimeoutMinutes": 120,
   "stuckDetection": true,
-  "steerUnverifiedDone": true
+  "verifyTimeoutMinutes": 15
 }
 ```
 
@@ -141,6 +140,30 @@ three times in a row, or its last six commands all fail, Jev is asked whether
 it is repeating a failed approach; if so the worker is told to step back, and
 the second time to finish as `blocked` (with a warning in its tab). It is never
 stopped automatically. Without Jev, only the same-command case counts.
+
+### Verify
+
+A trusted project names the command that proves its work in
+`.pi/pi-lead.json` (only there: the global config and untrusted projects
+cannot set it):
+
+```json
+{ "verify": "npm run typecheck && npm test" }
+```
+
+When an implement, prototype or debug worker calls `finish` with `done` or
+`partial`, PI Lead's worker extension (host-side code, not the model) commits
+what is left, then runs `verify` in the worker's VM at `/workspace`, with the
+bash tool's shell and environment, for at most `verifyTimeoutMinutes`. A
+non-zero exit (or a timeout) makes the result at most `partial`, whatever the
+worker or Jev says. The report states the command and exit code; the output's
+tail sits in the untrusted worker block and goes to Jev's verdict. Without
+`verify`, the report says the work is unverified.
+
+The worker controls the repository, so it can change what `verify` runs (a
+`package.json` script, a test file): `verify` catches honest mistakes, and the
+sensitive-path warning on `package.json`, CI and similar files flags the
+dishonest ones. Review both before merging.
 
 ### Seeing Jev
 

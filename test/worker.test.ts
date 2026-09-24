@@ -5,21 +5,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
-import worker, { unverifiedDone } from "../src/worker/extension.ts";
-import { isTestCommand, OUTPUT_TAIL, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
-
-test("test-like commands are recognised by a heuristic", () => {
-  for (const command of ["npm test", "npm run check", "pnpm typecheck", "npx vitest run", "cd api && pytest -q", "cargo test -p core", "go test ./...", "mix test", "bundle exec rspec", "node --test test/*.test.ts", "python -m unittest"]) {
-    assert.ok(isTestCommand(command), command);
-  }
-  for (const command of ["FORCE_COLOR=0 npx vitest run", "./gradlew test", "git add -A && npm test", "node --experimental-strip-types --test", "bundle exec rspec spec/a_spec.rb"]) {
-    assert.ok(isTestCommand(command), command);
-  }
-  // Named as an argument or in quotes, a runner is not a test run: a green `git commit` must not pass for one.
-  for (const command of ["git checkout -b x", "test -f a && echo y", "grep -rn test src", "ls tests", "npm install", "npm install -D vitest", "grep -rn jest package.json", 'git commit -m "test: cover export with vitest"', "git commit -m 'make test pass'", 'echo "run npm test"']) {
-    assert.ok(!isTestCommand(command), command);
-  }
-});
+import worker from "../src/worker/extension.ts";
+import { OUTPUT_TAIL, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
+import { runVerification, shouldVerify, VERIFY_OUTPUT_TAIL } from "../src/worker/verify.ts";
 
 test("the host-side bash wrapper reports each command's exit code, -1 when it did not complete", async () => {
   const vm: any = {
@@ -69,12 +57,22 @@ test("the bash wrapper hands the listener a clipped tail of the output", async (
   assert.ok(tails[0]!.endsWith("\nError: the end"));
 });
 
-test("a worker result may carry the last test run", () => {
+test("a worker result may carry a verification, which must be well formed", () => {
   const base = { version: 1, id: "t", seq: 1, status: "done", summary: "s" };
-  assert.equal(parseWorkerResult(base, "t").lastTest, undefined);
-  assert.deepEqual(parseWorkerResult({ ...base, lastTest: { command: "npm test", exitCode: 0 } }, "t").lastTest, { command: "npm test", exitCode: 0 });
-  assert.throws(() => parseWorkerResult({ ...base, lastTest: { command: "npm test", exitCode: "0" } }, "t"), /malformed/);
-  assert.throws(() => parseWorkerResult({ ...base, lastTest: "npm test" }, "t"), /malformed/);
+  const verification = { command: "npm test", exitCode: 1, outputTail: "1 failing", ms: 1_200 };
+  assert.equal(parseWorkerResult(base, "t").verification, undefined);
+  assert.deepEqual(parseWorkerResult({ ...base, verification }, "t").verification, verification);
+  for (const bad of [
+    "npm test",
+    { ...verification, exitCode: "1" },
+    { ...verification, exitCode: 1.5 },
+    { ...verification, outputTail: undefined },
+    { ...verification, command: 1 },
+    { ...verification, ms: -1 },
+    { ...verification, ms: Number.NaN },
+  ]) {
+    assert.throws(() => parseWorkerResult({ ...base, verification: bad }, "t"), /malformed/, JSON.stringify(bad));
+  }
 });
 
 test("the worker replaces every file/shell tool with a sandboxed one and adds finish", async () => {
@@ -144,61 +142,59 @@ test("a run that ends on a provider error reports it to the Lead instead of idli
   assert.equal(second.modelError, "401 unauthorized");
 });
 
-test("a done without a passing test run is unverified, only for work that writes code", () => {
-  const implement = { kind: "implement" as const };
-  assert.match(unverifiedDone(implement, "done", undefined)!, /you report done but no test run was recorded\. Run the project's tests/);
-  assert.match(unverifiedDone({ kind: "debug" }, "done", { command: "npm test", exitCode: 1 })!, /the last test run `npm test` exited 1/);
-  assert.match(unverifiedDone({ kind: "prototype" }, "done", { command: "npm test", exitCode: -1 })!, /`npm test` did not complete/);
-  assert.equal(unverifiedDone(implement, "done", { command: "npm test", exitCode: 0 }), undefined);
-  assert.equal(unverifiedDone(implement, "partial", undefined), undefined);
-  for (const kind of ["review", "research"] as const) assert.equal(unverifiedDone({ kind }, "done", undefined), undefined, kind);
-  assert.equal(unverifiedDone({ ...implement, steerUnverifiedDone: false }, "done", undefined), undefined);
+test("finish runs the verify command only for code work that claims progress, when the project names one", () => {
+  const verify = "npm test";
+  for (const kind of ["implement", "prototype", "debug"] as const) {
+    assert.equal(shouldVerify({ kind, verify }, "done"), true, kind);
+    assert.equal(shouldVerify({ kind, verify }, "partial"), true, kind);
+  }
+  for (const status of ["blocked", "needs_human"] as const) assert.equal(shouldVerify({ kind: "implement", verify }, status), false, status);
+  for (const kind of ["review", "research"] as const) assert.equal(shouldVerify({ kind, verify }, "done"), false, kind);
+  assert.equal(shouldVerify({ kind: "implement" }, "done"), false, "no verify configured");
+  assert.equal(shouldVerify({ kind: "implement", verify: "  " }, "done"), false);
 });
 
-test("finish sends an unverified done back once per cycle, without reporting it", async () => {
-  const run = async (task: Record<string, unknown>) => {
-    const tools = new Map<string, any>();
-    const handlers = new Map<string, (event: any, ctx?: any) => any>();
-    const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
-    const taskPath = join(dir, "task.json");
-    const resultPath = join(dir, "result.json");
-    // No sandbox config: past the check, finish fails on starting the VM.
-    await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", branch: "pi-lead/x-1", title: "x", resultPath, ...task }));
-    worker({
-      registerFlag: () => undefined,
-      getFlag: () => taskPath,
-      registerTool: (tool: any) => tools.set(tool.name, tool),
-      on: (event: string, handler: any) => handlers.set(event, handler),
-    } as any);
-    const finish = (status: string) => tools.get("finish").execute("1", { status, summary: "s" }, undefined, undefined, undefined);
-    const settle = async (errorMessage: string) => {
-      await handlers.get("agent_end")!({ type: "agent_end", messages: [{ role: "assistant", stopReason: "error", errorMessage }] });
-      await handlers.get("agent_settled")!({ type: "agent_settled" });
-    };
-    return { finish, settle, resultPath };
+test("the verify run uses the bash tool's shell and env at /workspace and keeps the exit code and an output tail", async () => {
+  const calls: Array<{ argv: string[]; options: any }> = [];
+  const vm: any = {
+    exec: (argv: string[], options: any) => {
+      calls.push({ argv, options });
+      return Object.assign(Promise.resolve({ exitCode: 3 }), {
+        output: async function* () {
+          yield { data: Buffer.from("y".repeat(3_000)) };
+          yield { data: Buffer.from("\n1 failing") };
+        },
+      });
+    },
   };
-  const passes = async (attempt: Promise<unknown>) => {
-    const outcome = await attempt.then((value: any) => value.content[0].text, (error: Error) => error.message);
-    assert.doesNotMatch(outcome, /Not finished/);
+  let clock = 1_000;
+  const result = await runVerification(vm, { command: "npm test", shellPath: "/bin/bash", env: { CI: "1" }, now: () => (clock += 500) });
+  assert.deepEqual(calls[0]!.argv, ["/bin/bash", "-lc", "npm test"]);
+  assert.equal(calls[0]!.options.cwd, "/workspace");
+  assert.deepEqual(calls[0]!.options.env, { CI: "1" });
+  assert.equal(result.command, "npm test");
+  assert.equal(result.exitCode, 3);
+  assert.equal(result.ms, 500);
+  assert.equal(result.outputTail.length, VERIFY_OUTPUT_TAIL);
+  assert.ok(result.outputTail.endsWith("\n1 failing"));
+  assert.doesNotThrow(() => parseWorkerResult({ version: 1, id: "t", seq: 1, status: "done", summary: "s", verification: result }, "t"));
+});
+
+test("a verify run that errors or times out has exit code -1 and never throws", async () => {
+  const failing: any = { exec: () => Object.assign(Promise.reject(new Error("vm gone")), { output: async function* () {} }) };
+  const failed = await runVerification(failing, { command: "npm test", shellPath: "/bin/sh", env: {} });
+  assert.equal(failed.exitCode, -1);
+  assert.match(failed.outputTail, /could not run: vm gone/);
+
+  let aborted = false;
+  const hanging: any = {
+    exec: (_argv: string[], options: { signal: AbortSignal }) => {
+      options.signal.addEventListener("abort", () => (aborted = true));
+      return Object.assign(new Promise(() => undefined), { output: async function* () { yield { data: Buffer.from("running\n") }; } });
+    },
   };
-
-  const implement = await run({ kind: "implement" });
-  const first = await implement.finish("done");
-  assert.match(first.content[0].text, /^Not finished: you report done but no test run was recorded/);
-  assert.equal(first.terminate, undefined, "the worker keeps going");
-  await assert.rejects(readFile(implement.resultPath, "utf8"), "nothing is reported to the Lead");
-  await passes(implement.finish("done"));
-
-  // A result starts a new cycle: the next unverified done is sent back again.
-  const settled = await run({ kind: "implement" });
-  await settled.finish("done");
-  await settled.settle("401 unauthorized");
-  assert.equal(parseWorkerResult(JSON.parse(await readFile(settled.resultPath, "utf8")), "t").status, "blocked");
-  assert.match((await settled.finish("done")).content[0].text, /^Not finished/);
-  await passes(settled.finish("done"));
-
-  await passes((await run({ kind: "implement" })).finish("partial"));
-  await passes((await run({ kind: "review" })).finish("done"));
-  await passes((await run({ kind: "research" })).finish("done"));
-  await passes((await run({ kind: "debug", steerUnverifiedDone: false })).finish("done"));
+  const timedOut = await runVerification(hanging, { command: "npm test", shellPath: "/bin/sh", env: {}, timeoutMinutes: 0.0005 });
+  assert.equal(timedOut.exitCode, -1);
+  assert.ok(aborted, "the command is aborted");
+  assert.match(timedOut.outputTail, /^running\n\n\[PI Lead: stopped after 0\.0005 minutes\]$/);
 });

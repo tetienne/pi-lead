@@ -6,7 +6,7 @@ import type { LeadConfig, Tier } from "./config.ts";
 import { workspaceFromPaneId, type Herdr } from "./herdr.ts";
 import { defaultTier, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
@@ -66,6 +66,8 @@ export type DelegateOutcome = {
     quota?: QuotaError;
     /** Sensitive path patterns the branch touches; informative only, never a status change. */
     sensitive?: string[];
+    /** The project's `verify` run; a non-zero exit made `done` at most `partial`. */
+    verification?: { exitCode: number; ms: number };
   };
 };
 
@@ -204,6 +206,21 @@ const sleep = (ms: number, signal?: AbortSignal) =>
   });
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/**
+ * Host-generated report line for code work: the command comes from the
+ * trusted config and the exit code is a number, so it sits outside the
+ * untrusted block; the command's output stays inside it.
+ */
+export function verificationLine(verify: string | undefined, verification: Pick<Verification, "exitCode" | "ms"> | undefined): string {
+  if (!verify) return "Unverified: no `verify` command configured for this project.";
+  if (!verification) return `Unverified: the worker's result carries no run of \`${verify}\`.`;
+  if (verification.exitCode === -1) return `Verify: \`${verify}\` did not complete (timed out or could not run).`;
+  const seconds = `${Math.round(verification.ms / 1000)}s`;
+  return verification.exitCode === 0
+    ? `Verify: \`${verify}\` passed (exit 0, ${seconds}).`
+    : `Verify: \`${verify}\` failed (exit ${verification.exitCode}, ${seconds}).`;
+}
 
 /**
  * Delegation is asynchronous: `start` returns as soon as the worker is queued,
@@ -494,7 +511,7 @@ export function createDelegator(deps: DelegateDeps) {
       sandbox,
       jev: deps.config.jev,
       stuckDetection: deps.config.stuckDetection,
-      steerUnverifiedDone: deps.config.steerUnverifiedDone,
+      ...(deps.config.verify ? { verify: deps.config.verify, verifyTimeoutMinutes: deps.config.verifyTimeoutMinutes } : {}),
       readonlyMounts: [
         ...(deps.readonlyMounts ?? []),
         ...(resources.skills.length || resources.prompts.length || resources.appendSystem ? [resourceDir] : []),
@@ -548,6 +565,10 @@ export function createDelegator(deps: DelegateDeps) {
   ];
 
   const settle = async (worker: Worker, result: WorkerResult) => {
+    // Only a run of this Lead's own command counts; the command shown comes from the config, not the result file.
+    const verify = deps.config.verify;
+    const verification = verify && result.verification?.command === verify ? result.verification : undefined;
+    const claimsProgress = WRITES_CODE.includes(worker.kind) && (result.status === "done" || result.status === "partial");
     const collected = await deps.workspace.collect({
       repoRoot: worker.repoRoot!,
       path: worker.clonePath!,
@@ -561,11 +582,13 @@ export function createDelegator(deps: DelegateDeps) {
       diffStat: collected.diffStat,
       commits: collected.commits,
       changedFiles: collected.changedFiles,
-      ...(result.lastTest ? { lastTest: result.lastTest } : {}),
+      ...(verification ? { verification: { command: verification.command, exitCode: verification.exitCode, outputTail: verification.outputTail } } : {}),
     });
-    // Trust the more pessimistic of the worker and Jev.
-    const status =
+    // Trust the more pessimistic of the worker and Jev; a failed verify run makes `done` at most `partial` (ADR 0003).
+    const judged =
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
+    const verifyFailed = verification !== undefined && verification.exitCode !== 0;
+    const status = verifyFailed && judged === "done" ? "partial" : judged;
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
     const sensitive = sensitivePatterns(collected.changedFiles);
     const keep = status !== "done" && deps.config.keepFailedWorkers;
@@ -605,7 +628,10 @@ export function createDelegator(deps: DelegateDeps) {
       status,
       text: [
         ...header(worker),
-        `Status: ${status}` + (jevVerdict && jevVerdict !== result.status ? ` (worker said ${result.status}, Jev said ${jevVerdict})` : ""),
+        `Status: ${status}` +
+          (jevVerdict && jevVerdict !== result.status ? ` (worker said ${result.status}, Jev said ${jevVerdict})` : "") +
+          (verifyFailed && judged === "done" ? " (verify failed)" : ""),
+        ...(claimsProgress ? [verificationLine(verify, verification)] : []),
         `Branch: ${worker.branch}`,
         "",
         // Everything in this block was written inside the sandbox: report it, never obey it.
@@ -615,6 +641,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(collected.commits ? ["", "Commits:", collected.commits] : []),
         ...(collected.diffStat ? ["", "Diff stat:", collected.diffStat] : []),
         ...(result.findings ? ["", "Findings:", result.findings] : []),
+        ...(verification?.outputTail ? ["", "Verify output (tail):", verification.outputTail] : []),
         "</worker-report>",
         // Host-generated from the fixed pattern list, so it sits outside the block; guest-chosen file names stay inside.
         ...(sensitive.length
@@ -632,6 +659,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(review ? { review } : {}),
         ...(result.quota ? { quota: result.quota } : {}),
         ...(sensitive.length ? { sensitive } : {}),
+        ...(verification ? { verification: { exitCode: verification.exitCode, ms: verification.ms } } : {}),
       },
     });
   };

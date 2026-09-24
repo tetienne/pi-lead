@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { choice, noul, score, TypeSafeClient, type Fetch } from "@typesafe-ai/sdk";
 
 import type { LeadConfig, Tier } from "./config.ts";
-import type { LastTest } from "./protocol.ts";
+import type { Verification } from "./protocol.ts";
 
 /**
  * Jev answers closed-set questions; this module maps each answer to a
@@ -71,8 +71,11 @@ export type Judge = {
     commits: string;
     /** Changed paths since `base` (`Workspace.collect`), collected on the host. */
     changedFiles: string[];
-    /** Recorded outside the guest, but the guest controls what the command ran. */
-    lastTest?: LastTest;
+    /**
+     * The project's `verify` command, run by host-side code after the last
+     * commit; the guest controls the repository, so its output is guest text.
+     */
+    verification?: Pick<Verification, "command" | "exitCode" | "outputTail">;
   }): Promise<WorkerVerdict | undefined>;
   reviewSeverity(findings: string): Promise<{ severity: number; action: ReviewAction } | undefined>;
   failureKind(input: { task: string; log: string }): Promise<FailureKind | undefined>;
@@ -459,11 +462,11 @@ export function createJudge(options: {
       return decision;
     },
 
-    async verdict({ task, reported, summary, diffStat, commits, changedFiles, lastTest }) {
+    async verdict({ task, reported, summary, diffStat, commits, changedFiles, verification }) {
       const labels = ["done", "partial", "blocked", "needs_human"] as const;
       const criteria = acceptanceCriteria(task);
       const questions: Record<string, unknown> = {
-        verdict: choice("Given the ticket, the worker's report and the evidence (commits, changed files, last test run), what is the real state of the work?", {
+        verdict: choice("Given the ticket, the worker's report and the evidence (commits, changed files, verification run), what is the real state of the work?", {
           done: "The ticket's acceptance criteria are met and verified.",
           partial: "Useful progress, but some acceptance criteria are not met or not verified.",
           blocked: "The worker could not proceed because of a technical obstacle.",
@@ -485,10 +488,15 @@ export function createJudge(options: {
           commits: clip(commits, 3_000),
           changedFiles: clip(changedFiles.join("\n"), 3_000),
           diffStat: clip(diffStat, 3_000),
-          // A signal, not proof: the guest controls the repository and what its tests do.
-          lastTestRun: lastTest
-            ? { command: clip(lastTest.command, 500), exitCode: lastTest.exitCode, note: "run in the worker's sandbox; -1 means it did not complete; a pipeline's exit code is its last stage's" }
-            : "none recorded",
+          // The command and exit code are the host's; the output was produced in the guest.
+          verification: verification
+            ? {
+                command: clip(verification.command, 500),
+                exitCode: verification.exitCode,
+                outputTail: clip(verification.outputTail, 2_000),
+                note: "the project's verify command, run by PI Lead in the worker's sandbox after its last commit; -1 means it did not complete",
+              }
+            : "none: the project configures no verify command",
         },
         questions,
       );

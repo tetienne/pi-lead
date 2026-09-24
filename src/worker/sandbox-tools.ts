@@ -134,31 +134,6 @@ export type CommandListener = (command: string, exitCode: number, outputTail: st
 
 export const OUTPUT_TAIL = 1_000;
 
-/** Env assignments and wrappers that may precede a test runner in a shell segment. */
-const RUNNER_PREFIX = String.raw`^(?:\w+=\S*\s+)*(?:(?:npx|bunx|uvx|env|time|timeout\s+\S+|(?:pnpm|bundle|poetry|uv|pipenv|yarn)\s+(?:exec|run))\s+)*`;
-const TEST_SEGMENTS = [
-	String.raw`(?:\S*/)?(?:vitest|jest|pytest|mocha|rspec|phpunit|ctest|tox|nox)\b`,
-	String.raw`(?:\S*/)?(?:cargo|go|mix|dotnet|deno|bun|swift|zig|gradle|gradlew|mvn|make|just)\s+test\b`,
-	String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|spec|check|typecheck|verify)\b`,
-	String.raw`node\s+(?:--\S+\s+)*--test\b`,
-	String.raw`python3?\s+-m\s+(?:pytest|unittest)\b`,
-	String.raw`mise\s+run\s+(?:test|check)\b`,
-].map((pattern) => new RegExp(RUNNER_PREFIX + pattern));
-
-/**
- * Heuristic: does this shell command run a test suite or a project check?
- * It only picks which command's exit code is shown to Jev as evidence. A
- * runner must start a segment of the command line: named in quotes (a commit
- * message, an echo) or as an argument (`npm install -D vitest`, `grep jest`)
- * it does not count, or a later `git commit` would pass for a green run.
- */
-export function isTestCommand(command: string): boolean {
-	const unquoted = command.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, "''");
-	return unquoted
-		.split(/&&|\|\||[;&|\n()]/)
-		.some((segment) => TEST_SEGMENTS.some((pattern) => pattern.test(segment.trim())));
-}
-
 function createGondolinBashOps(
 	vm: VM,
 	localCwd: string,
