@@ -127,12 +127,19 @@ function createGondolinFindOps(vm: VM, localCwd: string): FindOperations {
 }
 
 /**
- * Called with each shell command, its exit code (-1 when it did not complete)
- * and the last `OUTPUT_TAIL` characters of its output.
+ * Called with each shell command, its exit code (-1 when it did not complete,
+ * `PIPED_EXIT_UNKNOWN` for a piped test run whose shell has no pipefail) and
+ * the last `OUTPUT_TAIL` characters of its output.
  */
 export type CommandListener = (command: string, exitCode: number, outputTail: string) => void;
 
 export const OUTPUT_TAIL = 1_000;
+
+/**
+ * Recorded instead of the exit code of a piped test run that could not get
+ * pipefail: the last stage's code (`npm test | tail` exits 0) proves nothing.
+ */
+export const PIPED_EXIT_UNKNOWN = -2;
 
 /** Env assignments and wrappers that may precede a test runner in a shell segment. */
 const RUNNER_PREFIX = String.raw`^(?:\w+=\S*\s+)*(?:(?:npx|bunx|uvx|env|time|timeout\s+\S+|(?:pnpm|bundle|poetry|uv|pipenv|yarn)\s+(?:exec|run))\s+)*`;
@@ -159,12 +166,36 @@ export function isTestCommand(command: string): boolean {
 		.some((segment) => TEST_SEGMENTS.some((pattern) => pattern.test(segment.trim())));
 }
 
+/** Does this command line hold a pipeline (`|` or `|&` outside quotes; `||` is not one)? */
+export function hasPipeline(command: string): boolean {
+	const unquoted = command.replace(/\\.|'[^']*'|"(?:\\.|[^"\\])*"/g, "''");
+	return unquoted.replace(/\|\|/g, "").includes("|");
+}
+
+/** Shells known to accept `set -o pipefail` (busybox's ash included). */
+const PIPEFAIL_SHELLS = new Set(["bash", "ash", "zsh", "ksh", "mksh", "busybox"]);
+
+/**
+ * The script the guest shell runs for `command`, and whether its exit code
+ * can be trusted as a test result. A piped test run gets `set -o pipefail`,
+ * so a failing suite fails the whole line for the model and for Jev alike;
+ * when the shell may not support it, the command runs unchanged and its exit
+ * code is not evidence. Other commands are never altered. `pipefail` says
+ * whether the shell supports it; left out, it is guessed from the shell's name.
+ */
+export function guestCommand(command: string, shellPath: string, pipefail?: boolean): { script: string; exitCodeKnown: boolean } {
+	if (!isTestCommand(command) || !hasPipeline(command)) return { script: command, exitCodeKnown: true };
+	if (pipefail ?? PIPEFAIL_SHELLS.has(path.posix.basename(shellPath))) return { script: `set -o pipefail; ${command}`, exitCodeKnown: true };
+	return { script: command, exitCodeKnown: false };
+}
+
 function createGondolinBashOps(
 	vm: VM,
 	localCwd: string,
 	shellPath: string,
 	guestEnv: Record<string, string>,
 	onCommand?: CommandListener,
+	pipefail?: boolean,
 ): BashOperations {
 	return {
 		exec: async (command, cwd, { onData, signal, timeout }) => {
@@ -185,8 +216,9 @@ function createGondolinBashOps(
 
 			let tail = "";
 			const decoder = new TextDecoder();
+			const { script, exitCodeKnown } = guestCommand(command, shellPath, pipefail);
 			try {
-				const proc = vm.exec([shellPath, "-lc", command], {
+				const proc = vm.exec([shellPath, "-lc", script], {
 					cwd: guestCwd,
 					env: guestEnv,
 					signal: controller.signal,
@@ -198,7 +230,7 @@ function createGondolinBashOps(
 					if (onCommand) tail = (tail + decoder.decode(chunk.data, { stream: true })).slice(-OUTPUT_TAIL);
 				}
 				const result = await proc;
-				onCommand?.(command, result.exitCode, tail);
+				onCommand?.(command, exitCodeKnown ? result.exitCode : PIPED_EXIT_UNKNOWN, tail);
 				return { exitCode: result.exitCode };
 			} catch (error) {
 				onCommand?.(command, -1, tail);
@@ -213,8 +245,11 @@ function createGondolinBashOps(
 	};
 }
 
-/** A running sandbox; `root` is the host directory mounted at /workspace. */
-export type SandboxHandle = { vm: VM; shellPath: string; env: Record<string, string>; root: string };
+/**
+ * A running sandbox; `root` is the host directory mounted at /workspace.
+ * `pipefail`: whether `shellPath` accepts `set -o pipefail` (guessed from its name when left out).
+ */
+export type SandboxHandle = { vm: VM; shellPath: string; env: Record<string, string>; root: string; pipefail?: boolean };
 
 /**
  * Re-register Pi's file and shell tools so every model-driven action runs in
@@ -263,8 +298,8 @@ export function registerSandboxTools(
   pi.registerTool({
     ...templates.bash,
     async execute(id, params, signal, onUpdate, ctx) {
-      const { vm, shellPath, env, root } = await ensureVm(ctx);
-      return createBashTool(GUEST_WORKSPACE, { operations: createGondolinBashOps(vm, root, shellPath, env, onCommand) }).execute(id, params, signal, onUpdate);
+      const { vm, shellPath, env, root, pipefail } = await ensureVm(ctx);
+      return createBashTool(GUEST_WORKSPACE, { operations: createGondolinBashOps(vm, root, shellPath, env, onCommand, pipefail) }).execute(id, params, signal, onUpdate);
     },
   });
   pi.registerTool({
@@ -290,7 +325,7 @@ export function registerSandboxTools(
   });
 
   pi.on("user_bash", async (_event, ctx) => {
-    const { vm, shellPath, env, root } = await ensureVm(ctx);
-    return { operations: createGondolinBashOps(vm, root, shellPath, env, onCommand) };
+    const { vm, shellPath, env, root, pipefail } = await ensureVm(ctx);
+    return { operations: createGondolinBashOps(vm, root, shellPath, env, onCommand, pipefail) };
   });
 }

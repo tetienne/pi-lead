@@ -12,7 +12,7 @@ import { quotaError } from "../quota.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, WRITES_CODE, type LastTest, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createSandboxVm, GUEST_MISE_DIR, GUEST_WORKSPACE, guestEnv, type Mount } from "../sandbox.ts";
 import { createEgressPolicy } from "./egress.ts";
-import { isTestCommand, registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
+import { isTestCommand, PIPED_EXIT_UNKNOWN, registerSandboxTools, type SandboxHandle } from "./sandbox-tools.ts";
 import { createStuckDetector } from "./stuck.ts";
 
 /**
@@ -23,7 +23,7 @@ export function unverifiedDone(task: Pick<WorkerTask, "kind" | "steerUnverifiedD
   if (status !== "done" || task.steerUnverifiedDone === false || !WRITES_CODE.includes(task.kind)) return undefined;
   if (lastTest && lastTest.exitCode === 0) return undefined;
   const why = lastTest
-    ? `the last test run \`${lastTest.command}\` ${lastTest.exitCode === -1 ? "did not complete" : `exited ${lastTest.exitCode}`}`
+    ? `the last test run \`${lastTest.command}\` ${lastTest.exitCode === -1 ? "did not complete" : lastTest.exitCode === PIPED_EXIT_UNKNOWN ? "was piped, so its exit code is unknown (run it without the pipe)" : `exited ${lastTest.exitCode}`}`
     : "no test run was recorded";
   return `Not finished: you report done but ${why}. Run the project's tests (or the command that verifies the acceptance criteria) and finish again, or finish with status partial and say what is unverified.`;
 }
@@ -98,14 +98,15 @@ export default function worker(pi: ExtensionAPI) {
     for (const dir of current.readonlyMounts ?? []) mounts[dir] = { host: dir, readonly: true };
     const vm = await createSandboxVm({ label: `pi-lead ${current.title}`, sandbox: current.sandbox, mounts, allowRequest: allow });
     const env = guestEnv(current.toolchainCache !== undefined);
-    const probe = await vm.exec(["/bin/sh", "-lc", "command -v bash || true; command -v git || true"], { env });
-    const [bash, gitPath] = probe.stdout.split("\n").map((line) => line.trim());
+    // One line each, empty when absent; the third: does /bin/sh take `set -o pipefail` (busybox ash does, dash does not)?
+    const probe = await vm.exec(["/bin/sh", "-lc", 'echo "$(command -v bash)"; echo "$(command -v git)"; if (set -o pipefail) 2>/dev/null; then echo pipefail; fi'], { env });
+    const [bash, gitPath, shPipefail] = probe.stdout.split("\n").map((line) => line.trim());
     if (!gitPath) {
       await vm.close();
       throw new Error("the Gondolin image has no git; use PI Lead's default image or add git to yours");
     }
     ctx?.ui.setStatus("pi-lead", `Gondolin: ${vm.id.slice(0, 8)} · ${current.branch}`);
-    return { vm, shellPath: bash || "/bin/sh", env, root: current.clonePath };
+    return { vm, shellPath: bash || "/bin/sh", env, root: current.clonePath, pipefail: Boolean(bash) || shPipefail === "pipefail" };
   };
 
   const ensureVm = (ctx?: ExtensionContext) => {

@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
 import worker, { unverifiedDone } from "../src/worker/extension.ts";
-import { isTestCommand, OUTPUT_TAIL, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
+import { guestCommand, hasPipeline, isTestCommand, OUTPUT_TAIL, PIPED_EXIT_UNKNOWN, registerSandboxTools } from "../src/worker/sandbox-tools.ts";
 
 test("test-like commands are recognised by a heuristic", () => {
   for (const command of ["npm test", "npm run check", "pnpm typecheck", "npx vitest run", "cd api && pytest -q", "cargo test -p core", "go test ./...", "mix test", "bundle exec rspec", "node --test test/*.test.ts", "python -m unittest"]) {
@@ -67,6 +67,51 @@ test("the bash wrapper hands the listener a clipped tail of the output", async (
   await assert.rejects(tools.get("bash").execute("1", { command: "make" }, undefined, undefined, {}));
   assert.equal(tails[0]!.length, OUTPUT_TAIL);
   assert.ok(tails[0]!.endsWith("\nError: the end"));
+});
+
+test("a pipeline is a `|` outside quotes, not a `||`", () => {
+  for (const command of ["npm test | tail -50", "npm test 2>&1|tail", "npm test |& tee log", "cd a && npm test | tail || true"]) assert.ok(hasPipeline(command), command);
+  for (const command of ["npm test", "npm test || true", "npm test -- -t 'a|b'", 'npm test -- -t "a|b"', "npm test -- -t a\\|b"]) assert.ok(!hasPipeline(command), command);
+});
+
+test("a piped test run gets pipefail in the guest; other commands run unchanged", () => {
+  assert.deepEqual(guestCommand("npm test 2>&1 | tail -50", "/bin/bash"), { script: "set -o pipefail; npm test 2>&1 | tail -50", exitCodeKnown: true });
+  assert.deepEqual(guestCommand("npm test | tail", "/bin/ash"), { script: "set -o pipefail; npm test | tail", exitCodeKnown: true });
+  for (const command of ["npm test", "npm test || true", "git log | head", 'npm test -- -t "a|b"']) {
+    assert.deepEqual(guestCommand(command, "/bin/bash"), { script: command, exitCodeKnown: true }, command);
+  }
+  // A shell that may lack pipefail: unchanged, but the exit code is no evidence.
+  assert.deepEqual(guestCommand("npm test | tail", "/bin/sh"), { script: "npm test | tail", exitCodeKnown: false });
+  assert.deepEqual(guestCommand("npm test | tail", "/bin/bash", false), { script: "npm test | tail", exitCodeKnown: false });
+  assert.deepEqual(guestCommand("npm test | tail", "/bin/sh", true), { script: "set -o pipefail; npm test | tail", exitCodeKnown: true });
+  assert.deepEqual(guestCommand("git log | head", "/bin/sh"), { script: "git log | head", exitCodeKnown: true });
+});
+
+test("the bash wrapper runs a piped test with pipefail, or records its exit code as unknown", async () => {
+  const argvs: string[][] = [];
+  const vm: any = {
+    exec: (argv: string[]) => {
+      argvs.push(argv);
+      return Object.assign(Promise.resolve({ exitCode: 0 }), { output: async function* () { yield { data: Buffer.from("ok\n") }; } });
+    },
+  };
+  const seen: Array<[string, number]> = [];
+  const run = async (shellPath: string, pipefail: boolean | undefined, command: string) => {
+    const tools = new Map<string, any>();
+    registerSandboxTools(
+      { registerTool: (tool: any) => tools.set(tool.name, tool), on: () => undefined } as any,
+      "/host/clone",
+      async () => ({ vm, shellPath, env: {}, root: "/host/clone", pipefail }),
+      (command, exitCode) => void seen.push([command, exitCode]),
+    );
+    await tools.get("bash").execute("1", { command }, undefined, undefined, {});
+  };
+  await run("/bin/bash", undefined, "npm test 2>&1 | tail -50");
+  await run("/bin/sh", false, "npm test 2>&1 | tail -50");
+  await run("/bin/sh", false, "ls | wc -l");
+  assert.deepEqual(argvs.map((argv) => argv[2]), ["set -o pipefail; npm test 2>&1 | tail -50", "npm test 2>&1 | tail -50", "ls | wc -l"]);
+  assert.deepEqual(seen, [["npm test 2>&1 | tail -50", 0], ["npm test 2>&1 | tail -50", PIPED_EXIT_UNKNOWN], ["ls | wc -l", 0]]);
+  assert.match(unverifiedDone({ kind: "implement" }, "done", { command: "npm test | tail", exitCode: PIPED_EXIT_UNKNOWN })!, /`npm test \| tail` was piped, so its exit code is unknown/);
 });
 
 test("a worker result may carry the last test run", () => {
