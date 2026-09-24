@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SlashCommandInfo, type Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { loadConfig, type LeadConfig } from "./config.ts";
@@ -14,7 +14,8 @@ import { createHerdrCli } from "./herdr.ts";
 import { createWorkerImage } from "./image.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
-import { registerReportGuard } from "./report-guard.ts";
+import { renderCard } from "./report-card.ts";
+import { registerReportGuard, WORKER_REPORT_TYPE } from "./report-guard.ts";
 import { createToolchains } from "./toolchains.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
 import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
@@ -178,7 +179,7 @@ export default function lead(pi: ExtensionAPI) {
         if (closed) return;
         status();
         pi.sendMessage(
-          { customType: "pi-lead-worker", content: outcome.text, display: true, details: { status: outcome.status, worker: outcome.worker } },
+          { customType: WORKER_REPORT_TYPE, content: outcome.text, display: true, details: { status: outcome.status, worker: outcome.worker, ...outcome.details } },
           { triggerTurn: true, deliverAs: "followUp" },
         );
       },
@@ -222,6 +223,15 @@ export default function lead(pi: ExtensionAPI) {
       render: (width: number) => [theme.fg("dim", renderDecision(decision, width))],
       invalidate: () => undefined,
     };
+  });
+
+  // A card for the user; the model still reads the report's full text.
+  pi.registerMessageRenderer(WORKER_REPORT_TYPE, (message, { expanded, outputPad }, theme) => {
+    const text = renderCard(message.details, resultText({ content: typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content }), expanded, paint(theme));
+    if (text === undefined) return undefined;
+    const box = new Box(outputPad, 1, (line) => theme.bg("customMessageBg", line));
+    box.addChild(new Text(text, 0, 0));
+    return box;
   });
 
   pi.registerEntryRenderer<{ text?: unknown }>(PROGRESS_ENTRY, (entry, _options, theme) => ({

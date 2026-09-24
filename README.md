@@ -63,6 +63,10 @@ you ─► Lead (Pi, your tab)
   line counts live workers (`● 2 running · 1 needs you`, in the warning colour
   while one waits on you), and events such as "started on…" or "waits for a
   free worker slot" appear as dim transcript lines that the model never sees.
+  Each result shows in the Lead as a card: verdict, time, model, commits and
+  diff, the verify line, the branch, the first lines of what the worker wrote
+  (marked untrusted), review hints and next steps. Expand it to read the full
+  report the model received.
   Tab glyphs, state labels and notifications need Herdr 0.9.1 or later
   (`tab rename`, `notification show`, `--seq`); on an older Herdr, tabs keep
   their plain title and the pane keeps its title, tokens and working label.

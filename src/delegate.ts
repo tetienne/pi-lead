@@ -71,7 +71,33 @@ export type DelegateOutcome = {
     sensitive?: string[];
     /** The project's `verify` run; a non-zero exit made `done` at most `partial`. */
     verification?: { exitCode: number; ms: number };
+    /** What the Lead's transcript shows as a card (the model reads `text`). */
+    card?: ReportCard;
   };
+};
+
+/**
+ * A result as the user sees it. Host data, except `summary`, which the
+ * worker wrote inside the sandbox: the card always shows part of it,
+ * labelled untrusted, since the report guard counts a reply as having seen it.
+ */
+export type ReportCard = {
+  kind: WorkKind;
+  title: string;
+  model: string;
+  thinking: string;
+  /** Since the task was delegated. */
+  elapsedMs: number;
+  branch?: string;
+  commits: number;
+  /** git's `N files changed, X insertions(+), Y deletions(-)`. */
+  diff?: string;
+  /** The verify line of the report (host text, the command from the config). */
+  verify?: string;
+  /** Written by the worker, or the error that ended it: untrusted. */
+  summary: string;
+  /** Host-written next steps of the report. */
+  next: string[];
 };
 
 export type StartResult =
@@ -164,6 +190,8 @@ type Worker = WorkerInfo & {
   lastSeq: number;
   attempts: number;
   createdAt?: string;
+  /** When the task was delegated, for the report card. */
+  delegatedAt: number;
   /** When the worker started waiting on a question (waitingTimeoutMinutes). */
   waitingSince?: number;
   /** The label Herdr last took for the tab, so a state change renames it only when it changes. */
@@ -630,6 +658,14 @@ export function createDelegator(deps: DelegateDeps) {
     return patterns.filter((pattern) => pattern !== PACKAGE_JSON);
   };
 
+  const cardBase = (worker: Worker) => ({
+    kind: worker.kind,
+    title: worker.title,
+    model: worker.route.model,
+    thinking: worker.route.thinking,
+    elapsedMs: Math.max(0, now() - worker.delegatedAt),
+  });
+
   const settle = async (worker: Worker, result: WorkerResult) => {
     // Only a run of this Lead's own command counts; the command shown comes from the config, not the result file.
     const verify = deps.config.verify;
@@ -727,6 +763,15 @@ export function createDelegator(deps: DelegateDeps) {
         ...(result.quota ? { quota: result.quota } : {}),
         ...(sensitive.length ? { sensitive } : {}),
         ...(verification ? { verification: { exitCode: verification.exitCode, ms: verification.ms } } : {}),
+        card: {
+          ...cardBase(worker),
+          ...(worker.branch ? { branch: worker.branch } : {}),
+          commits: collected.commits ? collected.commits.trim().split("\n").length : 0,
+          ...(collected.diffStat.trim() ? { diff: collected.diffStat.trim().split("\n").at(-1)!.trim() } : {}),
+          ...(claimsProgress ? { verify: verificationLine(verify, verification) } : {}),
+          summary: result.summary,
+          next,
+        },
       },
     });
   };
@@ -802,7 +847,15 @@ export function createDelegator(deps: DelegateDeps) {
           ? [`Kept for inspection: ${worker.taskDir} (its tab closes when this Lead session ends; the directory stays).`]
           : []),
       ].join("\n"),
-      details: failure ? { failure } : {},
+      details: {
+        ...(failure ? { failure } : {}),
+        card: {
+          ...cardBase(worker),
+          commits: 0,
+          summary: errorText(error),
+          next: keep && worker.taskDir ? [`Kept for inspection: ${worker.taskDir}`] : [],
+        },
+      },
     });
   };
 
@@ -915,6 +968,7 @@ export function createDelegator(deps: DelegateDeps) {
         resolveDone,
         lastSeq: 0,
         attempts: 0,
+        delegatedAt: now(),
         named: false,
         renameTries: 0,
         resumed: false,

@@ -212,6 +212,12 @@ test("delegate returns at once; the result arrives later, then the worker is cle
   assert.match(outcome.text, /anthropic\/claude-sonnet-5 · thinking medium · tier standard \(default tier; Jev unavailable\)/);
   assert.deepEqual(lifecycle(log), ["open ○ Add CSV export", "close tab-1", "remove clone"]);
   assert.equal(delegator.list()[0]!.state, "done");
+  const card = outcome.details.card!;
+  assert.equal(card.title, "Add CSV export");
+  assert.equal(card.model, "anthropic/claude-sonnet-5");
+  assert.ok(card.elapsedMs >= 0);
+  assert.equal(card.summary, outcome.text.match(/Summary:\n([^\n]*)/)![1]);
+  assert.ok(card.next.some((line) => line.includes("nothing was pushed")));
 });
 
 test("a worker waiting on a question gets the relayed answer and reports again", async (t) => {
