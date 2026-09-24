@@ -108,6 +108,7 @@ test("write, edit, powershell and unknown tools are guarded; read-only tools, de
     ["ls", { path: "." }],
     ["find", { pattern: "*.ts" }],
     ["grep", { pattern: "x" }],
+    ["git_read", { args: ["diff", "--stat", "main...pi-lead/x"] }],
     ["delegate", { kind: "implement", title: "t", task: "do it" }],
     ["worker", { action: "message", id: "abc", message: "go on" }],
   ] as const) {

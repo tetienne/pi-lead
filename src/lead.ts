@@ -9,6 +9,7 @@ import { Type } from "typebox";
 
 import { loadConfigWithNotices, type LeadConfig } from "./config.ts";
 import { createDelegator, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
+import { registerGitRead } from "./git-read.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
 import { doctorReport, startupWarnings, type SetupFacts } from "./doctor.ts";
@@ -395,4 +396,6 @@ export default function lead(pi: ExtensionAPI) {
     renderResult: (result, { isPartial }, theme) =>
       new Text(isPartial ? theme.fg("dim", "…") : workerResult(result.details, resultText(result), paint(theme)), 0, 0),
   });
+
+  registerGitRead(pi);
 }

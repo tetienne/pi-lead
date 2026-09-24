@@ -7,12 +7,13 @@ export const WORKER_REPORT_TYPE = "pi-lead-worker";
 
 /**
  * Tools the Lead may run without asking even while a worker report is in the
- * conversation: they only read the host, or start / talk to sandboxed work
- * (`worker` message text goes into the VM, not to the host). Everything else —
+ * conversation: they only read the host (`git_read` validates its arguments
+ * down to read-only git), or start / talk to sandboxed work (`worker` message
+ * text goes into the VM, not to the host). Everything else —
  * bash, powershell, write, edit, and any tool another extension registers — is
  * treated as able to execute or write on the host.
  */
-export const UNGUARDED_TOOLS: ReadonlySet<string> = new Set(["read", "ls", "find", "grep", "delegate", "worker"]);
+export const UNGUARDED_TOOLS: ReadonlySet<string> = new Set(["read", "ls", "find", "grep", "git_read", "delegate", "worker"]);
 
 const PREVIEW_LIMIT = 400;
 
