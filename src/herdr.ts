@@ -62,6 +62,18 @@ function collectStrings(value: unknown, field: string, found: string[] = []): st
   return found;
 }
 
+/**
+ * Herdr rejected the command line itself: an older Herdr without that
+ * subcommand or flag (clap exits 2). A timeout, a busy socket or a missing
+ * tab is not one, and never switches a feature off.
+ */
+export function isUsageError(error: unknown): boolean {
+  const failure = error as { code?: unknown; stderr?: unknown; message?: unknown } | undefined;
+  if (failure?.code === 2) return true;
+  const text = `${typeof failure?.stderr === "string" ? failure.stderr : ""}\n${typeof failure?.message === "string" ? failure.message : ""}`;
+  return /unrecognized subcommand|unexpected argument|unrecognized option|invalid value/i.test(text);
+}
+
 /** The workspace is the prefix of a pane or tab id (`<workspace>:<pane>`, `<workspace>:<tab>`). */
 export function workspaceFromPaneId(paneId: string | undefined): string | undefined {
   const separator = paneId?.indexOf(":") ?? -1;
@@ -127,6 +139,7 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
           return void (await herdr(full));
         } catch (error) {
           // A Herdr without `--seq` or these state labels rejects the whole report: keep what it knows.
+          if (!isUsageError(error)) throw error;
           try {
             await herdr([...base, "--", paneId]);
           } catch {

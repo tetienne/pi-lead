@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
-import { workspaceFromPaneId, type Herdr } from "./herdr.ts";
+import { isUsageError, workspaceFromPaneId, type Herdr } from "./herdr.ts";
 import { defaultTier, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
@@ -306,7 +306,7 @@ export function createDelegator(deps: DelegateDeps) {
   let metadataSeq = 0;
   const nextSeq = () => (metadataSeq = Math.max(metadataSeq + 1, now()));
 
-  /** Cleared after a first failed `tab rename` (e.g. an older Herdr): later tabs open without a state glyph. */
+  /** Cleared once Herdr rejects `tab rename` as unknown (an older Herdr): later tabs open without a state glyph. */
   let tabRenames = true;
   const openingLabel = (worker: Worker) => (tabRenames ? tabLabel(worker) : plainTitle(worker.title));
 
@@ -323,8 +323,9 @@ export function createDelegator(deps: DelegateDeps) {
       try {
         await deps.herdr?.renameTab(tabId, label);
         worker.tabLabel = label;
-      } catch {
-        tabRenames = false;
+      } catch (error) {
+        // Only a Herdr without `tab rename` switches glyphs off; anything else is retried on the next state change.
+        if (isUsageError(error)) tabRenames = false;
       }
     });
   };
@@ -500,6 +501,8 @@ export function createDelegator(deps: DelegateDeps) {
 
   /** Close the tab (which kills its Pi and VM), then remove the task dir unless it is kept for inspection. */
   const closeAndClean = async (worker: Worker, keepDir = false) => {
+    // A rename still in flight must not land after the close (bounded by Herdr's exec timeout).
+    await worker.renaming;
     if (worker.tabId) await deps.herdr?.closeTab(worker.tabId).catch(() => undefined);
     worker.tabId = undefined;
     worker.paneId = undefined;

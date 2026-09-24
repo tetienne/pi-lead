@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { createHerdrCli, workspaceFromPaneId } from "../src/herdr.ts";
+import { createHerdrCli, isUsageError, workspaceFromPaneId } from "../src/herdr.ts";
 
 /** A fake `herdr` on PATH that logs its argv and refuses `agent prompt` (agent not detected). */
 async function fakeHerdrBinary(options: { rejectSeq?: boolean } = {}) {
@@ -88,6 +88,15 @@ test("an older Herdr that rejects --seq or the new state labels still gets title
   } finally {
     process.env.PATH = previous;
   }
+});
+
+test("only a rejected command line counts as an older Herdr, never a timeout or a missing tab", () => {
+  assert.ok(isUsageError({ code: 2, stderr: "" }));
+  assert.ok(isUsageError(new Error("Command failed: herdr tab rename\nerror: unrecognized subcommand 'rename'")));
+  assert.ok(isUsageError({ code: 1, stderr: "error: unexpected argument '--seq' found" }));
+  assert.ok(!isUsageError({ code: 1, stderr: "tab_not_found" }));
+  assert.ok(!isUsageError(Object.assign(new Error("Command failed: herdr"), { killed: true, signal: "SIGTERM" })));
+  assert.ok(!isUsageError(undefined));
 });
 
 test("the Lead's workspace comes from its own pane id", () => {

@@ -41,15 +41,18 @@ test("a delegate result says started or queued, with the route", () => {
   const started: StartResult = { status: "started", worker: worker(), text: "Delegated…" };
   assert.equal(
     delegateResult(started, "Delegated…", false, paint),
-    "<accent>●</accent> started · standard · gpt-6-sol (high) · in a background Herdr tab",
+    "<accent>●</accent> started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab",
   );
-  assert.equal(delegateResult(started, "Delegated…", true, plain), "● started · standard · gpt-6-sol (high) · in a background Herdr tab\nDelegated…");
+  assert.equal(delegateResult(started, "Delegated…", true, plain), "● started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab\nDelegated…");
   const queued: StartResult = { status: "queued", worker: worker({ state: "queued" }), text: "q" };
-  assert.match(delegateResult(queued, "q", false, plain), /^○ queued · standard/);
+  assert.match(delegateResult(queued, "q", false, plain), /^○ queued · a1b2c3d4 · standard/);
   const notReady: StartResult = { status: "not_ready", missing: ["acceptance"], text: "Not delegated: no acceptance criteria." };
   assert.equal(delegateResult(notReady, notReady.text, false, paint), "<warning>?</warning> Not delegated: no acceptance criteria.");
   const failed: StartResult = { status: "failed", text: "PI Lead workers need Herdr." };
   assert.equal(delegateResult(failed, failed.text, false, paint), "<error>✗</error> PI Lead workers need Herdr.");
+  const noted: StartResult = { status: "started", worker: worker({ route: { model: "a/b", thinking: "high", tier: "deep", note: "a/x ran out of quota" } }), text: "" };
+  assert.match(delegateResult(noted, "", false, plain), /\n! a\/x ran out of quota$/);
+  assert.equal(delegateResult(failed, "line one\nline two", true, plain), "✗ line one\nline two");
   // A result stored by another version: its text only.
   assert.equal(delegateResult(undefined, "old text", false, plain), "old text");
 });

@@ -279,6 +279,22 @@ test("a stopped worker raises no toast, and a failed rename stops the glyphs for
   assert.ok(!log.some((line) => line.startsWith("notify")));
 });
 
+test("a transient rename failure keeps the glyphs and is retried on the next state change", async (t) => {
+  const log: Log = [];
+  const herdr = fakeHerdr(log, [{ status: "needs_human", delayMs: 30 }]);
+  let failures = 1;
+  herdr.renameTab = async (tabId, label) => {
+    log.push(`label ${tabId} ${label}`);
+    if (failures-- > 0) throw new Error("tab_busy");
+  };
+  const { delegator, nextOutcome } = await setup(t, { herdr });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "One", task: "t" }, io);
+  await pending;
+  await until(() => log.includes("label tab-1 ? One"));
+  assert.deepEqual(log.filter((line) => line.startsWith("label")), ["label tab-1 ● One", "label tab-1 ? One"]);
+});
+
 test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
     judge: { available: true, intake: async () => ({ tier: { tier: "deep", difficulty: 3.4 } }), verdict: async () => "partial" },

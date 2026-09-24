@@ -23,7 +23,10 @@ export function cleanLines(text: string, maxLines = 40): string {
 /** `openai-codex/gpt-6-sol` → `gpt-6-sol`: the provider is noise once the tier is shown. */
 const shortModel = (model: string) => model.slice(model.indexOf("/") + 1);
 
-const routeText = (route: WorkerInfo["route"]) => `${route.tier} · ${shortModel(route.model)} (${route.thinking})`;
+const routeText = (worker: WorkerInfo) =>
+  `${worker.id.slice(0, 8)} · ${worker.route.tier} · ${shortModel(worker.route.model)} (${worker.route.thinking})`;
+/** The quota or fallback note of a route, host-written but quoting model ids. */
+const routeNote = (worker: WorkerInfo, paint: Paint) => (worker.route.note ? `\n${paint("warning", `! ${safePreview(worker.route.note, 200)}`)}` : "");
 
 export function delegateCall(
   args: { kind?: unknown; title?: unknown; task?: unknown; startFrom?: unknown },
@@ -51,13 +54,13 @@ export function delegateResult(details: unknown, text: string, expanded: boolean
   if (!isStartResult(details)) return paint("dim", safePreview(text, 200));
   switch (details.status) {
     case "started":
-      return `${paint("accent", "●")} started · ${routeText(details.worker.route)}${paint("dim", " · in a background Herdr tab")}${more}`;
+      return `${paint("accent", "●")} started · ${routeText(details.worker)}${paint("dim", " · in a background Herdr tab")}${routeNote(details.worker, paint)}${more}`;
     case "queued":
-      return `${paint("dim", "○")} queued · ${routeText(details.worker.route)}${paint("dim", " · starts when a slot or an overlapping worker frees up")}${more}`;
+      return `${paint("dim", "○")} queued · ${routeText(details.worker)}${paint("dim", " · starts when a slot or an overlapping worker frees up")}${routeNote(details.worker, paint)}${more}`;
     case "not_ready":
-      return `${paint("warning", "?")} ${safePreview(text, 300)}`;
+      return `${paint("warning", "?")} ${expanded ? cleanLines(text) : safePreview(text, 300)}`;
     case "failed":
-      return `${paint("error", "✗")} ${safePreview(text, 300)}`;
+      return `${paint("error", "✗")} ${expanded ? cleanLines(text) : safePreview(text, 300)}`;
   }
 }
 
