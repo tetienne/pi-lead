@@ -528,7 +528,7 @@ export function createJudge(options: {
         outcome: kind ?? "not transient",
         applied: kind ? "jev" : "fallback",
         ...confidence(call?.answers?.kind),
-        });
+      });
       return kind;
     },
 

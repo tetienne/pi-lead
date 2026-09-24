@@ -85,7 +85,7 @@ test("a replayed entry cannot inject escape sequences or overflow the line", () 
   const hostile = decision({ outcome: "x\x1b]0;title\x07漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢漢" });
   const line = renderDecision(hostile, 40);
   assert.ok(!/[\x00-\x1f]/.test(line), "no control characters");
-  assert.ok([...line].length <= 40 && /^[\x20-\x7e◆◇▲≥≤→…·]*$/.test(line), "one column per character, within the width");
+  assert.ok([...line].length <= 40 && /^[\x20-\x7e◆◇▲→…·]*$/.test(line), "one column per character, within the width");
 });
 
 test("a line that fits the width is sanitised too", () => {

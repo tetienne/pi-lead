@@ -58,7 +58,7 @@ export function decisionLine(decision: JevDecision): string {
  * (escape sequences, wide or zero-width characters) is replaced rather than
  * trusted to fit, since Pi aborts on a line wider than the terminal.
  */
-const safe = (line: string) => line.replace(/[^\x20-\x7e◆◇▲≥≤→…·]/gu, "?");
+const safe = (line: string) => line.replace(/[^\x20-\x7e◆◇▲→…·]/gu, "?");
 
 function fit(line: string, width: number): string {
   const chars = [...safe(line)];
