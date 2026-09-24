@@ -4,8 +4,8 @@
  * install scripts, package-manager and toolchain config, direnv, editor tasks,
  * CI workflows and the project's `.pi` folder. Ordinary source files also run
  * when the user tests them; these run implicitly, on checkout, install, `cd`
- * or commit. Agent instructions (`AGENTS.md`, `CLAUDE.md`, `.claude/`) steer
- * the next agent that works in the repository, and `.gitmodules` points
+ * or commit. Agent instructions and skills (`AGENTS.md`, `CLAUDE.md`,
+ * `.agents/`, `.claude/`) steer the next agent that works in the repository, and `.gitmodules` points
  * submodules at other code. Lockfiles are left out: judging them means parsing
  * registry URLs. The list is a hint to focus a review, not a security boundary.
  *
@@ -40,12 +40,14 @@ export const SENSITIVE_PATHS: readonly string[] = [
   ".vscode/tasks.json",
   ".vscode/settings.json",
   "**/AGENTS.md",
+  "**/AGENTS.override.md",
   "**/CLAUDE.md",
+  ".agents/**",
   ".claude/**",
   ".gitmodules",
 ];
 
-/** Flagged only when its `scripts` change (see `packageScriptsChanged`): dependency bumps alone stay quiet. */
+/** Flagged only when a field that runs code changes (see `packageRunFieldsChanged`): dependency bumps alone stay quiet. */
 export const PACKAGE_JSON = "**/package.json";
 
 function patternRegExp(pattern: string): RegExp {
@@ -82,18 +84,21 @@ export function filesMatching(pattern: string, files: readonly string[]): string
   return files.filter((file) => regexps.some((regexp) => regexp.test(file)));
 }
 
+/** `package.json` fields that run code: lifecycle scripts, and the package manager Corepack downloads and runs. */
+const RUN_FIELDS = ["scripts", "packageManager"] as const;
+
 /**
- * Whether a `package.json`'s `scripts` differ between two versions (undefined:
- * the file is absent on that side). A file added or removed, a `scripts` field
- * present on one side only, or content that is not a JSON object all count as
- * changed.
+ * Whether a `package.json`'s `RUN_FIELDS` differ between two versions
+ * (undefined: the file is absent on that side). A file added or removed, a
+ * field present on one side only, or content that is not a JSON object all
+ * count as changed.
  */
-export function packageScriptsChanged(before: string | undefined, after: string | undefined): boolean {
+export function packageRunFieldsChanged(before: string | undefined, after: string | undefined): boolean {
   if (before === undefined || after === undefined) return true;
   try {
     const [a, b]: unknown[] = [JSON.parse(before), JSON.parse(after)];
     if (!isObject(a) || !isObject(b)) return true;
-    return !deepEqual(a["scripts"], b["scripts"]);
+    return RUN_FIELDS.some((field) => !deepEqual(a[field], b[field]));
   } catch {
     return true;
   }

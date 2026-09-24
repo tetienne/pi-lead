@@ -9,7 +9,7 @@ import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.t
 import { parseWorkerResult, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
-import { filesMatching, PACKAGE_JSON, packageScriptsChanged, sensitivePatterns } from "./sensitive-paths.ts";
+import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
 import type { Toolchains } from "./toolchains.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -547,13 +547,13 @@ export function createDelegator(deps: DelegateDeps) {
     ...(worker.route.note ? [`Note: ${worker.route.note}`] : []),
   ];
 
-  /** Sensitive patterns the branch touches, keeping `package.json` only when some file's `scripts` changed. */
+  /** Sensitive patterns the branch touches, keeping `package.json` only when some file's scripts or package manager changed. */
   const reviewHints = async (worker: Worker, changedFiles: string[]): Promise<string[]> => {
     const patterns = sensitivePatterns(changedFiles);
     if (!patterns.includes(PACKAGE_JSON)) return patterns;
     const read = (rev: string, path: string) => deps.workspace.fileAt({ repoRoot: worker.repoRoot!, rev, path });
     for (const path of filesMatching(PACKAGE_JSON, changedFiles)) {
-      if (packageScriptsChanged(await read(worker.base!, path), await read(worker.branch!, path))) return patterns;
+      if (packageRunFieldsChanged(await read(worker.base!, path), await read(worker.branch!, path))) return patterns;
     }
     return patterns.filter((pattern) => pattern !== PACKAGE_JSON);
   };
