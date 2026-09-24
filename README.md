@@ -137,9 +137,9 @@ npm run sandbox:smoke              # boots a VM and checks the isolation claims
 judged by Jev per path, and when Jev is unsure the worker tab asks you.
 
 `stuckDetection` watches a worker's shell commands and file changes: when the
-same command fails three times, or six commands in a row fail, with no file
-written or edited in between, the worker is told once to step back or finish as
-`blocked`. A test-first loop (edit, tests fail, edit) never counts. It is never
+same command fails three times without succeeding, or six commands in a row
+fail, with no file changed through its `write` or `edit` tools in between, the
+worker is told once per prompt to step back or finish as `blocked`. A test-first loop (edit, tests fail, edit) never counts. It is never
 stopped automatically, and Jev is not involved.
 
 ### Seeing Jev

@@ -78,6 +78,7 @@ test("a successful write or edit reports a file change; a failed one does not", 
   await assert.rejects(tools.get("edit").execute("3", { path: "a.ts", edits: [{ oldText: "missing", newText: "x" }] }, undefined, undefined, {}));
   assert.equal(changes, 2);
 });
+
 test("a worker result may carry the last test run", () => {
   const base = { version: 1, id: "t", seq: 1, status: "done", summary: "s" };
   assert.equal(parseWorkerResult(base, "t").lastTest, undefined);
