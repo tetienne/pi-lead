@@ -67,6 +67,9 @@ export type Verification = { command: string; exitCode: number; outputTail: stri
 /** Work kinds whose worker changes code, and so should run its tests. */
 export const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debug"];
 
+/** Kinds that push, open a draft PR and watch its CI once they settle `done`: not prototype, review or scout. */
+export const PUBLISHED_KINDS: readonly WorkKind[] = ["implement", "debug", "research"];
+
 export const WORKER_STATUSES = ["done", "partial", "blocked", "needs_human"] as const satisfies readonly WorkerVerdict[];
 
 export async function readJsonFile<T>(path: string): Promise<T> {
@@ -104,8 +107,11 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
 /** A scout's brief for the implementer that builds on its branch. */
 export type WorkerBrief = { allowedFiles: string[]; protectedFiles: string[]; text: string };
 
+/** Where and how a `finish`ed ticket must be pushed and its CI watched. */
+export type PublishTarget = { baseBranch: string; remoteBranch: string; title: string };
+
 /** First message of the worker session; explicit `/skill:` invocation. */
-export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief): string {
+export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief, publish?: PublishTarget): string {
   const base = ((): string => {
     switch (kind) {
       case "scout":
@@ -142,15 +148,30 @@ export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief):
         ].join("\n");
     }
   })();
-  if (!brief) return base;
+  const withBrief = !brief
+    ? base
+    : [
+        base,
+        "",
+        "## Scout brief",
+        `Allowed files (change or create only these): ${brief.allowedFiles.join(", ")}`,
+        `Protected test files (do not change; make them pass): ${brief.protectedFiles.join(", ")}`,
+        "",
+        brief.text,
+      ].join("\n");
+  if (!publish || !PUBLISHED_KINDS.includes(kind)) return withBrief;
   return [
-    base,
+    withBrief,
     "",
-    "## Scout brief",
-    `Allowed files (change or create only these): ${brief.allowedFiles.join(", ")}`,
-    `Protected test files (do not change; make them pass): ${brief.protectedFiles.join(", ")}`,
-    "",
-    brief.text,
+    "## Publishing",
+    `When the work is committed: push it with \`git push -u origin HEAD:${publish.remoteBranch}\`, open a draft PR against`,
+    `\`${publish.baseBranch}\` with \`gh pr create --draft --base ${publish.baseBranch} --head ${publish.remoteBranch} --title ${JSON.stringify(publish.title)} --body ...\``,
+    "(if a PR already exists for that branch, reuse it), then wait for CI with",
+    `\`gh pr checks ${publish.remoteBranch} --watch\`. Checks can take a few seconds to register: if it reports none yet,`,
+    "wait and retry briefly before concluding the repository runs no checks.",
+    "If a check fails, read it with `gh run view <run-id> --log-failed`, fix it, commit, push and watch again. Call",
+    "`finish` only once CI is green (or the repository runs no checks); if you cannot get it green, call `finish` with",
+    "status `partial` and say why. Put the PR URL in your summary.",
   ].join("\n");
 }
 
@@ -165,8 +186,8 @@ opens your tab.
   never switch, reset, rebase or delete them, and never touch git config.
   Never create another worktree, clone or branch, even if the project's
   instructions say to; only your own worktree is kept.
-- Commit your work on the current branch. Do not push, merge or rebase other
-  branches.
+- Commit your work on the current branch. Do not merge, rebase or push any
+  other branch; push only as your task's "Publishing" section says.
 - When you are done, or cannot continue, call \`finish\` with an honest status
   and a short summary (what changed, how it was verified, what is left). Use
   \`needs_human\` when a decision, credential or manual step is required, and

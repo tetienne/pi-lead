@@ -6,7 +6,7 @@ import type { LeadConfig, Tier } from "./config.ts";
 import { isUsageError, type Herdr } from "./herdr.ts";
 import { defaultTier, tierForDifficulty, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type WorkerBrief, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, PUBLISHED_KINDS, workerPrompt, WRITES_CODE, type Verification, type WorkerBrief, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
@@ -37,7 +37,6 @@ export type WorkerState =
   | "starting"
   | "running"
   | "waiting" // stopped on needs_human / partial / blocked, tab open, can be messaged
-  | "ci" // published, waiting on the draft PR's checks; not messageable, no attention
   | "done"
   | "failed"
   | "stopped";
@@ -72,7 +71,7 @@ export type DelegateOutcome = {
     verification?: { exitCode: number; ms: number };
     /** Changed files outside the scout's brief; changing any made `done` at most `partial`. */
     outOfScope?: string[];
-    /** The draft PR the host opened for a finished ticket. */
+    /** The worker's own draft PR for a finished ticket. */
     pr?: string;
     /** What the Lead's transcript shows as a card (the model reads `text`). */
     card?: ReportCard;
@@ -162,12 +161,6 @@ const RECORD = "tab.json";
 /** Model changes a single task may go through on quota errors. */
 const MAX_REROUTES = 3;
 
-/** `gh pr checks --watch` is killed after this long; a stuck check should not hold a slot forever. */
-const CI_TIMEOUT_MS = 30 * 60_000;
-
-/** Failed CI is relayed back to the worker this many times before the ticket is reported partial. */
-const CI_FIX_ROUNDS = 2;
-
 const RESUME_NOTE =
   "\n\nA previous PI Lead worker ran out of model quota on this task. Its work so far is committed on the current branch: review it with git log and continue from there.";
 
@@ -192,8 +185,8 @@ type Worker = WorkerInfo & {
   implementTier?: Tier;
   /** Set once a scout hands off: the implementer's scope, carried across a reroute too. */
   brief?: WorkerBrief;
-  /** Set once the first publish opens a PR: its URL and remote head branch, reused across a reroute's later publishes. */
-  pr?: { url: string; branch: string };
+  /** Set on the first launch that publishes: the remote branch to push to, reused across a reroute so it lands on the same PR. */
+  remoteBranch?: string;
   controller: AbortController;
   done: Promise<void>;
   resolveDone(): void;
@@ -227,8 +220,6 @@ type Worker = WorkerInfo & {
   /** Continues the branch of an attempt that ran out of quota. */
   resumed: boolean;
   reroutes: number;
-  /** CI fix rounds relayed to the worker (CI_FIX_ROUNDS caps it). */
-  ciRounds: number;
 };
 
 export function slugify(text: string): string {
@@ -298,23 +289,6 @@ export function verificationLine(verify: string | undefined, verification: Pick<
   return verification.exitCode === 0
     ? `Verify: \`${verify}\` passed (exit 0, ${seconds}).`
     : `Verify: \`${verify}\` failed (exit ${verification.exitCode}, ${seconds}).`;
-}
-
-/** Kinds published to a draft PR once they settle `done`: not prototype, review or scout. */
-const PUBLISHED_KINDS: readonly WorkKind[] = ["implement", "debug", "research"];
-
-/** Repo-relative paths that count as tests, for the PR body's "tests added" line. */
-const TEST_PATH = /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.[^/]+$/;
-
-/** The draft PR's body: the worker's own words, then a host-written verification section. */
-function prBody(summary: string, testsAdded: string[], verify: string | undefined, verification: Pick<Verification, "exitCode"> | undefined): string {
-  return [
-    summary,
-    "",
-    "## Verification",
-    `- Tests added: ${testsAdded.length ? testsAdded.map((path) => `\`${path}\``).join(", ") : "none"}`,
-    ...(verification ? [`- Verify: \`${verify}\` passed`] : []),
-  ].join("\n");
 }
 
 /**
@@ -632,6 +606,9 @@ export function createDelegator(deps: DelegateDeps) {
       worker.baseBranch = params.startFrom ?? (await deps.workspace.currentBranch(worker.repoRoot));
       worker.originBase = worker.base;
     }
+    // Set on the first launch of a publishing kind (never the scout); a later reroute keeps
+    // pushing onto this same remote branch instead of opening a second PR.
+    if (PUBLISHED_KINDS.includes(worker.kind)) worker.remoteBranch ??= worker.branch;
     worker.tabLabel = openingLabel(worker);
     ({ workspaceId: worker.workspaceId, paneId: worker.paneId } = await deps.herdr!.createWorktree({
       cwd: worker.repoRoot,
@@ -665,9 +642,13 @@ export function createDelegator(deps: DelegateDeps) {
     const taskPath = join(worker.taskDir, "task.json");
     await writeFile(taskPath, JSON.stringify(task, null, 2));
     const label = `lead: ${params.title}`.slice(0, 48);
+    const publish =
+      PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined
+        ? { baseBranch: worker.baseBranch, remoteBranch: worker.remoteBranch!, title: params.title }
+        : undefined;
     const argv = deps.workerCommand({
       taskPath,
-      prompt: workerPrompt(worker.kind, params.task, worker.brief) + (worker.resumed ? RESUME_NOTE : ""),
+      prompt: workerPrompt(worker.kind, params.task, worker.brief, publish) + (worker.resumed ? RESUME_NOTE : ""),
       route: worker.route,
       label,
       resources,
@@ -802,71 +783,26 @@ export function createDelegator(deps: DelegateDeps) {
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
     const sensitive = await reviewHints(worker, collected.changedFiles);
 
-    // The host publishes finished tickets; never the Lead model. A detached HEAD (no baseBranch) means no PR.
-    let published: { url?: string; error?: string } | undefined;
-    if (status === "done" && PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined) {
-      const added = (await deps.workspace.addedFiles({ repoRoot: worker.repoRoot!, branch: worker.branch!, base: worker.originBase! })).filter(
-        (path) => TEST_PATH.test(path),
-      );
-      const body = prBody(unmarked(result.summary), added, verify, verification);
-      published = await deps.workspace.publish({
-        repoRoot: worker.repoRoot!,
-        branch: worker.branch!,
-        baseBranch: worker.baseBranch,
-        title: worker.params.title,
-        body,
-        ...(worker.pr ? { remoteBranch: worker.pr.branch } : {}),
-      });
-      // First publish: remember the PR's head branch, so a later reroute pushes onto it instead of opening a second PR.
-      if (published.url && !worker.pr) worker.pr = { url: published.url, branch: worker.branch! };
-    }
-
-    // A published ticket waits for CI (Lead does not watch it itself), unless the branch runs none.
+    // The worker itself pushed, opened the PR and watched CI before calling finish; the host makes
+    // one non-watching check of it. A detached HEAD (no baseBranch) means the worker was never asked to publish.
+    let pr: Awaited<ReturnType<typeof deps.workspace.prChecks>> | undefined;
     let ci: string | undefined;
-    let ciCapped = false;
-    let ciFailed: { name: string; link: string }[] = [];
-    if (status === "done" && published?.url) {
-      const hasWorkflows = await deps.workspace.hasWorkflows({ repoRoot: worker.repoRoot!, branch: worker.branch! });
-      if (!hasWorkflows) {
-        ci = "none";
+    if (status === "done" && PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined) {
+      pr = await deps.workspace.prChecks({ repoRoot: worker.repoRoot!, branch: worker.remoteBranch! });
+      if (!pr.url) {
+        status = "partial"; // done reported, but no PR is open on that branch
+      } else if (pr.state === "pass") {
+        ci = "passed";
+      } else if (pr.state === "none") {
+        ci = "none"; // the repository runs no checks for this branch
       } else {
-        setState(worker, "ci"); // not counted by busy(): no slot held while CI runs
-        const watched = await deps.workspace.watchChecks({
-          repoRoot: worker.repoRoot!,
-          pr: published.url,
-          timeoutMs: CI_TIMEOUT_MS,
-          signal: worker.controller.signal,
-        });
-        // A stop during the wait already killed gh; report it as stopped, not as a CI outcome.
-        if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
-        if (watched.state === "fail" && worker.ciRounds < CI_FIX_ROUNDS) {
-          worker.ciRounds += 1;
-          const failedList = watched.failed.map((check) => `${check.name} (${check.link})`).join(", ");
-          // The worker held no slot during the CI wait: take one again before relaying, exactly like reroute().
-          await takeSlot(worker);
-          if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
-          await deps.herdr!.sendToAgent(
-            worker.paneId!,
-            `[PI Lead] CI failed on ${published.url}: ${failedList}. Inspect with \`gh run view <run> --log-failed\` or the link, fix on this branch, commit, then call finish again.`,
-          );
-          setState(worker, "running");
-          return; // watch()'s loop reads the worker's next finish
-        }
-        if (watched.state === "pass") {
-          ci = "passed";
-        } else if (watched.state === "none") {
-          ci = "none"; // workflows exist but none runs for this branch
-        } else {
-          status = "partial"; // fail after the fix rounds, timeout or error: cap the report
-          ciCapped = true;
-          ciFailed = watched.failed;
-          ci =
-            watched.state === "fail"
-              ? `failed (${watched.failed.length} check${watched.failed.length === 1 ? "" : "s"})`
-              : watched.state === "timeout"
-                ? "timed out"
-                : `not checked (${watched.error ?? "gh reported no checks"})`;
-        }
+        status = "partial"; // still failing, pending or unreadable: cap the report
+        ci =
+          pr.state === "fail"
+            ? `failed (${pr.failed.length} check${pr.failed.length === 1 ? "" : "s"})`
+            : pr.state === "pending"
+              ? "pending"
+              : `not checked (${pr.error ?? "gh reported no checks"})`;
       }
     }
 
@@ -887,18 +823,13 @@ export function createDelegator(deps: DelegateDeps) {
     if (status === "needs_human") next.push(keep ? "Ask the user for what the worker needs, then relay the answer." : "Ask the user for what the worker needed, then delegate a new task with the answer.");
     if (status === "partial" || status === "blocked") next.push("Tell the user what is left; continue only if they agree.");
     if (outOfScope.length > 0) next.push("Files changed outside the scout brief: review them before merging.");
-    if (ciCapped) next.push(`CI is failing on the draft PR ${published?.url}; tell the user.`);
+    if (pr && !pr.url) next.push(`The worker reported done but opened no PR on branch ${worker.remoteBranch}; tell the user.`);
+    if (pr?.url && ci !== "passed" && ci !== "none" && ci !== undefined) next.push(`CI is failing on ${pr.url}; tell the user.`);
     if (worker.kind === "scout") next.push("No implement worker started.");
     if (review?.action === "auto_fix") next.push("Review found fixable issues: delegate an implement task with these findings, starting from the reviewed branch.");
     if (review?.action === "escalate") next.push("Review found serious issues: show them to the user before doing anything else.");
     if (status === "done" && worker.kind !== "review") {
-      next.push(
-        published?.url
-          ? `Draft PR opened: ${published.url}.`
-          : published?.error
-            ? `PR not opened (${published.error}); work is on local branch ${worker.branch}.`
-            : `Work is on local branch ${worker.branch}; nothing was pushed or merged.`,
-      );
+      next.push(pr?.url ? `PR opened: ${pr.url}.` : `Work is on local branch ${worker.branch}; nothing was pushed or merged.`);
     }
     const resume = keep
       ? "relay a message to the worker to continue, or stop it"
@@ -927,7 +858,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(claimsProgress ? [verificationLine(verify, verification)] : []),
         // Host-written count only: worker-chosen file names stay inside the untrusted block below.
         ...(outOfScope.length ? [`${outOfScope.length} changed file${outOfScope.length === 1 ? "" : "s"} outside the scout brief.`] : []),
-        ...(published?.url ? [`PR: ${published.url}`] : []),
+        ...(pr?.url ? [`PR: ${pr.url}`] : []),
         `Branch: ${worker.branch}`,
         `Head: ${collected.head}`,
         `Base: ${worker.base}`,
@@ -941,7 +872,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
         ...(verification?.outputTail ? ["", "Verify output (tail):", unmarked(verification.outputTail)] : []),
         ...(outOfScope.length ? ["", "Out-of-scope files:", unmarked(outOfScope.join("\n"))] : []),
-        ...(ciFailed.length ? ["", "CI checks failed:", unmarked(ciFailed.map((check) => `${check.name} (${check.link})`).join("\n"))] : []),
+        ...(pr?.failed.length ? ["", "CI checks failed:", unmarked(pr.failed.map((check) => `${check.name} (${check.link})`).join("\n"))] : []),
         "</worker-report>",
         // Host-generated from the fixed pattern list, so it sits outside the block; worker-chosen file names stay inside.
         ...(sensitive.length
@@ -961,7 +892,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(sensitive.length ? { sensitive } : {}),
         ...(verification ? { verification: { exitCode: verification.exitCode, ms: verification.ms } } : {}),
         ...(outOfScope.length ? { outOfScope } : {}),
-        ...(published?.url ? { pr: published.url } : {}),
+        ...(pr?.url ? { pr: pr.url } : {}),
         card: {
           ...cardBase(worker),
           ...(worker.branch ? { branch: worker.branch } : {}),
@@ -1174,7 +1105,6 @@ export function createDelegator(deps: DelegateDeps) {
         renameTries: 0,
         resumed: false,
         reroutes: 0,
-        ciRounds: 0,
         ...(scouted ? { implementTier: tier } : {}),
       };
       // Workers still in the queue will take slots before this one.
@@ -1198,7 +1128,6 @@ export function createDelegator(deps: DelegateDeps) {
     async message(ref: string, text: string): Promise<string> {
       const worker = find(ref);
       if ("error" in worker) return worker.error;
-      if (worker.state === "ci") return `Worker "${worker.title}" is waiting for CI; nothing to relay.`;
       if (!worker.paneId || (worker.state !== "running" && worker.state !== "waiting")) {
         return `Worker "${worker.title}" is ${worker.state}; it cannot receive messages.`;
       }

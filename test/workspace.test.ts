@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -68,23 +68,13 @@ test("a worker's branch and commits are visible from the repo through its worktr
   await assert.rejects(readFile(join(repo, "a.txt")));
 });
 
-test("addedFiles lists only files a branch adds, not ones it modifies", async () => {
+test("currentBranch reports the checkout's branch", async () => {
   const repo = await mkdtemp(join(tmpdir(), "pi-lead-ws-added-"));
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   await writeFile(join(repo, "src.ts"), "one\n");
   git(repo, "add", ".");
   git(repo, "commit", "-qm", "init");
-  const base = await gitWorkspace.resolveBase({ repoRoot: repo });
 
   git(repo, "checkout", "-qb", "feature");
-  await writeFile(join(repo, "src.ts"), "two\n");
-  await mkdir(join(repo, "test"));
-  await writeFile(join(repo, "test", "src.test.ts"), "check");
-  git(repo, "add", ".");
-  git(repo, "commit", "-qm", "work");
-
-  const added = await gitWorkspace.addedFiles({ repoRoot: repo, branch: "feature", base });
-  assert.deepEqual(added, ["test/src.test.ts"]);
-
   assert.equal(await gitWorkspace.currentBranch(repo), "feature");
 });

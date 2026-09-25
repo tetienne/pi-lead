@@ -161,3 +161,13 @@ test("worker prompts invoke Matt skills explicitly and results are validated", (
   assert.throws(() => parseWorkerResult({ version: 1, id: "a", status: "done", summary: "s" }, "a"), "seq is required");
   assert.throws(() => parseWorkerResult({ version: 1, id: "a", seq: 1, status: "merged", summary: "s" }, "a"));
 });
+
+test("the publish/CI instruction is added for a published kind with a base branch, and only then", () => {
+  const publish = { baseBranch: "main", remoteBranch: "feature-1", title: "Add CSV export" };
+  const withPublish = workerPrompt("implement", "T", undefined, publish);
+  assert.match(withPublish, /git push -u origin HEAD:feature-1/);
+  assert.match(withPublish, /gh pr create --draft --base main --head feature-1/);
+  assert.match(withPublish, /gh pr checks feature-1 --watch/);
+  assert.doesNotMatch(workerPrompt("implement", "T"), /## Publishing/, "no publish target: detached HEAD");
+  assert.doesNotMatch(workerPrompt("review", "T", undefined, publish), /## Publishing/, "review is never published");
+});

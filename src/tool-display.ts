@@ -76,7 +76,6 @@ const STATE_COLOR: Record<WorkerInfo["state"], Color> = {
   starting: "dim",
   running: "accent",
   waiting: "warning",
-  ci: "dim",
   done: "success",
   failed: "error",
   stopped: "dim",
