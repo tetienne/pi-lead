@@ -678,12 +678,19 @@ test("a worker whose Pi exits without finish is reported as failed", async (t) =
 });
 
 test("a worker whose tab vanished before Pi ran is reported as failed", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, { replies: ["silent"], herdrOptions: { workspaces: [] } });
+  const { delegator, nextOutcome } = await setup(t, { replies: ["silent"], herdrOptions: { workspaces: ["w1"] } });
   const pending = nextOutcome();
   await delegator.start({ kind: "debug", title: "x", task: "y" }, io);
   const outcome = await pending;
   assert.equal(outcome.status, "failed");
   assert.match(outcome.text, /worker tab closed before Pi finished/);
+});
+
+test("a workspace listing without the Lead's own workspace never fails a worker", async (t) => {
+  const { delegator } = await setup(t, { replies: ["silent"], herdrOptions: { workspaces: [] } });
+  await delegator.start({ kind: "debug", title: "x", task: "y" }, io);
+  await new Promise((resolve) => setTimeout(resolve, 100)); // several heartbeats
+  assert.equal(delegator.list()[0]!.state, "running");
 });
 
 test("the launch script and the task carry stuck detection and the Herdr hint", async (t) => {

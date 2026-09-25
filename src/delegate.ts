@@ -549,7 +549,8 @@ export function createDelegator(deps: DelegateDeps) {
         // A pane that died before run.sh ran leaves no exit file and no result: catch it via Herdr's own workspace list.
         if (worker.workspaceId && deps.herdr) {
           const workspaces = await deps.herdr.listWorkspaces().catch(() => undefined);
-          if (workspaces && !workspaces.includes(worker.workspaceId)) {
+          // A listing without the Lead's own workspace is not trustworthy (as in reconcile).
+          if (workspaces?.includes(deps.herdr.workspace) && !workspaces.includes(worker.workspaceId)) {
             throw new Error("worker tab closed before Pi finished");
           }
         }
