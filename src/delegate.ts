@@ -1060,8 +1060,10 @@ export function createDelegator(deps: DelegateDeps) {
           missing: readiness.missing,
           text: [
             `Not delegated: Jev judged the ticket not ready (${readiness.missing.map((m) => reasons[m] ?? m).join("; ")}).`,
-            "Clarify with the user (grilling), then to-spec / to-tickets, and delegate the resulting ticket.",
-            "If the user confirms it is ready as is, call delegate again with confirmedReady: true.",
+            "Jev answers yes/no per criterion and gives no reason: it cannot name the gap.",
+            "Jev saw only the `task` text: if it was a summary or a reference, delegate again with the full ticket.",
+            "Otherwise check the ticket yourself against that criterion and tell the user what you found: the gap, or that you see none.",
+            "If the user confirms it is ready as is, delegate again with confirmedReady: true; otherwise clarify (grilling), then to-spec / to-tickets.",
           ].join("\n"),
         };
       }
