@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join, posix } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
 import { isUsageError, type Herdr } from "./herdr.ts";
@@ -1125,17 +1125,31 @@ export function createDelegator(deps: DelegateDeps) {
       let sent = text;
       if (allowFiles?.length) {
         if (!worker.brief) return `Worker "${worker.title}" has no scout brief to widen; it is not scoped to an allowed-files list.`;
-        const added = normalizeAllowed(allowFiles).filter((path) => !worker.brief!.allowedFiles.includes(path));
-        worker.brief.allowedFiles.push(...added);
-        worker.brief.protectedFiles = worker.brief.protectedFiles.filter((path) => !added.includes(path));
+        const valid = new Set<string>();
+        for (const raw of allowFiles) {
+          const normalized = posix.normalize(raw.trim());
+          if (!normalized || normalized === "." || normalized.startsWith("/") || normalized.split("/").includes("..") || normalized.endsWith("/")) continue;
+          valid.add(normalized);
+        }
+        if (valid.size === 0) return `No valid file path to allow for "${worker.title}": give exact repo-relative file paths.`;
+        const allowedFiles = [...new Set([...worker.brief.allowedFiles, ...valid])];
+        const protectedFiles = worker.brief.protectedFiles.filter((path) => !valid.has(path));
         if (worker.taskDir) {
           const taskPath = join(worker.taskDir, "task.json");
-          const task = await readJsonFile<WorkerTask>(taskPath);
-          task.allowedFiles = worker.brief.allowedFiles;
-          task.protectedFiles = worker.brief.protectedFiles;
-          await writeFile(taskPath, JSON.stringify(task, null, 2));
+          try {
+            const task = await readJsonFile<WorkerTask>(taskPath);
+            task.allowedFiles = allowedFiles;
+            task.protectedFiles = protectedFiles;
+            const temporary = `${taskPath}.tmp`;
+            await writeFile(temporary, JSON.stringify(task, null, 2));
+            await rename(temporary, taskPath);
+          } catch (error) {
+            return `Could not widen the scope of "${worker.title}": ${errorText(error)}`;
+          }
         }
-        if (added.length) sent = `${text}\n\n(The Lead widened your allowed files; you may now also change: ${added.join(", ")}.)`;
+        worker.brief.allowedFiles = allowedFiles;
+        worker.brief.protectedFiles = protectedFiles;
+        sent = `${text}\n\n(The Lead widened your allowed files; you may now also change: ${[...valid].join(", ")}.)`;
       }
       try {
         await deps.herdr!.sendToAgent(worker.paneId, `[PI Lead] ${sent}`);
