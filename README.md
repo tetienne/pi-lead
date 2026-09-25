@@ -20,6 +20,7 @@ you ─► Lead (Pi, your tab)
         implement / prototype / diagnosing-bugs / code-review / research
                             → delegate tool
                                  Jev: ticket ready? how hard? → model + thinking level
+                                 implement only: a scout worker first (failing tests, allowed files)
                                  → Herdr worktree workspace (no focus), worker Pi in it
                                  worker Pi: runs on the host, /skill:implement …
                                  worker calls finish
@@ -43,6 +44,24 @@ you ─► Lead (Pi, your tab)
   `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` and `.gitmodules`. It is a hint
   to focus your review, not a security guarantee: ordinary source, tests and
   lockfiles run too once you use them, and it never blocks.
+- **Implement tickets are scouted first.** A cheap scout worker reads the
+  ticket and the code, writes failing tests for the acceptance criteria, and
+  hands off an `allowedFiles` list to the implementer, which builds on the
+  scout's branch. The implementer is refused if it edits outside that list or
+  changes the scout's own tests; the host caps a `done` report to `partial`
+  when the branch still ends up touching files outside the brief.
+- **A finished ticket becomes a draft PR.** When an `implement`, `debug` or
+  `research` worker settles `done`, the host (not the Lead model) pushes its
+  branch and opens a draft PR against the branch the ticket started from,
+  with the worker's summary and a short "Verification" section (added test
+  files, and whether `verify` passed) as the body. Detached HEAD, or a push
+  or `gh` failure, leaves the work on its local branch instead; the report
+  says so, and the ticket's status never changes because of it.
+- **CI on the draft PR is watched, then relayed.** Once a PR is open, the
+  host waits on it with `gh pr checks --watch` (the Lead itself never
+  watches). A red run goes back to the same worker as a message, up to two
+  fix rounds; still red, timed out, or unreadable caps the report to
+  `partial` instead of `done`.
 - A **worker** is an interactive Pi session in its own Herdr worktree
   workspace (`herdr worktree create`), running directly on the host on its own
   branch; its
@@ -58,7 +77,8 @@ you ─► Lead (Pi, your tab)
   [Verify](#verify)).
 - **Seeing workers.** Each worker workspace's label starts with its state:
   `○` queued or starting, `●` running, `?` waiting for your answer, `~` partly
-  done, `✗` blocked or failed, `✓` done, `-` stopped (e.g. `? Add CSV export`).
+  done, `✗` blocked or failed, `✓` done, `-` stopped, `…` waiting on CI
+  (e.g. `? Add CSV export`).
   A worker that stops and needs you also raises a Herdr notification; only a
   question plays a sound. Titles are reduced to letters, digits and plain
   punctuation, and notifications never quote the worker. The Lead's status

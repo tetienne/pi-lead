@@ -33,9 +33,12 @@ const noJudge: Judge = {
 
 type Log = string[];
 type Reply =
-  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string; uncommitted?: boolean; verification?: WorkerResult["verification"] }
+  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string; uncommitted?: boolean; verification?: WorkerResult["verification"]; allowedFiles?: string[] }
   | "exit"
   | "silent";
+
+/** A scout's automatic reply, matching `fakeWorkspace`'s changed files, unless a test overrides it. */
+const AUTO_SCOUT: Reply = { status: "done", summary: "mapped the ticket", findings: "reuse src/a.ts's helper", allowedFiles: ["src/a.ts"] };
 
 function fakeWorkspace(log: Log): Workspace {
   return {
@@ -44,8 +47,17 @@ function fakeWorkspace(log: Log): Workspace {
       log.push(`resolveBase${startFrom ? ` from ${startFrom}` : ""}`);
       return "abc123";
     },
+    currentBranch: async () => "main",
     collect: async ({ branch }) => ({ commits: `def456 work on ${branch}`, diffStat: " src/a.ts | 3 ++-", changedFiles: ["src/a.ts"], head: "def456" }),
+    addedFiles: async () => [],
     fileAt: async () => undefined,
+    publish: async ({ branch, baseBranch }) => {
+      log.push(`publish ${branch} into ${baseBranch}`);
+      return { url: `https://example.test/pr/${branch}` };
+    },
+    // Most tests don't care about CI: no workflows, so the report goes out at once.
+    hasWorkflows: async () => false,
+    watchChecks: async () => ({ state: "none", failed: [] }),
     remove: async () => void log.push("remove dir"),
   };
 }
@@ -62,7 +74,7 @@ function fakeHerdr(
   log: Log,
   replies: Reply[],
   seen: Seen = {},
-  options: { workspaces?: string[]; renameFailures?: number; closeFailures?: number; sharedTurns?: boolean } = {},
+  options: { workspaces?: string[]; renameFailures?: number; closeFailures?: number; sharedTurns?: boolean; scoutReply?: Reply } = {},
 ): Herdr {
   let renameFailures = options.renameFailures ?? 0;
   let closeFailures = options.closeFailures ?? 0;
@@ -70,17 +82,25 @@ function fakeHerdr(
   let sharedTurn = 0;
   let tabs = 0;
   const workers = new Map<string, { task: WorkerTask; exitPath: string; seq: number; turn: number }>();
+  const write = (worker: { task: WorkerTask; seq: number }, next: Exclude<Reply, "exit" | "silent">) =>
+    writeFile(
+      worker.task.resultPath,
+      JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}), ...(next.quota ? { quota: next.quota } : {}), ...(next.modelError ? { modelError: next.modelError } : {}), ...(next.uncommitted ? { uncommitted: true } : {}), ...(next.verification ? { verification: next.verification } : {}), ...(next.allowedFiles ? { allowedFiles: next.allowedFiles } : {}) }),
+    );
   const reply = (paneId: string) => {
     const worker = workers.get(paneId)!;
+    // A scout's reply is fixed and never advances the `replies` list: only the implementer it hands off to draws from it.
+    if (worker.task.kind === "scout") {
+      const scout = options.scoutReply ?? AUTO_SCOUT;
+      if (scout === "silent") return;
+      if (scout === "exit") return void setTimeout(() => void writeFile(worker.exitPath, "1\n"), 5);
+      setTimeout(() => void write(worker, scout), 5);
+      return;
+    }
     const next = replies[Math.min(options.sharedTurns ? sharedTurn++ : worker.turn++, replies.length - 1)]!;
     if (next === "silent") return;
     if (next === "exit") return void setTimeout(() => void writeFile(worker.exitPath, "1\n"), 5);
-    setTimeout(() => {
-      void writeFile(
-        worker.task.resultPath,
-        JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}), ...(next.quota ? { quota: next.quota } : {}), ...(next.modelError ? { modelError: next.modelError } : {}), ...(next.uncommitted ? { uncommitted: true } : {}), ...(next.verification ? { verification: next.verification } : {}) }),
-      );
-    }, next.delayMs ?? 5);
+    setTimeout(() => void write(worker, next), next.delayMs ?? 5);
   };
   return {
     workspace: "w1",
@@ -214,7 +234,8 @@ test("helpers: slug, branch validation and shell quoting", () => {
 test("delegate returns at once; the result arrives later, then the worker is cleaned up", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", delayMs: 30 }] });
   const pending = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Add CSV export", task: "Add CSV export. AC: test passes." }, io);
+  // Not "implement": that is scouted first, a separate lifecycle covered below.
+  const started = await delegator.start({ kind: "prototype", title: "Add CSV export", task: "Add CSV export. AC: test passes." }, io);
   assert.equal(started.status, "started");
   assert.match(started.text, /result will arrive as a message/);
   assert.equal(delegator.list()[0]!.state === "done", false, "not finished when start returns");
@@ -239,7 +260,7 @@ test("a worker waiting on a question gets the relayed answer and reports again",
     replies: [{ status: "needs_human", summary: "Which date format?" }, { status: "done", summary: "Used ISO 8601" }],
   });
   const first = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Dates", task: "t" }, io);
+  const started = await delegator.start({ kind: "prototype", title: "Dates", task: "t" }, io);
   assert.ok(started.status === "started");
   const question = await first;
   assert.equal(question.status, "needs_human");
@@ -268,7 +289,7 @@ test("a question asked again after a relayed answer calls the user again", async
     replies: [{ status: "needs_human", summary: "Which format?" }, { status: "needs_human", summary: "And the separator?" }],
   });
   const first = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Dates", task: "t" }, io);
+  const started = await delegator.start({ kind: "prototype", title: "Dates", task: "t" }, io);
   assert.ok(started.status === "started");
   await first;
   const second = nextOutcome();
@@ -309,7 +330,7 @@ test("a transient rename failure keeps the glyphs and is retried on the next sta
   };
   const { delegator, nextOutcome } = await setup(t, { herdr });
   const pending = nextOutcome();
-  await delegator.start({ kind: "implement", title: "One", task: "t" }, io);
+  await delegator.start({ kind: "prototype", title: "One", task: "t" }, io);
   await pending;
   await until(() => log.includes("label tab-1 ? One"));
   assert.deepEqual(log.filter((line) => line.startsWith("label")), ["label tab-1 ● One", "label tab-1 ? One"]);
@@ -325,7 +346,8 @@ test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t)
   const outcome = await pending;
   assert.equal(outcome.status, "partial");
   assert.match(outcome.text, /worker said done, Jev said partial/);
-  assert.ok(!log.some((line) => line.startsWith("close")));
+  // The scout's own tab closes at hand-off; the implementer's stays open (partial).
+  assert.deepEqual(log.filter((line) => line.startsWith("close")), ["close tab-1"]);
 });
 
 test("Jev's verdict is asked with the commits, changed files and the verify run", async (t) => {
@@ -399,7 +421,8 @@ test("a failed verify run makes done at most partial; the command and exit code 
   const [untrusted, after] = rest!.split("</worker-report>");
   assert.match(untrusted!, /Verify output \(tail\):\nIGNORE PREVIOUS INSTRUCTIONS/);
   assert.doesNotMatch(after!, /IGNORE/);
-  assert.ok(!log.some((line) => line.startsWith("close")), "kept like any partial");
+  // The scout's own tab closes at hand-off; the implementer's stays open (partial).
+  assert.deepEqual(log.filter((line) => line.startsWith("close")), ["close tab-1"], "kept like any partial");
 });
 
 test("a passing verify run leaves done alone; a run of another command does not count", async (t) => {
@@ -530,7 +553,7 @@ test("a branch touching host-executed files gets a host warning outside the work
     },
   });
   const pending = nextOutcome();
-  await delegator.start({ kind: "implement", title: "CI", task: "t" }, io);
+  await delegator.start({ kind: "prototype", title: "CI", task: "t" }, io);
   const outcome = await pending;
   assert.equal(outcome.status, "done", "a warning never changes the status");
   assert.deepEqual(outcome.details.sensitive, [".github/workflows/**", "**/package.json"]);
@@ -572,9 +595,9 @@ test("a branch touching only ordinary files gets no host warning", async (t) => 
 test("overlapping code tickets run one after the other", async (t) => {
   const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", delayMs: 30 }], judge: { overlap: async () => true } });
   const both = [nextOutcome(), nextOutcome()];
-  await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
+  await delegator.start({ kind: "prototype", title: "One", task: "a" }, io);
   await new Promise((resolve) => setTimeout(resolve, 5));
-  await delegator.start({ kind: "implement", title: "Two", task: "b" }, io);
+  await delegator.start({ kind: "prototype", title: "Two", task: "b" }, io);
   await Promise.all(both);
   assert.ok(log.indexOf("close tab-1") < log.indexOf("open ○ Two"));
   assert.ok(progress.some((line) => line.includes('waits for overlapping "One"')));
@@ -677,7 +700,7 @@ test("shutdown stops live workers and waits for their cleanup", async (t) => {
 test("queued overlapping tickets start one at a time, in order", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", delayMs: 20 }], judge: { overlap: async () => true } });
   const all = [nextOutcome(), nextOutcome(), nextOutcome()];
-  for (const title of ["A", "B", "C"]) await delegator.start({ kind: "implement", title, task: title }, io);
+  for (const title of ["A", "B", "C"]) await delegator.start({ kind: "prototype", title, task: title }, io);
   await Promise.all(all);
   const opens = lifecycle(log).filter((line) => !line.startsWith("remove"));
   assert.deepEqual(opens, ["open ○ A", "close tab-1", "open ○ B", "close tab-2", "open ○ C", "close tab-3"]);
@@ -703,7 +726,7 @@ const until = async (condition: () => boolean) => {
 test("shutdown closes the tab of a worker waiting on a question", async (t) => {
   const { delegator, log, nextOutcome, outcomes } = await setup(t, { replies: [{ status: "needs_human" }] });
   const first = nextOutcome();
-  await delegator.start({ kind: "implement", title: "Ask", task: "t" }, io);
+  await delegator.start({ kind: "prototype", title: "Ask", task: "t" }, io);
   await first;
   assert.ok(!log.includes("close tab-1"));
   await delegator.shutdown();
@@ -826,7 +849,7 @@ test("worker panes get Herdr metadata on every state and an agent name, best-eff
     herdrOptions: { renameFailures: 1 },
   });
   const pending = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Add CSV export", task: "t" }, io);
+  const started = await delegator.start({ kind: "prototype", title: "Add CSV export", task: "t" }, io);
   assert.ok(started.status === "started");
   await pending;
   const id = started.worker.id;
@@ -847,7 +870,7 @@ test("worker panes get Herdr metadata on every state and an agent name, best-eff
   const { seq: _seq, ...first } = seen.metadata![0]!;
   assert.deepEqual(first, {
     title: "Add CSV export",
-    displayAgent: "pi-lead implement",
+    displayAgent: "pi-lead prototype",
     tokens: {
       model: "anthropic/claude-sonnet-5",
       thinking: "medium",
@@ -855,7 +878,7 @@ test("worker panes get Herdr metadata on every state and an agent name, best-eff
       worker: id.slice(0, 8),
       state: "starting",
     },
-    workingLabel: "implement · claude-sonnet-5 · medium",
+    workingLabel: "prototype · claude-sonnet-5 · medium",
     idleLabel: "idle",
     blockedLabel: "asks you in its tab",
   });
@@ -900,7 +923,7 @@ test("a worker out of quota continues on the tier's fallback from its branch, an
     available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
   };
   const pending = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Export", task: "t" }, both);
+  const started = await delegator.start({ kind: "prototype", title: "Export", task: "t" }, both);
   assert.match(started.text, /to openai-codex\/gpt-6-sol \(thinking high/);
   const outcome = await pending;
 
@@ -913,9 +936,51 @@ test("a worker out of quota continues on the tier's fallback from its branch, an
   assert.match(seen.script!, /ran out of model quota on this task/);
   assert.deepEqual(lifecycle(log), ["open ○ Export", "close tab-1", "remove dir", "open ○ Export", "close tab-2", "remove dir"]);
 
-  const next = await delegator.start({ kind: "implement", title: "Import", task: "t" }, both);
+  const next = await delegator.start({ kind: "prototype", title: "Import", task: "t" }, both);
   assert.match(next.text, /to opencode-go\/glm-5\.3/);
   assert.match(delegator.list()[1]!.route.note!, /quota exhausted: openai-codex until ~\d\d:\d\d/);
+});
+
+test("a quota reroute during a CI fix round pushes onto the first PR instead of opening a second", async (t) => {
+  const publishCalls: { branch: string; baseBranch: string; remoteBranch?: string }[] = [];
+  let watchCalls = 0;
+  const { delegator, nextOutcome } = await setup(t, {
+    replies: [{ status: "done" }, chatgptLimit, { status: "done" }],
+    herdrOptions: { sharedTurns: true },
+    // "debug" defaults to the "deep" tier: give it the two-model fallback, not "standard".
+    config: {
+      tiers: { deep: { model: "openai-codex/gpt-6-sol", thinking: "high", fallbacks: [{ model: "opencode-go/glm-5.3" }] } },
+    },
+    workspace: {
+      ...fakeWorkspace([]),
+      hasWorkflows: async () => true,
+      publish: async (input) => {
+        publishCalls.push(input);
+        return { url: `https://example.test/pr/${input.remoteBranch ?? input.branch}` };
+      },
+      watchChecks: async () => {
+        watchCalls += 1;
+        return watchCalls === 1
+          ? { state: "fail", failed: [{ name: "build", link: "https://example.test/run/1" }] }
+          : { state: "pass", failed: [] };
+      },
+    },
+  });
+  const both: DelegateIO = {
+    ...io,
+    lead: { provider: "openai-codex", id: "gpt-6-sol" },
+    available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
+  };
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, both);
+  const outcome = await pending;
+  assert.equal(outcome.status, "done");
+  assert.equal(publishCalls.length, 2, "one publish per CI round, no third");
+  assert.equal(publishCalls[0]!.remoteBranch, undefined, "first publish opens the PR on its own branch");
+  assert.notEqual(publishCalls[1]!.branch, publishCalls[0]!.branch, "the reroute relaunched on a new local branch");
+  assert.equal(publishCalls[1]!.remoteBranch, publishCalls[0]!.branch, "the rerouted publish pushes onto the first PR's branch");
+  assert.match(outcome.text, new RegExp(`PR: https://example\\.test/pr/${publishCalls[0]!.branch}$`, "m"));
+  assert.equal((outcome.text.match(/PR: /g) ?? []).length, 1, "only one PR reported");
 });
 
 test("without another model a worker out of quota is reported blocked, never sent to a paid balance", async (t) => {
@@ -929,7 +994,7 @@ test("without another model a worker out of quota is reported blocked, never sen
     available: [{ provider: "openai-codex", id: "gpt-6-sol" }],
   };
   const pending = nextOutcome();
-  await delegator.start({ kind: "implement", title: "Export", task: "t" }, codexOnly);
+  await delegator.start({ kind: "prototype", title: "Export", task: "t" }, codexOnly);
   const outcome = await pending;
   assert.equal(outcome.status, "blocked");
   assert.equal(outcome.details.quota?.retryAfterMinutes, 90);
@@ -937,7 +1002,7 @@ test("without another model a worker out of quota is reported blocked, never sen
   assert.equal(log.filter((line) => line.startsWith("open")).length, 1, "no second attempt");
   assert.equal(delegator.list()[0]!.state, "waiting", "the tab stays open to resume once the quota is back");
 
-  const refused = await delegator.start({ kind: "implement", title: "Import", task: "t" }, codexOnly);
+  const refused = await delegator.start({ kind: "prototype", title: "Import", task: "t" }, codexOnly);
   assert.equal(refused.status, "failed");
   assert.match(refused.text, /No worker model: .*\(quota exhausted: openai-codex until ~\d\d:\d\d\)/);
 });
@@ -967,7 +1032,7 @@ test("a worker out of quota with uncommitted changes stays put instead of moving
     available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
   };
   const pending = nextOutcome();
-  await delegator.start({ kind: "implement", title: "Export", task: "t" }, both);
+  await delegator.start({ kind: "prototype", title: "Export", task: "t" }, both);
   const outcome = await pending;
   assert.equal(outcome.status, "blocked");
   assert.match(outcome.text, /uncommitted changes, so it was not moved to another model/);
@@ -985,4 +1050,363 @@ test("with keepFailedWorkers off, a blocked quota report says to delegate again 
   const outcome = await pending;
   assert.match(outcome.text, /once the quota is back, delegate again, starting from branch pi-lead\/export-/);
   assert.doesNotMatch(outcome.text, /relay a message/);
+});
+
+test("implement is scouted first: the implementer builds on the scout's branch with its brief, and only it reports", async (t) => {
+  const seen: Seen = {};
+  const { delegator, log, nextOutcome, progress } = await setup(t, {
+    seen,
+    herdrOptions: { scoutReply: { status: "done", findings: "reuse Foo from src/a.ts", allowedFiles: ["src/a.ts"] } },
+  });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Feature", task: "Add the thing" }, io);
+  assert.ok(started.status === "started");
+  const outcome = await pending;
+  assert.equal(outcome.status, "done");
+  assert.equal(seen.task?.task, "Add the thing", "the ticket reaches the implementer unchanged");
+  assert.deepEqual(seen.task?.allowedFiles, ["src/a.ts"]);
+  assert.match(seen.script!, /## Scout brief/);
+  assert.match(seen.script!, /reuse Foo from src\/a\.ts/);
+  const resolves = log.filter((line) => line.startsWith("resolveBase"));
+  assert.equal(resolves.length, 2, "the scout, then the implementer");
+  assert.equal(resolves[0], "resolveBase");
+  assert.match(resolves[1]!, /^resolveBase from pi-lead\/feature-/, "the implementer starts from the scout's branch");
+  assert.equal(log.filter((line) => line.startsWith("open")).length, 2);
+  assert.ok(progress.some((line) => line.includes('"Feature" scout mapped 1 file; implement starting on')));
+});
+
+test("the scout is never sent to the fast tier, even for a trivial ticket; a hard one still gets deep", async (t) => {
+  const trivial = await setup(t, { judge: { available: true, intake: async () => ({ tier: { tier: "fast", difficulty: 0.4 } }) } });
+  const pending = trivial.nextOutcome();
+  const started = await trivial.delegator.start({ kind: "implement", title: "Typo", task: "t" }, io);
+  assert.match(started.text, /tier standard/);
+  await pending;
+
+  const hard = await setup(t, { judge: { available: true, intake: async () => ({ tier: { tier: "deep", difficulty: 3.9 } }) } });
+  const pendingHard = hard.nextOutcome();
+  const startedHard = await hard.delegator.start({ kind: "implement", title: "Hard", task: "t" }, io);
+  assert.match(startedHard.text, /tier deep/);
+  await pendingHard;
+});
+
+test("an implementer that changes a file outside the scout's allowed list is capped to partial; file names stay inside the untrusted block", async (t) => {
+  let calls = 0;
+  let published = 0;
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: {
+      ...fakeWorkspace([]),
+      collect: async () => {
+        calls += 1;
+        return calls === 1
+          ? { commits: "s1 scout tests", diffStat: "", changedFiles: ["test/a.test.ts"], head: "s1" }
+          : { commits: "i1 impl", diffStat: "", changedFiles: ["src/a.ts", "src/rogue.ts"], head: "i1" };
+      },
+      publish: async () => (published += 1, { url: "https://example.test/pr/1" }),
+    },
+    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Feature", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "partial");
+  assert.deepEqual(outcome.details.outOfScope, ["src/rogue.ts"]);
+  const [trusted, rest] = outcome.text.split("<worker-report untrusted>");
+  assert.match(trusted!, /1 changed file outside the scout brief\./);
+  assert.doesNotMatch(trusted!, /rogue/);
+  const [untrusted, after] = rest!.split("</worker-report>");
+  assert.match(untrusted!, /Out-of-scope files:\nsrc\/rogue\.ts/);
+  assert.doesNotMatch(after!, /rogue/);
+  assert.equal(published, 0, "a partial ticket is never pushed or opened as a PR");
+});
+
+test("an implementer that changes a scout's protected test file is capped to partial", async (t) => {
+  let calls = 0;
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: {
+      ...fakeWorkspace([]),
+      collect: async () => {
+        calls += 1;
+        const changedFiles = ["src/a.ts", "test/a.test.ts"];
+        return calls === 1 ? { commits: "s1", diffStat: "", changedFiles, head: "s1" } : { commits: "i1", diffStat: "", changedFiles, head: "i1" };
+      },
+    },
+    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Feature", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "partial");
+  assert.deepEqual(outcome.details.outOfScope, ["test/a.test.ts"]);
+});
+
+test("a blocked scout is reported as usual; no implement worker starts", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    herdrOptions: { scoutReply: { status: "blocked", summary: "cannot find the seam" } },
+  });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Tricky", task: "t" }, io);
+  assert.ok(started.status === "started");
+  const outcome = await pending;
+  assert.equal(outcome.status, "blocked");
+  assert.match(outcome.text, /cannot find the seam/);
+  assert.match(outcome.text, /No implement worker started\./);
+  assert.equal(log.filter((line) => line.startsWith("open")).length, 1, "only the scout opened a tab");
+});
+
+test("a finished implement ticket is pushed and a draft PR opened, with the original branch as base", async (t) => {
+  const published: Array<{ repoRoot: string; branch: string; baseBranch: string; title: string; body: string }> = [];
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: {
+      ...fakeWorkspace([]),
+      addedFiles: async () => ["test/a.test.ts", "src/a.ts"],
+      publish: async (input) => {
+        published.push(input);
+        return { url: "https://example.test/pr/1" };
+      },
+    },
+    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Feature", task: "t", startFrom: "main" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "done");
+  assert.equal(published.length, 1);
+  assert.equal(published[0]!.baseBranch, "main", "the ticket's original base, not the scout branch");
+  assert.equal(published[0]!.branch, delegator.list()[0]!.branch);
+  assert.equal(published[0]!.title, "Feature");
+  assert.match(published[0]!.body, /Tests added: `test\/a\.test\.ts`/, "only the added path matching the test pattern");
+  assert.doesNotMatch(published[0]!.body, /src\/a\.ts`/);
+  assert.match(outcome.text, /^PR: https:\/\/example\.test\/pr\/1$/m);
+  assert.match(outcome.text, /Draft PR opened: https:\/\/example\.test\/pr\/1\./);
+  assert.equal(outcome.details.pr, "https://example.test/pr/1");
+});
+
+test("a finished prototype or review is never pushed or opened as a PR", async (t) => {
+  let published = 0;
+  const workspace: Workspace = { ...fakeWorkspace([]), publish: async () => (published += 1, { url: "https://example.test/pr/1" }) };
+  const prototype = await setup(t, { workspace, replies: [{ status: "done" }] });
+  let pending = prototype.nextOutcome();
+  await prototype.delegator.start({ kind: "prototype", title: "Proto", task: "t" }, io);
+  assert.doesNotMatch((await pending).text, /Draft PR|^PR:/m);
+
+  const review = await setup(t, { workspace, replies: [{ status: "done" }] });
+  pending = review.nextOutcome();
+  await review.delegator.start({ kind: "review", title: "Review", task: "t", startFrom: "main" }, io);
+  assert.doesNotMatch((await pending).text, /Draft PR|^PR:/m);
+  assert.equal(published, 0);
+});
+
+test("a publish failure never changes the status; the report says it was not opened", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: { ...fakeWorkspace([]), publish: async () => ({ error: "git push failed: remote origin does not exist" }) },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "done");
+  assert.match(outcome.text, /PR not opened \(git push failed: remote origin does not exist\); work is on local branch/);
+  assert.doesNotMatch(outcome.text, /^PR: /m);
+  assert.equal(outcome.details.pr, undefined);
+});
+
+test("a detached HEAD publishes no PR", async (t) => {
+  let published = 0;
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: {
+      ...fakeWorkspace([]),
+      currentBranch: async () => undefined,
+      publish: async () => (published += 1, { url: "https://example.test/pr/1" }),
+    },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "research", title: "x", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "done");
+  assert.equal(published, 0);
+  assert.match(outcome.text, /Work is on local branch .*; nothing was pushed or merged\./);
+});
+
+test("no workflows on the branch: the report goes out at once with CI: none, watchChecks is never called", async (t) => {
+  let watchChecksCalls = 0;
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: { ...fakeWorkspace([]), watchChecks: async () => (watchChecksCalls += 1, { state: "none", failed: [] }) },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "done");
+  assert.match(outcome.text, /^CI: none$/m);
+  assert.equal(watchChecksCalls, 0);
+});
+
+test("CI passes: reported done with CI: passed only once the watch resolves", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    workspace: {
+      ...fakeWorkspace([]),
+      hasWorkflows: async () => true,
+      watchChecks: async () => ({ state: "pass", failed: [] }),
+    },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "done");
+  assert.match(outcome.text, /^CI: passed$/m);
+  assert.ok(!log.some((line) => line.startsWith("send")), "no CI fix was relayed");
+});
+
+test("CI fails once, the worker is told and fixes it: one relayed message, one PR reused, final done", async (t) => {
+  let watchChecksCalls = 0;
+  const published: string[] = [];
+  const { delegator, log, nextOutcome } = await setup(t, {
+    replies: [{ status: "done" }, { status: "done" }],
+    workspace: {
+      ...fakeWorkspace([]),
+      hasWorkflows: async () => true,
+      publish: async ({ branch, baseBranch }) => {
+        published.push(branch);
+        return { url: `https://example.test/pr/${baseBranch}-${branch}` };
+      },
+      watchChecks: async () => {
+        watchChecksCalls += 1;
+        return watchChecksCalls === 1
+          ? { state: "fail", failed: [{ name: "build", link: "https://example.test/run/1" }] }
+          : { state: "pass", failed: [] };
+      },
+    },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "done");
+  assert.match(outcome.text, /^CI: passed$/m);
+  const sent = log.filter((line) => line.startsWith("send"));
+  assert.equal(sent.length, 1, "exactly one CI fix message relayed");
+  assert.match(sent[0]!, /\[PI Lead\] CI failed on .*build \(https:\/\/example\.test\/run\/1\)/);
+  assert.equal(published.length, 2, "publish ran again after the fix, reusing the same PR");
+  assert.equal(new Set(published).size, 1, "same branch both times");
+});
+
+test("CI still fails after two fix rounds: capped to partial, check names only inside the untrusted block", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    replies: [{ status: "done" }, { status: "done" }, { status: "done" }],
+    workspace: {
+      ...fakeWorkspace([]),
+      hasWorkflows: async () => true,
+      watchChecks: async () => ({ state: "fail", failed: [{ name: "test", link: "https://example.test/run/2" }] }),
+    },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "partial");
+  assert.equal(log.filter((line) => line.startsWith("send")).length, 2, "two CI fix rounds relayed");
+  assert.match(outcome.text, /^CI: failed \(1 check\)$/m);
+  const [trusted, rest] = outcome.text.split("<worker-report untrusted>");
+  assert.doesNotMatch(trusted!, /run\/2/);
+  const [untrusted] = rest!.split("</worker-report>");
+  assert.match(untrusted!, /CI checks failed:\ntest \(https:\/\/example\.test\/run\/2\)/);
+  assert.match(outcome.text, /CI is failing on the draft PR .*; tell the user\./);
+});
+
+test("CI times out: capped to partial", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: {
+      ...fakeWorkspace([]),
+      hasWorkflows: async () => true,
+      watchChecks: async () => ({ state: "timeout", failed: [] }),
+    },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "partial");
+  assert.match(outcome.text, /^CI: timed out$/m);
+});
+
+test("stopping a worker mid-CI-wait aborts the watch and reports stopped, never done", async (t) => {
+  let sawAbort = false;
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: {
+      ...fakeWorkspace([]),
+      hasWorkflows: async () => true,
+      watchChecks: async ({ signal }) =>
+        new Promise((resolve) => {
+          signal?.addEventListener("abort", () => {
+            sawAbort = true;
+            resolve({ state: "error", failed: [], error: "aborted" });
+          }, { once: true });
+        }),
+    },
+  });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
+  assert.ok(started.status === "started");
+  await until(() => delegator.list()[0]!.state === "ci");
+  await delegator.stop(started.worker.id.slice(0, 8));
+  const outcome = await pending;
+  assert.equal(outcome.status, "stopped");
+  assert.ok(sawAbort, "the fake watchChecks observed the abort");
+});
+
+test("a worker retakes a slot before relaying a failed CI check, so it never runs alongside a busy worker", async (t) => {
+  let watchCalls = 0;
+  let resolveFirstWatch!: (result: { state: "fail"; failed: { name: string; link: string }[] }) => void;
+  const firstWatch = new Promise<{ state: "fail"; failed: { name: string; link: string }[] }>((resolve) => (resolveFirstWatch = resolve));
+  const { delegator, log, nextOutcome } = await setup(t, {
+    maxWorkers: 1,
+    replies: [{ status: "done" }, { status: "done" }],
+    workspace: {
+      ...fakeWorkspace([]),
+      hasWorkflows: async () => true,
+      watchChecks: async () => {
+        watchCalls += 1;
+        // Only the first worker's initial wait is gated; every later call (its retry, the second worker's own wait) passes at once.
+        return watchCalls === 1 ? firstWatch : { state: "pass", failed: [] };
+      },
+    },
+  });
+  // Outcomes arrive in completion order: the second worker finishes first (no gate), the first only after it retakes a slot.
+  const secondOutcome = nextOutcome();
+  const firstOutcome = nextOutcome();
+  await delegator.start({ kind: "debug", title: "First", task: "t" }, io);
+  await until(() => delegator.list()[0]?.state === "ci");
+  await delegator.start({ kind: "debug", title: "Second", task: "t" }, io);
+  await until(() => delegator.list()[1]?.state === "running");
+  assert.equal(delegator.list()[0]!.state, "ci", "the first worker still holds no slot");
+
+  resolveFirstWatch({ state: "fail", failed: [{ name: "build", link: "https://example.test/run/1" }] });
+
+  const second = await secondOutcome;
+  assert.equal(second.worker.title, "Second");
+  assert.equal(second.status, "done");
+
+  const first = await firstOutcome;
+  assert.equal(first.worker.title, "First");
+  assert.equal(first.status, "done");
+  const closeIndex = log.findIndex((line) => line.startsWith("close") && line.includes("tab-2"));
+  const sendIndex = log.findIndex((line) => line.startsWith("send"));
+  assert.ok(closeIndex >= 0 && sendIndex >= 0 && sendIndex > closeIndex, "the CI relay was sent only after the second worker released its slot");
+});
+
+test("message() rejects a worker waiting on CI with a clear reason, instead of relaying into it", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: {
+      ...fakeWorkspace([]),
+      hasWorkflows: async () => true,
+      watchChecks: ({ signal }) =>
+        new Promise((resolve) => {
+          signal?.addEventListener("abort", () => resolve({ state: "error", failed: [], error: "aborted" }), { once: true });
+        }),
+    },
+  });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
+  assert.ok(started.status === "started");
+  await until(() => delegator.list()[0]!.state === "ci");
+  const reply = await delegator.message(started.worker.id.slice(0, 8), "hello");
+  assert.match(reply, /waiting for CI; nothing to relay/);
+  await delegator.stop(started.worker.id.slice(0, 8));
+  const outcome = await pending;
+  assert.equal(outcome.status, "stopped");
 });

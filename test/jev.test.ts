@@ -38,6 +38,8 @@ test("difficulty maps to tiers, with a floor for review and debug", () => {
   assert.equal(tierForDifficulty(3.4, "implement"), "deep");
   assert.equal(tierForDifficulty(0.4, "review"), "standard");
   assert.equal(tierForDifficulty(3.9, "debug"), "deep");
+  assert.equal(tierForDifficulty(0.4, "scout"), "standard", "a scout is never sent to the fast tier either");
+  assert.equal(tierForDifficulty(3.9, "scout"), "deep", "a hard scout still gets deep");
 });
 
 test("review severity and probability bands", () => {

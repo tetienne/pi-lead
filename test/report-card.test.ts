@@ -100,6 +100,11 @@ test("overrides, failed verify, review severity and sensitive files stand out", 
   assert.match(text, /<warning> {2}! review before merging: package\.json scripts, \.github\/workflows\/<\/warning>/);
 });
 
+test("files changed outside the scout brief stand out like a sensitive-path warning", () => {
+  const text = renderCard({ status: "partial", outOfScope: ["src/rogue.ts", "src/other.ts"], card: card() }, content(SAID), false, plain)!;
+  assert.match(text, /! outside the scout brief: src\/rogue\.ts, src\/other\.ts/);
+});
+
 test("expanded, the card shows the full report text the model reads; the sensitive hint stays", () => {
   const long = content(Array.from({ length: 500 }, (_, i) => `line ${i}`).join("\n"));
   const text = renderCard({ status: "done", sensitive: ["package.json scripts"], card: card() }, long, true, plain)!;

@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
 import { isUsageError, type Herdr } from "./herdr.ts";
-import { defaultTier, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
+import { defaultTier, tierForDifficulty, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, workerPrompt, WRITES_CODE, type Verification, type WorkerBrief, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
@@ -37,6 +37,7 @@ export type WorkerState =
   | "starting"
   | "running"
   | "waiting" // stopped on needs_human / partial / blocked, tab open, can be messaged
+  | "ci" // published, waiting on the draft PR's checks; not messageable, no attention
   | "done"
   | "failed"
   | "stopped";
@@ -69,6 +70,10 @@ export type DelegateOutcome = {
     sensitive?: string[];
     /** The project's `verify` run; a non-zero exit made `done` at most `partial`. */
     verification?: { exitCode: number; ms: number };
+    /** Changed files outside the scout's brief; changing any made `done` at most `partial`. */
+    outOfScope?: string[];
+    /** The draft PR the host opened for a finished ticket. */
+    pr?: string;
     /** What the Lead's transcript shows as a card (the model reads `text`). */
     card?: ReportCard;
   };
@@ -94,6 +99,8 @@ export type ReportCard = {
   verify?: string;
   /** The verify run passed (exit 0). */
   verified?: boolean;
+  /** CI status of the draft PR (`none`, `passed`, `failed (N checks)`, `timed out`, `not checked (…)`). */
+  ci?: string;
   /**
    * The error that ended a failed worker (untrusted). A finished worker's own
    * words are the report's `<worker-report untrusted>` block, which the card
@@ -155,6 +162,12 @@ const RECORD = "tab.json";
 /** Model changes a single task may go through on quota errors. */
 const MAX_REROUTES = 3;
 
+/** `gh pr checks --watch` is killed after this long; a stuck check should not hold a slot forever. */
+const CI_TIMEOUT_MS = 30 * 60_000;
+
+/** Failed CI is relayed back to the worker this many times before the ticket is reported partial. */
+const CI_FIX_ROUNDS = 2;
+
 const RESUME_NOTE =
   "\n\nA previous PI Lead worker ran out of model quota on this task. Its work so far is committed on the current branch: review it with git log and continue from there.";
 
@@ -175,6 +188,12 @@ type Worker = WorkerInfo & {
   params: DelegateParams;
   io: DelegateIO;
   difficulty: number | undefined;
+  /** Set on a scout worker: the tier its implementer will get once it hands off. */
+  implementTier?: Tier;
+  /** Set once a scout hands off: the implementer's scope, carried across a reroute too. */
+  brief?: WorkerBrief;
+  /** Set once the first publish opens a PR: its URL and remote head branch, reused across a reroute's later publishes. */
+  pr?: { url: string; branch: string };
   controller: AbortController;
   done: Promise<void>;
   resolveDone(): void;
@@ -182,6 +201,10 @@ type Worker = WorkerInfo & {
   worktreePath?: string;
   repoRoot?: string;
   base?: string;
+  /** The ticket's original base commit, set once at first launch and carried through a scout hand-off. */
+  originBase?: string;
+  /** The branch the checkout was on when the ticket was first delegated; the PR base. Undefined on a detached HEAD. */
+  baseBranch?: string;
   workspaceId?: string;
   paneId?: string;
   resultPath?: string;
@@ -204,6 +227,8 @@ type Worker = WorkerInfo & {
   /** Continues the branch of an attempt that ran out of quota. */
   resumed: boolean;
   reroutes: number;
+  /** CI fix rounds relayed to the worker (CI_FIX_ROUNDS caps it). */
+  ciRounds: number;
 };
 
 export function slugify(text: string): string {
@@ -273,6 +298,23 @@ export function verificationLine(verify: string | undefined, verification: Pick<
   return verification.exitCode === 0
     ? `Verify: \`${verify}\` passed (exit 0, ${seconds}).`
     : `Verify: \`${verify}\` failed (exit ${verification.exitCode}, ${seconds}).`;
+}
+
+/** Kinds published to a draft PR once they settle `done`: not prototype, review or scout. */
+const PUBLISHED_KINDS: readonly WorkKind[] = ["implement", "debug", "research"];
+
+/** Repo-relative paths that count as tests, for the PR body's "tests added" line. */
+const TEST_PATH = /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.[^/]+$/;
+
+/** The draft PR's body: the worker's own words, then a host-written verification section. */
+function prBody(summary: string, testsAdded: string[], verify: string | undefined, verification: Pick<Verification, "exitCode"> | undefined): string {
+  return [
+    summary,
+    "",
+    "## Verification",
+    `- Tests added: ${testsAdded.length ? testsAdded.map((path) => `\`${path}\``).join(", ") : "none"}`,
+    ...(verification ? [`- Verify: \`${verify}\` passed`] : []),
+  ].join("\n");
 }
 
 /**
@@ -583,6 +625,13 @@ export function createDelegator(deps: DelegateDeps) {
       repoRoot: worker.repoRoot,
       ...(params.startFrom ? { startFrom: params.startFrom } : {}),
     });
+    // Captured once, at the ticket's first launch: a scout hand-off resets `worker.base` to its own
+    // branch, but publish needs the original starting point, not the scout's. Gated on `originBase`
+    // (always set once resolved), not `baseBranch` (stays undefined on a detached HEAD).
+    if (worker.originBase === undefined) {
+      worker.baseBranch = params.startFrom ?? (await deps.workspace.currentBranch(worker.repoRoot));
+      worker.originBase = worker.base;
+    }
     worker.tabLabel = openingLabel(worker);
     ({ workspaceId: worker.workspaceId, paneId: worker.paneId } = await deps.herdr!.createWorktree({
       cwd: worker.repoRoot,
@@ -602,12 +651,13 @@ export function createDelegator(deps: DelegateDeps) {
     const task: WorkerTask = {
       version: 1,
       id: worker.id,
-      kind: params.kind,
+      kind: worker.kind,
       title: params.title,
       task: params.task,
       branch: worker.branch,
       worktreePath: worker.worktreePath,
       resultPath: worker.resultPath,
+      ...(worker.brief ? { allowedFiles: worker.brief.allowedFiles, protectedFiles: worker.brief.protectedFiles } : {}),
       jev: deps.config.jev,
       stuckDetection: deps.config.stuckDetection,
       ...(deps.config.verify ? { verify: deps.config.verify, verifyTimeoutMinutes: deps.config.verifyTimeoutMinutes } : {}),
@@ -617,7 +667,7 @@ export function createDelegator(deps: DelegateDeps) {
     const label = `lead: ${params.title}`.slice(0, 48);
     const argv = deps.workerCommand({
       taskPath,
-      prompt: workerPrompt(params.kind, params.task) + (worker.resumed ? RESUME_NOTE : ""),
+      prompt: workerPrompt(worker.kind, params.task, worker.brief) + (worker.resumed ? RESUME_NOTE : ""),
       route: worker.route,
       label,
       resources,
@@ -672,7 +722,56 @@ export function createDelegator(deps: DelegateDeps) {
     elapsedMs: Math.max(0, now() - (worker.runningSince ?? worker.delegatedAt)),
   });
 
+  /** Repo-relative, no leading "./", never absolute or reaching outside the repo. */
+  const normalizeAllowed = (paths: string[] | undefined): string[] => {
+    const seen = new Set<string>();
+    for (const raw of paths ?? []) {
+      const path = raw.trim().replace(/^\.\//, "");
+      if (!path || path.startsWith("/") || path.split("/").includes("..")) continue;
+      seen.add(path);
+    }
+    return [...seen];
+  };
+
+  /**
+   * A scout finishing `done` with allowed files hands off to an implement
+   * worker that builds on its branch, instead of being reported: same Worker,
+   * relaunched, so `find` and the id returned by `delegate` still reach it.
+   * Returns false for every other scout outcome, which is reported as usual.
+   */
+  const scoutHandOff = async (worker: Worker, result: WorkerResult): Promise<boolean> => {
+    if (worker.kind !== "scout" || result.status !== "done") return false;
+    const allowedFiles = normalizeAllowed(result.allowedFiles);
+    if (allowedFiles.length === 0) return false;
+    const scouted = await deps.workspace.collect({ repoRoot: worker.repoRoot!, branch: worker.branch!, base: worker.base! });
+    // The scout's own test files: whatever it changed that it did not also allow the implementer to touch.
+    const protectedFiles = scouted.changedFiles.filter((path) => !allowedFiles.includes(path));
+    const implementTier = worker.implementTier ?? defaultTier("implement");
+    const { lead, available } = routable(worker.io);
+    const resolved = resolveRoute(implementTier, deps.config.tiers, lead, available);
+    // Thrown, not reported here: watch()'s catch turns it into a normal failed report for this (still scout) worker.
+    if ("error" in resolved) throw new Error(`No worker model for the implementer: ${resolved.error}`);
+    const skipped = exhaustedNote();
+    const route = skipped && resolved.note ? { ...resolved, note: `${resolved.note} (${skipped})` } : resolved;
+    const scoutBranch = worker.branch!;
+    worker.kind = "implement";
+    worker.params = { ...worker.params, startFrom: scoutBranch };
+    worker.route = route;
+    worker.brief = { allowedFiles, protectedFiles, text: result.findings ? unmarked(result.findings) : "" };
+    worker.base = undefined; // resolved fresh from the scout branch
+    worker.resumed = false;
+    await closeAndClean(worker);
+    setState(worker, "queued");
+    await takeSlot(worker); // implement writes code: overlap waits apply now
+    if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
+    await launch(worker);
+    setState(worker, "running");
+    progress(`"${worker.title}" scout mapped ${allowedFiles.length} file${allowedFiles.length === 1 ? "" : "s"}; implement starting on ${route.model}`);
+    return true;
+  };
+
   const settle = async (worker: Worker, result: WorkerResult) => {
+    if (await scoutHandOff(worker, result)) return;
     // Only a run of this Lead's own command counts; the command shown comes from the config, not the result file.
     const verify = deps.config.verify;
     const verification = verify && result.verification?.command === verify ? result.verification : undefined;
@@ -695,9 +794,82 @@ export function createDelegator(deps: DelegateDeps) {
     const judged =
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     const verifyFailed = verification !== undefined && verification.exitCode !== 0;
-    const status = verifyFailed && judged === "done" ? "partial" : judged;
+    // An implementer built on a scout brief: anything it touched outside the allowed list, or a protected test it changed.
+    const outOfScope = worker.brief
+      ? collected.changedFiles.filter((path) => !worker.brief!.allowedFiles.includes(path) || worker.brief!.protectedFiles.includes(path))
+      : [];
+    let status = judged === "done" && (verifyFailed || outOfScope.length > 0) ? "partial" : judged;
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
     const sensitive = await reviewHints(worker, collected.changedFiles);
+
+    // The host publishes finished tickets; never the Lead model. A detached HEAD (no baseBranch) means no PR.
+    let published: { url?: string; error?: string } | undefined;
+    if (status === "done" && PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined) {
+      const added = (await deps.workspace.addedFiles({ repoRoot: worker.repoRoot!, branch: worker.branch!, base: worker.originBase! })).filter(
+        (path) => TEST_PATH.test(path),
+      );
+      const body = prBody(unmarked(result.summary), added, verify, verification);
+      published = await deps.workspace.publish({
+        repoRoot: worker.repoRoot!,
+        branch: worker.branch!,
+        baseBranch: worker.baseBranch,
+        title: worker.params.title,
+        body,
+        ...(worker.pr ? { remoteBranch: worker.pr.branch } : {}),
+      });
+      // First publish: remember the PR's head branch, so a later reroute pushes onto it instead of opening a second PR.
+      if (published.url && !worker.pr) worker.pr = { url: published.url, branch: worker.branch! };
+    }
+
+    // A published ticket waits for CI (Lead does not watch it itself), unless the branch runs none.
+    let ci: string | undefined;
+    let ciCapped = false;
+    let ciFailed: { name: string; link: string }[] = [];
+    if (status === "done" && published?.url) {
+      const hasWorkflows = await deps.workspace.hasWorkflows({ repoRoot: worker.repoRoot!, branch: worker.branch! });
+      if (!hasWorkflows) {
+        ci = "none";
+      } else {
+        setState(worker, "ci"); // not counted by busy(): no slot held while CI runs
+        const watched = await deps.workspace.watchChecks({
+          repoRoot: worker.repoRoot!,
+          pr: published.url,
+          timeoutMs: CI_TIMEOUT_MS,
+          signal: worker.controller.signal,
+        });
+        // A stop during the wait already killed gh; report it as stopped, not as a CI outcome.
+        if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
+        if (watched.state === "fail" && worker.ciRounds < CI_FIX_ROUNDS) {
+          worker.ciRounds += 1;
+          const failedList = watched.failed.map((check) => `${check.name} (${check.link})`).join(", ");
+          // The worker held no slot during the CI wait: take one again before relaying, exactly like reroute().
+          await takeSlot(worker);
+          if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
+          await deps.herdr!.sendToAgent(
+            worker.paneId!,
+            `[PI Lead] CI failed on ${published.url}: ${failedList}. Inspect with \`gh run view <run> --log-failed\` or the link, fix on this branch, commit, then call finish again.`,
+          );
+          setState(worker, "running");
+          return; // watch()'s loop reads the worker's next finish
+        }
+        if (watched.state === "pass") {
+          ci = "passed";
+        } else if (watched.state === "none") {
+          ci = "none"; // workflows exist but none runs for this branch
+        } else {
+          status = "partial"; // fail after the fix rounds, timeout or error: cap the report
+          ciCapped = true;
+          ciFailed = watched.failed;
+          ci =
+            watched.state === "fail"
+              ? `failed (${watched.failed.length} check${watched.failed.length === 1 ? "" : "s"})`
+              : watched.state === "timeout"
+                ? "timed out"
+                : `not checked (${watched.error ?? "gh reported no checks"})`;
+        }
+      }
+    }
+
     const keep = status !== "done" && deps.config.keepFailedWorkers;
     worker.verdict = status;
     setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
@@ -714,9 +886,20 @@ export function createDelegator(deps: DelegateDeps) {
     }
     if (status === "needs_human") next.push(keep ? "Ask the user for what the worker needs, then relay the answer." : "Ask the user for what the worker needed, then delegate a new task with the answer.");
     if (status === "partial" || status === "blocked") next.push("Tell the user what is left; continue only if they agree.");
+    if (outOfScope.length > 0) next.push("Files changed outside the scout brief: review them before merging.");
+    if (ciCapped) next.push(`CI is failing on the draft PR ${published?.url}; tell the user.`);
+    if (worker.kind === "scout") next.push("No implement worker started.");
     if (review?.action === "auto_fix") next.push("Review found fixable issues: delegate an implement task with these findings, starting from the reviewed branch.");
     if (review?.action === "escalate") next.push("Review found serious issues: show them to the user before doing anything else.");
-    if (status === "done" && worker.kind !== "review") next.push(`Work is on local branch ${worker.branch}; nothing was pushed or merged.`);
+    if (status === "done" && worker.kind !== "review") {
+      next.push(
+        published?.url
+          ? `Draft PR opened: ${published.url}.`
+          : published?.error
+            ? `PR not opened (${published.error}); work is on local branch ${worker.branch}.`
+            : `Work is on local branch ${worker.branch}; nothing was pushed or merged.`,
+      );
+    }
     const resume = keep
       ? "relay a message to the worker to continue, or stop it"
       : `delegate again, starting from branch ${worker.branch}`;
@@ -739,7 +922,12 @@ export function createDelegator(deps: DelegateDeps) {
         `Status: ${status}` +
           (jevVerdict && jevVerdict !== result.status ? ` (worker said ${result.status}, Jev said ${jevVerdict})` : "") +
           (verifyFailed && judged === "done" ? " (verify failed)" : ""),
+        // Host-written; check names and links (repo-controlled) stay inside the untrusted block below.
+        ...(ci ? [`CI: ${ci}`] : []),
         ...(claimsProgress ? [verificationLine(verify, verification)] : []),
+        // Host-written count only: worker-chosen file names stay inside the untrusted block below.
+        ...(outOfScope.length ? [`${outOfScope.length} changed file${outOfScope.length === 1 ? "" : "s"} outside the scout brief.`] : []),
+        ...(published?.url ? [`PR: ${published.url}`] : []),
         `Branch: ${worker.branch}`,
         `Head: ${collected.head}`,
         `Base: ${worker.base}`,
@@ -752,6 +940,8 @@ export function createDelegator(deps: DelegateDeps) {
         ...(collected.diffStat ? ["", "Diff stat:", unmarked(collected.diffStat)] : []),
         ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
         ...(verification?.outputTail ? ["", "Verify output (tail):", unmarked(verification.outputTail)] : []),
+        ...(outOfScope.length ? ["", "Out-of-scope files:", unmarked(outOfScope.join("\n"))] : []),
+        ...(ciFailed.length ? ["", "CI checks failed:", unmarked(ciFailed.map((check) => `${check.name} (${check.link})`).join("\n"))] : []),
         "</worker-report>",
         // Host-generated from the fixed pattern list, so it sits outside the block; worker-chosen file names stay inside.
         ...(sensitive.length
@@ -770,12 +960,15 @@ export function createDelegator(deps: DelegateDeps) {
         ...(result.quota ? { quota: result.quota } : {}),
         ...(sensitive.length ? { sensitive } : {}),
         ...(verification ? { verification: { exitCode: verification.exitCode, ms: verification.ms } } : {}),
+        ...(outOfScope.length ? { outOfScope } : {}),
+        ...(published?.url ? { pr: published.url } : {}),
         card: {
           ...cardBase(worker),
           ...(worker.branch ? { branch: worker.branch } : {}),
           commits: collected.commits ? collected.commits.trim().split("\n").length : 0,
           ...(collected.diffStat.trim() ? { diff: collected.diffStat.trim().split("\n").at(-1)!.trim() } : {}),
           ...(claimsProgress ? { verify: verificationLine(verify, verification), verified: verification?.exitCode === 0 } : {}),
+          ...(ci ? { ci } : {}),
           next,
         },
       },
@@ -949,8 +1142,12 @@ export function createDelegator(deps: DelegateDeps) {
         };
       }
       const tier: Tier = judged?.tier ?? defaultTier(params.kind);
+      // Every implement ticket is scouted first: the scout gets its own (never
+      // below standard) tier, and the implement tier it hands off to is kept for later.
+      const scouted = params.kind === "implement";
+      const scoutTier: Tier = judged ? tierForDifficulty(judged.difficulty, "scout") : defaultTier("scout");
       const { lead, available } = routable(io);
-      const resolved = resolveRoute(tier, deps.config.tiers, lead, available);
+      const resolved = resolveRoute(scouted ? scoutTier : tier, deps.config.tiers, lead, available);
       const skipped = exhaustedNote();
       if ("error" in resolved) return { status: "failed", text: `No worker model: ${resolved.error}${skipped ? ` (${skipped})` : ""}.` };
       const route = skipped && resolved.note ? { ...resolved, note: `${resolved.note} (${skipped})` } : resolved;
@@ -960,7 +1157,7 @@ export function createDelegator(deps: DelegateDeps) {
       const worker: Worker = {
         id: randomUUID(),
         title: params.title,
-        kind: params.kind,
+        kind: scouted ? "scout" : params.kind,
         state: "queued",
         route,
         tabOpen: false,
@@ -977,6 +1174,8 @@ export function createDelegator(deps: DelegateDeps) {
         renameTries: 0,
         resumed: false,
         reroutes: 0,
+        ciRounds: 0,
+        ...(scouted ? { implementTier: tier } : {}),
       };
       // Workers still in the queue will take slots before this one.
       const ahead = [...workers.values()].filter((w) => ["queued", "starting", "running"].includes(w.state)).length;
@@ -999,6 +1198,7 @@ export function createDelegator(deps: DelegateDeps) {
     async message(ref: string, text: string): Promise<string> {
       const worker = find(ref);
       if ("error" in worker) return worker.error;
+      if (worker.state === "ci") return `Worker "${worker.title}" is waiting for CI; nothing to relay.`;
       if (!worker.paneId || (worker.state !== "running" && worker.state !== "waiting")) {
         return `Worker "${worker.title}" is ${worker.state}; it cannot receive messages.`;
       }

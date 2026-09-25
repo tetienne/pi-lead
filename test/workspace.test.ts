@@ -1,14 +1,33 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { gitWorkspace } from "../src/workspace.ts";
+import { classifyChecks, gitWorkspace } from "../src/workspace.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
+
+test("classifyChecks: fail/cancel win over pending; pass only when every bucket is pass or skipping", () => {
+  assert.deepEqual(
+    classifyChecks([{ name: "a", bucket: "pass", link: "" }, { name: "b", bucket: "skipping", link: "" }]),
+    { state: "pass", failed: [] },
+  );
+  assert.deepEqual(
+    classifyChecks([{ name: "a", bucket: "pass", link: "" }, { name: "b", bucket: "pending", link: "" }]),
+    { state: "pending", failed: [] },
+  );
+  assert.deepEqual(
+    classifyChecks([{ name: "a", bucket: "pending", link: "" }, { name: "b", bucket: "fail", link: "https://x" }]),
+    { state: "fail", failed: [{ name: "b", link: "https://x" }] },
+  );
+  assert.deepEqual(
+    classifyChecks([{ name: "c", bucket: "cancel", link: "https://y" }]),
+    { state: "fail", failed: [{ name: "c", link: "https://y" }] },
+  );
+});
 
 test("a worker's branch and commits are visible from the repo through its worktree", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-lead-ws-"));
@@ -47,4 +66,25 @@ test("a worker's branch and commits are visible from the repo through its worktr
 
   await gitWorkspace.remove(root);
   await assert.rejects(readFile(join(repo, "a.txt")));
+});
+
+test("addedFiles lists only files a branch adds, not ones it modifies", async () => {
+  const repo = await mkdtemp(join(tmpdir(), "pi-lead-ws-added-"));
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  await writeFile(join(repo, "src.ts"), "one\n");
+  git(repo, "add", ".");
+  git(repo, "commit", "-qm", "init");
+  const base = await gitWorkspace.resolveBase({ repoRoot: repo });
+
+  git(repo, "checkout", "-qb", "feature");
+  await writeFile(join(repo, "src.ts"), "two\n");
+  await mkdir(join(repo, "test"));
+  await writeFile(join(repo, "test", "src.test.ts"), "check");
+  git(repo, "add", ".");
+  git(repo, "commit", "-qm", "work");
+
+  const added = await gitWorkspace.addedFiles({ repoRoot: repo, branch: "feature", base });
+  assert.deepEqual(added, ["test/src.test.ts"]);
+
+  assert.equal(await gitWorkspace.currentBranch(repo), "feature");
 });
