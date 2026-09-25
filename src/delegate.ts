@@ -6,7 +6,7 @@ import type { LeadConfig, Tier } from "./config.ts";
 import { isUsageError, type Herdr } from "./herdr.ts";
 import { defaultTier, tierForDifficulty, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, PUBLISHED_KINDS, workerPrompt, WRITES_CODE, type Verification, type WorkerBrief, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, PUBLISHED_KINDS, readJsonFile, workerPrompt, WRITES_CODE, type Verification, type WorkerBrief, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
@@ -1115,15 +1115,30 @@ export function createDelegator(deps: DelegateDeps) {
     },
 
     /** Relay text to a worker: steer a running one, or resume one waiting on a question. */
-    async message(ref: string, text: string): Promise<string> {
+    async message(ref: string, text: string, allowFiles?: string[]): Promise<string> {
       const worker = find(ref);
       if ("error" in worker) return worker.error;
       if (!worker.paneId || (worker.state !== "running" && worker.state !== "waiting")) {
         return `Worker "${worker.title}" is ${worker.state}; it cannot receive messages.`;
       }
       if ((await readIfPresent(worker.exitPath!))?.trim()) return `Worker "${worker.title}" has exited; it cannot receive messages.`;
+      let sent = text;
+      if (allowFiles?.length) {
+        if (!worker.brief) return `Worker "${worker.title}" has no scout brief to widen; it is not scoped to an allowed-files list.`;
+        const added = normalizeAllowed(allowFiles).filter((path) => !worker.brief!.allowedFiles.includes(path));
+        worker.brief.allowedFiles.push(...added);
+        worker.brief.protectedFiles = worker.brief.protectedFiles.filter((path) => !added.includes(path));
+        if (worker.taskDir) {
+          const taskPath = join(worker.taskDir, "task.json");
+          const task = await readJsonFile<WorkerTask>(taskPath);
+          task.allowedFiles = worker.brief.allowedFiles;
+          task.protectedFiles = worker.brief.protectedFiles;
+          await writeFile(taskPath, JSON.stringify(task, null, 2));
+        }
+        if (added.length) sent = `${text}\n\n(The Lead widened your allowed files; you may now also change: ${added.join(", ")}.)`;
+      }
       try {
-        await deps.herdr!.sendToAgent(worker.paneId, `[PI Lead] ${text}`);
+        await deps.herdr!.sendToAgent(worker.paneId, `[PI Lead] ${sent}`);
       } catch (error) {
         return `Could not reach "${worker.title}" through Herdr: ${errorText(error)}`;
       }

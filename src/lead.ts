@@ -313,6 +313,12 @@ export default function lead(pi: ExtensionAPI) {
       action: StringEnum(WORKER_ACTIONS, { description: "list, message or stop" }),
       id: Type.Optional(Type.String({ description: "Worker id prefix, title or branch (message and stop)" })),
       message: Type.Optional(Type.String({ description: "Text for the worker (message)" })),
+      allowFiles: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "message only: extra repo-relative paths an implementer built on a scout brief may now change, only when the user explicitly approved widening its scope",
+        }),
+      ),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
@@ -329,7 +335,7 @@ export default function lead(pi: ExtensionAPI) {
       } else if (!params.id) {
         text = "Give the worker's id, title or branch.";
       } else if (params.action === "message") {
-        text = params.message ? await current.message(params.id, params.message) : "Give the message to send.";
+        text = params.message ? await current.message(params.id, params.message, params.allowFiles) : "Give the message to send.";
       } else {
         text = await current.stop(params.id);
       }

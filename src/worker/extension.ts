@@ -17,6 +17,10 @@ import { registerWebSearch } from "./web-search.ts";
 export const COMMIT_LEFTOVERS =
   '{ git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes"); } 2>&1';
 
+/** A `done` finish still runs hooks; any other status is a local WIP commit that must not be blocked by lint. */
+export const COMMIT_LEFTOVERS_NO_VERIFY =
+  '{ git add -A && (git diff --cached --quiet || git commit -q --no-verify -m "PI Lead worker: uncommitted changes"); } 2>&1';
+
 /** Run a shell command on the host, in `cwd`. Never rejects: a non-zero exit is just a result. */
 function runShell(command: string, cwd: string): Promise<{ exitCode: number; stdout: string }> {
   return new Promise((resolve) => {
@@ -84,12 +88,13 @@ export default function worker(pi: ExtensionAPI) {
   pi.on("tool_call", async (event) => {
     if (event.toolName !== "write" && event.toolName !== "edit") return undefined;
     const current = await loadTask();
-    const allowedFiles = current.allowedFiles;
+    // Read fresh every call, not the cached task: the Lead can widen scope mid-run by rewriting task.json.
+    const path = pi.getFlag("pi-lead-task") as string;
+    const { allowedFiles, protectedFiles = [] } = await readJsonFile<WorkerTask>(path);
     if (!allowedFiles) return undefined;
     const rawPath = (event.input as { path?: unknown }).path;
     if (typeof rawPath !== "string" || !rawPath) return undefined;
     const repoPath = relative(current.worktreePath, resolvePath(current.worktreePath, rawPath)).split(sep).join("/");
-    const protectedFiles = current.protectedFiles ?? [];
     const say = (why: string) => ({
       block: true as const,
       reason: `PI Lead scout guard: ${why} Allowed files: ${allowedFiles.join(", ")}. If another file is truly required, stop and call finish with status partial explaining why.`,
@@ -100,11 +105,11 @@ export default function worker(pi: ExtensionAPI) {
   });
 
   /** Commit anything left in the tree, so the branch fetched back holds every change. */
-  const commitLeftovers = async () => {
+  const commitLeftovers = async (status?: WorkerResult["status"]) => {
     const current = await loadTask();
     // Without it, execFile would commit in whatever repo Pi was started from.
     if (!current.worktreePath) throw new Error("the task names no worktree to commit in");
-    return runShell(COMMIT_LEFTOVERS, current.worktreePath);
+    return runShell(status === "done" ? COMMIT_LEFTOVERS : COMMIT_LEFTOVERS_NO_VERIFY, current.worktreePath);
   };
 
   const writeResult = async (result: WorkerResult) => {
@@ -140,7 +145,7 @@ export default function worker(pi: ExtensionAPI) {
       }
       // A failed commit (hook, identity) must not lose work: report it to the
       // model instead of finishing.
-      const commit = await commitLeftovers();
+      const commit = await commitLeftovers(params.status);
       if (commit.exitCode !== 0) {
         throw new Error(`Could not commit the remaining changes; fix this, commit, then call finish again:\n${commit.stdout.slice(-2_000)}`);
       }

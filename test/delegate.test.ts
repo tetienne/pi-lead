@@ -1061,6 +1061,54 @@ test("implement is scouted first: the implementer builds on the scout's branch w
   assert.ok(progress.some((line) => line.includes('"Feature" scout mapped 1 file; implement starting on')));
 });
 
+test("a message with allowFiles widens a scoped implementer's task.json, so it finishes done without outOfScope", async (t) => {
+  const seen: Seen = {};
+  let calls = 0;
+  const { delegator, nextOutcome } = await setup(t, {
+    seen,
+    replies: [{ status: "needs_human", summary: "may I touch src/extra.ts too?" }, { status: "done" }],
+    workspace: {
+      ...fakeWorkspace([]),
+      collect: async () => {
+        calls += 1;
+        return calls === 1
+          ? { commits: "s1 scout tests", diffStat: "", changedFiles: ["test/a.test.ts"], head: "s1" }
+          : { commits: "i1 impl", diffStat: "", changedFiles: ["src/a.ts", "src/extra.ts"], head: "i1" };
+      },
+    },
+    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
+  });
+  const question = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Feature", task: "t" }, io);
+  assert.ok(started.status === "started");
+  await question;
+  assert.equal(delegator.list()[0]!.state, "waiting");
+
+  const second = nextOutcome();
+  const reply = await delegator.message(started.worker.id.slice(0, 8), "go ahead, extend the scope", ["src/extra.ts"]);
+  assert.match(reply, /Sent to "Feature"/);
+
+  const taskDir = dirname(seen.task!.resultPath);
+  const task = JSON.parse(await readFile(join(taskDir, "task.json"), "utf8"));
+  assert.deepEqual(task.allowedFiles, ["src/a.ts", "src/extra.ts"]);
+
+  const outcome = await second;
+  assert.equal(outcome.status, "done");
+  assert.deepEqual(outcome.details.outOfScope, undefined);
+});
+
+test("a message with allowFiles to a worker with no scout brief is refused", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, {
+    replies: [{ status: "needs_human", summary: "which format?" }],
+  });
+  const pending = nextOutcome();
+  const started = await delegator.start({ kind: "prototype", title: "Dates", task: "t" }, io);
+  assert.ok(started.status === "started");
+  await pending;
+  const reply = await delegator.message(started.worker.id.slice(0, 8), "go ahead", ["src/extra.ts"]);
+  assert.match(reply, /has no scout brief to widen/);
+});
+
 test("the scout is never sent to the fast tier, even for a trivial ticket; a hard one still gets deep", async (t) => {
   const trivial = await setup(t, { judge: { available: true, intake: async () => ({ tier: { tier: "fast", difficulty: 0.4 } }) } });
   const pending = trivial.nextOutcome();
