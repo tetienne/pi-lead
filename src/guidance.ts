@@ -79,9 +79,10 @@ blocked), ask the user and relay the answer with \`worker\` (action
 \`message\`); the worker resumes and reports again. Use \`worker\` to list or
 stop workers too. Never push, merge or delete branches unless the user asks.
 
-When every ticket of a spec is DONE, offer the user
-\`/improve-codebase-architecture\` scoped to the files those tickets changed;
-run it here only if they agree. Never after a single ticket.
+When the workers for every ticket of a spec have reported done, offer the user
+\`/improve-codebase-architecture\` once, scoped to the files those workers
+changed (read them with \`git_read\`); run it here only if they agree, and do
+its exploration step yourself instead of spawning a sub-agent.
 
 Skill files:
 ${skills.map((skill) => `- ${skill.name}: \`${skill.path}\``).join("\n")}
