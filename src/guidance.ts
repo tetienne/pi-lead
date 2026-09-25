@@ -77,7 +77,11 @@ later as a message: tell the user the outcome in a few lines and follow its
 "Next" section. When a worker waits on a question (needs_human, partial,
 blocked), ask the user and relay the answer with \`worker\` (action
 \`message\`); the worker resumes and reports again. Use \`worker\` to list or
-stop workers too. Never push, merge or delete branches unless the user asks.
+stop workers too. Never merge or delete branches unless the user asks. PI Lead
+itself pushes a finished ticket's branch and opens a draft PR for it: never
+ask the user whether to open one, and never push a branch yourself. PI Lead
+does not watch CI itself either; the report arrives once CI is settled (or a
+failure was relayed back to the worker and fixed).
 
 When the workers for every ticket of a spec have reported done, offer the user
 \`/improve-codebase-architecture\` once, scoped to the files those workers

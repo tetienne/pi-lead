@@ -8,7 +8,7 @@ import type { WorkKind, WorkerVerdict } from "./jev.ts";
  *
  * - `○` queued or starting, `●` running;
  * - `?` waiting for the user's answer, `~` partial, `✗` blocked or failed;
- * - `✓` done, `-` stopped.
+ * - `✓` done, `-` stopped, `…` waiting on CI.
  *
  * Titles come from the Lead model, which may have read a worker report, so
  * whatever reaches Herdr passes an allowlist; everything else here is a
@@ -16,7 +16,7 @@ import type { WorkKind, WorkerVerdict } from "./jev.ts";
  */
 
 /** The lifecycle states of delegate.ts, repeated so this module stays free of it. */
-export type WorkerDisplayState = "queued" | "starting" | "running" | "waiting" | "done" | "failed" | "stopped";
+export type WorkerDisplayState = "queued" | "starting" | "running" | "waiting" | "ci" | "done" | "failed" | "stopped";
 
 export type WorkerView = {
   kind: WorkKind;
@@ -35,6 +35,8 @@ export function stateGlyph({ state, verdict }: Pick<WorkerView, "state" | "verdi
       return "●";
     case "waiting":
       return verdict === "partial" ? "~" : verdict === "blocked" ? "✗" : "?";
+    case "ci":
+      return "…";
     case "done":
       return "✓";
     case "failed":
@@ -82,17 +84,19 @@ export function stateLabels(worker: WorkerView, route: { model: string; thinking
   const idle =
     worker.state === "waiting"
       ? waitingPhrase(worker.verdict)
-      : worker.state === "done"
-        ? "done"
-        : worker.state === "failed"
-          ? "failed"
-          : worker.state === "stopped"
-            ? "stopped"
-            : "idle"; // live, but its Pi stopped without a finish: nothing more to say than Herdr's own
+      : worker.state === "ci"
+        ? "waiting for CI"
+        : worker.state === "done"
+          ? "done"
+          : worker.state === "failed"
+            ? "failed"
+            : worker.state === "stopped"
+              ? "stopped"
+              : "idle"; // live, but its Pi stopped without a finish: nothing more to say than Herdr's own
   return {
     working: `${worker.kind} · ${model} · ${route.thinking}`,
     idle,
-    blocked: worker.state === "waiting" ? idle : "asks you in its tab",
+    blocked: worker.state === "waiting" || worker.state === "ci" ? idle : "asks you in its tab",
   };
 }
 

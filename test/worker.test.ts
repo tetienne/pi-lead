@@ -180,6 +180,116 @@ test("a verify run that errors or times out has exit code -1 and never throws", 
   assert.match(stoppedByUser.outputTail, /\[PI Lead: aborted\]$/);
 });
 
+test("a scout finishing done without allowedFiles is refused", async () => {
+  const handlers = new Map<string, (event: any, ctx?: any) => any>();
+  const tools = new Map<string, any>();
+  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
+  const taskPath = join(dir, "task.json");
+  const resultPath = join(dir, "result.json");
+  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "scout", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: dir }));
+  worker({
+    registerFlag: () => undefined,
+    getFlag: () => taskPath,
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    on: (event: string, handler: any) => handlers.set(event, handler),
+  } as any);
+  const ctx = { ui: { setStatus: () => undefined } };
+  await assert.rejects(
+    () => tools.get("finish")!.execute("1", { status: "done", summary: "s" }, undefined, undefined, ctx),
+    /must call finish with a non-empty allowedFiles/,
+  );
+  await assert.rejects(
+    () => tools.get("finish")!.execute("1", { status: "done", summary: "s", allowedFiles: [] }, undefined, undefined, ctx),
+    /must call finish with a non-empty allowedFiles/,
+    "an empty array counts as missing",
+  );
+  await assert.rejects(readFile(resultPath, "utf8"), "nothing was written");
+});
+
+test("a scout finishing done with allowedFiles reports them", async () => {
+  const { execFile } = await import("node:child_process");
+  const run = (args: string[], cwd: string) => new Promise<void>((resolve, reject) => execFile("git", args, { cwd }, (error) => (error ? reject(error) : resolve())));
+  const worktree = await mkdtemp(join(tmpdir(), "pi-lead-worker-git-"));
+  await run(["init", "-q"], worktree);
+  await run(["config", "user.email", "worker@test"], worktree);
+  await run(["config", "user.name", "Worker"], worktree);
+  await writeFile(join(worktree, "a.txt"), "x");
+
+  const stateDir = await mkdtemp(join(tmpdir(), "pi-lead-worker-state-"));
+  const taskPath = join(stateDir, "task.json");
+  const resultPath = join(stateDir, "result.json");
+  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "scout", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: worktree }));
+  const tools = new Map<string, any>();
+  worker({
+    registerFlag: () => undefined,
+    getFlag: () => taskPath,
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    on: () => undefined,
+  } as any);
+  await tools.get("finish")!.execute(
+    "1",
+    { status: "done", summary: "mapped it", findings: "brief", allowedFiles: ["src/a.ts"] },
+    undefined,
+    undefined,
+    { ui: { setStatus: () => undefined } },
+  );
+  const result = parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t");
+  assert.deepEqual(result.allowedFiles, ["src/a.ts"]);
+  assert.equal(result.findings, "brief");
+});
+
+test("the tool_call guard blocks write/edit outside the scout brief and on a protected file, and leaves bash alone", async () => {
+  const handlers = new Map<string, (event: any, ctx?: any) => any>();
+  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
+  const taskPath = join(dir, "task.json");
+  await writeFile(
+    taskPath,
+    JSON.stringify({
+      version: 1,
+      id: "t",
+      kind: "implement",
+      branch: "pi-lead/x-1",
+      title: "x",
+      worktreePath: dir,
+      allowedFiles: ["src/a.ts"],
+      protectedFiles: ["test/a.test.ts"],
+    }),
+  );
+  worker({
+    registerFlag: () => undefined,
+    getFlag: () => taskPath,
+    registerTool: () => undefined,
+    on: (event: string, handler: any) => handlers.set(event, handler),
+  } as any);
+  const guard = handlers.get("tool_call")!;
+  const call = (toolName: string, path: string) => guard({ type: "tool_call", toolCallId: "1", toolName, input: { path } });
+
+  assert.equal(await call("write", "src/a.ts"), undefined, "inside the allowed list");
+  const outside = await call("write", "src/rogue.ts");
+  assert.ok(outside?.block);
+  assert.match(outside!.reason, /src\/rogue\.ts is not in the scout's allowed files/);
+  assert.match(outside!.reason, /Allowed files: src\/a\.ts/);
+  const guarded = await call("edit", "test/a.test.ts");
+  assert.ok(guarded?.block);
+  assert.match(guarded!.reason, /is a scout test; make it pass instead of changing it/);
+  assert.equal(await call("bash", "src/rogue.ts"), undefined, "bash is never intercepted");
+});
+
+test("the tool_call guard does nothing without a brief", async () => {
+  const handlers = new Map<string, (event: any, ctx?: any) => any>();
+  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
+  const taskPath = join(dir, "task.json");
+  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", worktreePath: dir }));
+  worker({
+    registerFlag: () => undefined,
+    getFlag: () => taskPath,
+    registerTool: () => undefined,
+    on: (event: string, handler: any) => handlers.set(event, handler),
+  } as any);
+  const guard = handlers.get("tool_call")!;
+  assert.equal(await guard({ type: "tool_call", toolCallId: "1", toolName: "write", input: { path: "anything.ts" } }), undefined);
+});
+
 test("the leftovers commit reports git add's own error on stdout", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-lead-not-a-repo-"));
   const { execFile } = await import("node:child_process");
