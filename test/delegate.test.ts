@@ -469,6 +469,7 @@ test("a ticket Jev judges not ready is not delegated unless the user confirmed i
   const refused = await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer" }, io);
   assert.equal(refused.status, "not_ready");
   assert.match(refused.text, /no verifiable acceptance criteria/);
+  assert.match(refused.text, /gives no reason/);
   assert.equal(log.length, 0);
   const pending = nextOutcome();
   assert.equal((await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer", confirmedReady: true }, io)).status, "started");
