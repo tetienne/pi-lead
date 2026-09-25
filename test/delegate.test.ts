@@ -524,7 +524,7 @@ test("confirmed tickets and other kinds skip readiness but Jev still picks the t
 test("reviews start from the reviewed branch and report Jev's severity", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
     replies: [{ status: "done", findings: "SQL injection in search" }],
-    judge: { reviewSeverity: async () => ({ severity: 3.8, action: "escalate" }) },
+    judge: { reviewSeverity: async () => ({ severity: 3.8, action: "fix" }) },
   });
   const pending = nextOutcome();
   await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
@@ -539,6 +539,23 @@ test("review findings are fixed even when Jev cannot score them", async (t) => {
   const pending = nextOutcome();
   await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
   assert.match((await pending).text, /Review found issues: delegate an implement task/);
+});
+
+test("a praise-only review asks for no fix", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, {
+    replies: [{ status: "done", findings: "Looks good" }],
+    judge: { reviewSeverity: async () => ({ severity: 0.2, action: "none" }) },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
+  assert.doesNotMatch((await pending).text, /Review found issues/);
+});
+
+test("an unfinished review defers to the user instead of auto-fixing", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, { replies: [{ status: "partial", findings: "Half reviewed" }] });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
+  assert.doesNotMatch((await pending).text, /Review found issues/);
 });
 
 test("a branch touching host-executed files gets a host warning outside the worker block", async (t) => {

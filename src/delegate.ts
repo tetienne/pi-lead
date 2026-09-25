@@ -819,7 +819,7 @@ export function createDelegator(deps: DelegateDeps) {
     else if (pr && !pr.url) next.push(`The worker reported done but opened no PR on branch ${worker.remoteBranch}; tell the user.`);
     if (pr?.url && (pr.state === "fail" || pr.state === "pending")) next.push(`CI is not green on ${pr.url}; tell the user.`);
     if (worker.kind === "scout") next.push("No implement worker started.");
-    if (worker.kind === "review" && result.findings && review?.action !== "none") next.push("Review found issues: delegate an implement task with these findings, starting from the reviewed branch, without asking the user first.");
+    if (status === "done" && worker.kind === "review" && result.findings && review?.action !== "none") next.push("Review found issues: delegate an implement task with these findings, starting from the reviewed branch, without asking the user first.");
     if (status === "done" && worker.kind !== "review") {
       next.push(pr?.url ? `PR opened: ${pr.url}.` : `Work is on local branch ${worker.branch}; nothing was pushed or merged.`);
     }
