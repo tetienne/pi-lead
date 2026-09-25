@@ -81,7 +81,9 @@ stop workers too. Never merge or delete branches unless the user asks. PI Lead
 itself pushes a finished ticket's branch and opens a draft PR for it: never
 ask the user whether to open one, and never push a branch yourself. PI Lead
 does not watch CI itself either; the report arrives once CI is settled (or a
-failure was relayed back to the worker and fixed).
+failure was relayed back to the worker and fixed). If CI still failed, do not
+inspect runs or logs yourself (no \`gh\`): relay it to the worker with
+\`worker\` (action \`message\`); it reads the logs and fixes.
 
 When the workers for every ticket of a spec have reported done, offer the user
 \`/improve-codebase-architecture\` once, scoped to the files those workers
