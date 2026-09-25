@@ -546,6 +546,14 @@ export function createDelegator(deps: DelegateDeps) {
       if (Date.now() - lastBeat >= heartbeatMs) {
         // By now Herdr has detected the Pi, if the name failed at tab creation.
         if (worker.state === "running") nameAgent(worker);
+        // A pane that died before run.sh ran leaves no exit file and no result: catch it via Herdr's own workspace list.
+        if (worker.workspaceId && deps.herdr) {
+          const workspaces = await deps.herdr.listWorkspaces().catch(() => undefined);
+          // A listing without the Lead's own workspace is not trustworthy (as in reconcile).
+          if (workspaces?.includes(deps.herdr.workspace) && !workspaces.includes(worker.workspaceId)) {
+            throw new Error("worker tab closed before Pi finished");
+          }
+        }
         lastBeat = Date.now();
       }
       // An unanswered question must not keep a worker running forever: the abort ends in `fail`.
@@ -605,7 +613,8 @@ export function createDelegator(deps: DelegateDeps) {
     if (PUBLISHED_KINDS.includes(worker.kind)) worker.remoteBranch ??= worker.branch;
     worker.tabLabel = openingLabel(worker);
     ({ workspaceId: worker.workspaceId, paneId: worker.paneId } = await deps.herdr!.createWorktree({
-      cwd: worker.repoRoot,
+      // Herdr's `worktree create` needs the main checkout: it rejects a linked worktree as its `cwd`.
+      cwd: await deps.workspace.mainCheckout(worker.repoRoot),
       branch: worker.branch,
       base: worker.base,
       path: worker.worktreePath,
