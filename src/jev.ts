@@ -124,7 +124,7 @@ export const SEVERITY_RUBRIC = [
 ] as const;
 
 export function actionForSeverity(severity: number): ReviewAction {
-  if (severity < 1.5) return "none";
+  if (severity < 0.5) return "none";
   if (severity < 3) return "auto_fix";
   return "escalate";
 }

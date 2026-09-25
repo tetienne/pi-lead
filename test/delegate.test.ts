@@ -531,7 +531,14 @@ test("reviews start from the reviewed branch and report Jev's severity", async (
   const outcome = await pending;
   assert.ok(log.some((line) => line.endsWith("from feature/login")));
   assert.match(outcome.text, /SQL injection/);
-  assert.match(outcome.text, /serious issues: show them to the user/);
+  assert.match(outcome.text, /Review found issues: delegate an implement task .* without asking the user first/);
+});
+
+test("review findings are fixed even when Jev cannot score them", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, { replies: [{ status: "done", findings: "Rename foo to bar" }] });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
+  assert.match((await pending).text, /Review found issues: delegate an implement task/);
 });
 
 test("a branch touching host-executed files gets a host warning outside the worker block", async (t) => {

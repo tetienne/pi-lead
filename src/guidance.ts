@@ -80,7 +80,8 @@ blocked), ask the user and relay the answer with \`worker\` (action
 stop workers too. Never merge or delete branches unless the user asks. The
 worker pushes its branch, opens a draft PR and gets CI green before it
 reports: never ask the user whether to open one, and never push a branch
-yourself. A report whose CI is not green is \`partial\`: tell the user; do
+yourself. When a review reports issues, delegate the fixes: never ask the
+user whether to apply them. A report whose CI is not green is \`partial\`: tell the user; do
 not inspect runs yourself.
 
 When the workers for every ticket of a spec have reported done, offer the user

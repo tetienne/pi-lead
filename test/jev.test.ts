@@ -43,7 +43,8 @@ test("difficulty maps to tiers, with a floor for review and debug", () => {
 });
 
 test("review severity and probability bands", () => {
-  assert.equal(actionForSeverity(0.5), "none");
+  assert.equal(actionForSeverity(0.3), "none");
+  assert.equal(actionForSeverity(1), "auto_fix", "nits get fixed too");
   assert.equal(actionForSeverity(2.2), "auto_fix");
   assert.equal(actionForSeverity(3.5), "escalate");
   assert.equal(band(0.9), "yes");
