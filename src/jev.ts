@@ -18,7 +18,7 @@ import type { Verification } from "./protocol.ts";
 export type WorkKind = "implement" | "prototype" | "debug" | "review" | "research" | "scout";
 export type WorkerVerdict = "done" | "partial" | "blocked" | "needs_human";
 export type FailureKind = "transient" | "environment" | "task_bug" | "needs_info";
-export type ReviewAction = "none" | "auto_fix" | "escalate";
+export type ReviewAction = "none" | "fix";
 export type EgressDecision = "allow" | "deny" | "ask";
 export type TierJudgment = { tier: Tier; difficulty: number };
 export type ReadinessJudgment = { ready: boolean; missing: string[] };
@@ -124,9 +124,7 @@ export const SEVERITY_RUBRIC = [
 ] as const;
 
 export function actionForSeverity(severity: number): ReviewAction {
-  if (severity < 1.5) return "none";
-  if (severity < 3) return "auto_fix";
-  return "escalate";
+  return severity < 0.5 ? "none" : "fix";
 }
 
 /** Map a yes-probability to a three-way decision with an uncertainty band. */

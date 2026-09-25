@@ -43,9 +43,9 @@ test("difficulty maps to tiers, with a floor for review and debug", () => {
 });
 
 test("review severity and probability bands", () => {
-  assert.equal(actionForSeverity(0.5), "none");
-  assert.equal(actionForSeverity(2.2), "auto_fix");
-  assert.equal(actionForSeverity(3.5), "escalate");
+  assert.equal(actionForSeverity(0.3), "none");
+  assert.equal(actionForSeverity(1), "fix", "nits get fixed too");
+  assert.equal(actionForSeverity(3.5), "fix");
   assert.equal(band(0.9), "yes");
   assert.equal(band(0.1), "no");
   assert.equal(band(0.5), "unsure");
@@ -495,7 +495,7 @@ test("each judgment emits one decision: applied or fallback", async () => {
     assert.deepEqual(
       [...decisions, ...unsureDecisions].map((d) => [d.kind, d.applied, d.outcome, d.detail]),
       [
-        ["review", "jev", "escalate", "severity 3.5/4"],
+        ["review", "jev", "fix", "severity 3.5/4"],
         ["review", "fallback", "unsure → no severity", undefined],
       ],
     );

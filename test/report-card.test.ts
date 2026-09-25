@@ -85,7 +85,7 @@ test("overrides, failed verify, review severity and sensitive files stand out", 
       status: "partial",
       reported: "done",
       jevVerdict: "partial",
-      review: { severity: 2.5, action: "auto_fix" },
+      review: { severity: 2.5, action: "fix" },
       sensitive: ["package.json scripts", ".github/workflows/"],
       card: card({ verify: "Verify: `npm test -- --passed` failed (exit 1, 12s).", verified: false }),
     },
@@ -96,7 +96,7 @@ test("overrides, failed verify, review severity and sensitive files stand out", 
   assert.match(text, /^<warning>~<\/warning> <accent>implement<\/accent> · CSV export: <warning>partly done<\/warning> in 12m/);
   assert.match(text, /<warning> {2}▲ the worker said done, Jev judged partial<\/warning>/);
   assert.match(text, /<warning> {2}Verify: `npm test -- --passed` failed/, "the colour comes from the exit code, not the text");
-  assert.match(text, /Jev review severity 2\.5\/4 → auto_fix/);
+  assert.match(text, /Jev review severity 2\.5\/4 → fix/);
   assert.match(text, /<warning> {2}! review before merging: package\.json scripts, \.github\/workflows\/<\/warning>/);
 });
 
