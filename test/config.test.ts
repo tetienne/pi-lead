@@ -18,22 +18,27 @@ async function dirs(global?: object, project?: object) {
 }
 
 test("settings in their right place produce no notice", async () => {
-  const { agentDir, cwd } = await dirs({ leadGuard: "off", maxWorkers: 3 }, { verify: "npm test", maxWorkers: 4 });
+  const { agentDir, cwd } = await dirs({ leadGuard: "off" }, { verify: "npm test" });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
   assert.deepEqual(ignored, []);
   assert.equal(config.leadGuard, "off");
   assert.equal(config.verify, "npm test");
-  assert.equal(config.maxWorkers, 4);
 
   const none = await dirs();
   assert.deepEqual((await loadConfigWithNotices(none.cwd, { projectTrusted: false, agentDir: none.agentDir })).ignored, []);
 });
 
+test("an old maxWorkers key in a user file is ignored, no error and no notice", async () => {
+  const { agentDir, cwd } = await dirs({ maxWorkers: 3 });
+  const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
+  assert.deepEqual(ignored, []);
+  assert.equal((config as { maxWorkers?: number }).maxWorkers, undefined);
+});
+
 test("verify in the global config is dropped with a notice naming the file", async () => {
-  const { agentDir, cwd } = await dirs({ verify: "make secret-target", maxWorkers: 3 });
+  const { agentDir, cwd } = await dirs({ verify: "make secret-target" });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
   assert.equal(config.verify, undefined);
-  assert.equal(config.maxWorkers, 3);
   assert.equal(ignored.length, 1);
   assert.equal(
     ignored[0],
@@ -43,20 +48,18 @@ test("verify in the global config is dropped with a notice naming the file", asy
 });
 
 test("a project file of an untrusted project is ignored with a notice on how to trust it", async () => {
-  const { agentDir, cwd } = await dirs(undefined, { verify: "npm test", maxWorkers: 5 });
+  const { agentDir, cwd } = await dirs(undefined, { verify: "npm test" });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: false, agentDir });
   assert.equal(config.verify, undefined);
-  assert.equal(config.maxWorkers, 2);
   assert.equal(ignored.length, 1);
   assert.match(ignored[0]!, /^PI Lead: \.pi\/pi-lead\.json is ignored because this project is not trusted in Pi \(.*\/trust.*--approve.*\)\.$/);
   assert.doesNotMatch(ignored[0]!, /npm test/);
 });
 
 test("leadGuard in the project file is dropped with a notice", async () => {
-  const { agentDir, cwd } = await dirs(undefined, { leadGuard: "off", maxWorkers: 5 });
+  const { agentDir, cwd } = await dirs(undefined, { leadGuard: "off" });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
   assert.equal(config.leadGuard, "confirm");
-  assert.equal(config.maxWorkers, 5);
   assert.deepEqual(ignored, ["PI Lead: `leadGuard` in .pi/pi-lead.json is ignored; only the global config can change it."]);
 });
 

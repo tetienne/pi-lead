@@ -80,8 +80,8 @@ you ─► Lead (Pi, your tab)
   question plays a sound. Titles are reduced to letters, digits and plain
   punctuation, and notifications never quote the worker. The Lead's status
   line counts live workers (`● 2 running · 1 needs you`, in the warning colour
-  while one waits on you), and events such as "started on…" or "waits for a
-  free worker slot" appear as dim transcript lines that the model never sees.
+  while one waits on you), and events such as "started on…" or "waits for
+  overlapping…" appear as dim transcript lines that the model never sees.
   Each result shows in the Lead as a card: verdict, time, model, commits and
   diff, the verify line, the branch, review hints and next steps, with every
   line the worker wrote behind a `│` gutter, marked untrusted. Expand it to
@@ -149,7 +149,6 @@ A global file, for example:
     "deep":     { "model": "openai-codex/gpt-6-astra", "thinking": "xhigh",
                   "fallbacks": [{ "model": "opencode-go/deepseek-v4-pro", "thinking": "max" }] }
   },
-  "maxWorkers": 2,
   "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
   "keepFailedWorkers": true,
   "leadGuard": "confirm",

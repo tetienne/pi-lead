@@ -157,7 +157,6 @@ async function setup(t: TestContext, options: {
   judge?: Partial<Judge>;
   replies?: Reply[];
   herdr?: Herdr | false;
-  maxWorkers?: number;
   seen?: Seen;
   config?: Parameters<typeof mergeConfig>[1];
   herdrOptions?: Parameters<typeof fakeHerdr>[3];
@@ -171,7 +170,7 @@ async function setup(t: TestContext, options: {
   const progress: string[] = [];
   const stateRoot = options.stateRoot ?? (await mkdtemp(join(tmpdir(), "pi-lead-state-")));
   const delegator = createDelegator({
-    config: mergeConfig(DEFAULT_CONFIG, { maxWorkers: options.maxWorkers ?? 2, ...options.config }),
+    config: mergeConfig(DEFAULT_CONFIG, { ...options.config }),
     judge: { ...noJudge, ...options.judge },
     herdr:
       options.herdr === false
@@ -505,7 +504,6 @@ test("the implement path asks Jev readiness and difficulty in one call", async (
 
 test("confirmed tickets and other kinds skip readiness but Jev still picks the tier", async (t) => {
   const { delegator, nextOutcome } = await setup(t, {
-    maxWorkers: 1,
     judge: {
       intake: async () => ({ readiness: { ready: false, missing: ["acceptance"] } }),
       modelTier: async () => ({ tier: "deep", difficulty: 3.4 }),
@@ -703,11 +701,12 @@ test("queued overlapping tickets start one at a time, in order", async (t) => {
   assert.deepEqual(opens, ["open ○ A", "close tab-1", "open ○ B", "close tab-2", "open ○ C", "close tab-3"]);
 });
 
-test("a queued worker can be stopped before its turn", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, { replies: ["silent"], maxWorkers: 1 });
-  await delegator.start({ kind: "research", title: "First", task: "a" }, io);
-  const queued = await delegator.start({ kind: "research", title: "Second", task: "b" }, io);
-  assert.equal(queued.status, "queued");
+test("a worker queued behind an overlapping one can be stopped before its turn", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, { replies: ["silent"], judge: { overlap: async () => true } });
+  await delegator.start({ kind: "prototype", title: "First", task: "a" }, io);
+  const second = await delegator.start({ kind: "prototype", title: "Second", task: "b" }, io);
+  assert.equal(second.status, "started", "delegate always starts; queuing shows up in the worker's own state");
+  assert.equal(delegator.list()[1]!.state, "queued");
   const stopped = nextOutcome();
   await delegator.stop("second");
   const outcome = await stopped;

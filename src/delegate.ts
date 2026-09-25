@@ -111,7 +111,7 @@ export type ReportCard = {
 };
 
 export type StartResult =
-  | { status: "started" | "queued"; worker: WorkerInfo; text: string }
+  | { status: "started"; worker: WorkerInfo; text: string }
   | { status: "not_ready"; missing: string[]; text: string }
   | { status: "failed"; text: string };
 
@@ -507,18 +507,12 @@ export function createDelegator(deps: DelegateDeps) {
       const others = busy().filter((other) => other !== worker);
       const blockers: Worker[] = [];
       for (const other of others) if (await mustWaitFor(other, worker)) blockers.push(other);
-      if (blockers.length === 0 && others.length < deps.config.maxWorkers) return;
-      const note =
-        blockers.length > 0
-          ? `"${worker.title}" waits for overlapping "${blockers.map((b) => b.title).join('", "')}"`
-          : `"${worker.title}" waits for a free worker slot`;
+      if (blockers.length === 0) return;
+      const note = `"${worker.title}" waits for overlapping "${blockers.map((b) => b.title).join('", "')}"`;
       // Re-checked every heartbeat: a transcript line only when the reason changes.
       if (note !== waitNote) progress(note);
       waitNote = note;
-      await Promise.race([
-        ...(blockers.length ? blockers : others).map((b) => b.done),
-        sleep(heartbeatMs, worker.controller.signal),
-      ]);
+      await Promise.race([...blockers.map((b) => b.done), sleep(heartbeatMs, worker.controller.signal)]);
     }
   };
 
@@ -1107,18 +1101,15 @@ export function createDelegator(deps: DelegateDeps) {
         reroutes: 0,
         ...(scouted ? { implementTier: tier } : {}),
       };
-      // Workers still in the queue will take slots before this one.
-      const ahead = [...workers.values()].filter((w) => ["queued", "starting", "running"].includes(w.state)).length;
-      const queued = ahead >= deps.config.maxWorkers;
       workers.set(worker.id, worker);
       void drive(worker).catch(() => undefined);
       return {
-        status: queued ? "queued" : "started",
+        status: "started",
         worker: info(worker),
         text: [
           `Delegated "${params.title}" [${worker.id.slice(0, 8)}] to ${route.model} (thinking ${route.thinking}, tier ${route.tier}` +
             (judged ? `, Jev difficulty ${judged.difficulty.toFixed(1)}/4).` : ", default tier)."),
-          queued ? "It is queued behind other workers." : "It is starting in a background Herdr tab.",
+          "It is starting in a background Herdr tab.",
           "Its result will arrive as a message; keep helping the user meanwhile.",
         ].join("\n"),
       };

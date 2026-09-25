@@ -218,9 +218,8 @@ test("leadGuard defaults to confirm, merges, and only the global config can turn
   const agentDir = await mkdtemp(join(tmpdir(), "pi-lead-guard-agent-"));
   const project = await mkdtemp(join(tmpdir(), "pi-lead-guard-project-"));
   await mkdir(join(project, ".pi"));
-  await writeFile(join(project, ".pi", "pi-lead.json"), JSON.stringify({ leadGuard: "off", maxWorkers: 5 }));
+  await writeFile(join(project, ".pi", "pi-lead.json"), JSON.stringify({ leadGuard: "off" }));
   const fromProject = await loadConfig(project, { projectTrusted: true, agentDir });
-  assert.equal(fromProject.maxWorkers, 5);
   assert.equal(fromProject.leadGuard, "confirm");
 
   await writeFile(join(agentDir, "pi-lead.json"), JSON.stringify({ leadGuard: "off" }));
