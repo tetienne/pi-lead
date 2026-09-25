@@ -238,6 +238,44 @@ test("a scout finishing done with allowedFiles reports them", async () => {
   assert.equal(result.findings, "brief");
 });
 
+test("finish with a non-done status commits leftovers despite a failing pre-commit hook; done still runs it", async () => {
+  const { execFile } = await import("node:child_process");
+  const { chmod, mkdir } = await import("node:fs/promises");
+  const run = (args: string[], cwd: string) => new Promise<void>((resolve, reject) => execFile("git", args, { cwd }, (error) => (error ? reject(error) : resolve())));
+  const worktree = await mkdtemp(join(tmpdir(), "pi-lead-worker-git-"));
+  await run(["init", "-q"], worktree);
+  await run(["config", "user.email", "worker@test"], worktree);
+  await run(["config", "user.name", "Worker"], worktree);
+  await mkdir(join(worktree, ".git", "hooks"), { recursive: true });
+  const hookPath = join(worktree, ".git", "hooks", "pre-commit");
+  await writeFile(hookPath, "#!/bin/sh\necho 'lint failed' >&2\nexit 1\n");
+  await chmod(hookPath, 0o755);
+
+  const stateDir = await mkdtemp(join(tmpdir(), "pi-lead-worker-state-"));
+  const taskPath = join(stateDir, "task.json");
+  const resultPath = join(stateDir, "result.json");
+  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: worktree }));
+  const tools = new Map<string, any>();
+  worker({
+    registerFlag: () => undefined,
+    getFlag: () => taskPath,
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    on: () => undefined,
+  } as any);
+
+  await writeFile(join(worktree, "a.txt"), "partial work");
+  await tools.get("finish")!.execute("1", { status: "partial", summary: "half done" }, undefined, undefined, { ui: { setStatus: () => undefined } });
+  const partial = parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t");
+  assert.equal(partial.status, "partial", "the --no-verify commit went through despite the failing hook");
+
+  await writeFile(join(worktree, "b.txt"), "more work");
+  await assert.rejects(
+    () => tools.get("finish")!.execute("2", { status: "done", summary: "all done" }, undefined, undefined, { ui: { setStatus: () => undefined } }),
+    /Could not commit the remaining changes/,
+    "a done finish still runs the hook, which blocks it",
+  );
+});
+
 test("the tool_call guard blocks write/edit outside the scout brief and on a protected file, and leaves bash alone", async () => {
   const handlers = new Map<string, (event: any, ctx?: any) => any>();
   const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
@@ -273,6 +311,28 @@ test("the tool_call guard blocks write/edit outside the scout brief and on a pro
   assert.ok(guarded?.block);
   assert.match(guarded!.reason, /is a scout test; make it pass instead of changing it/);
   assert.equal(await call("bash", "src/rogue.ts"), undefined, "bash is never intercepted");
+});
+
+test("the tool_call guard re-reads task.json on every call, so a Lead-side widen takes effect without a restart", async () => {
+  const handlers = new Map<string, (event: any, ctx?: any) => any>();
+  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
+  const taskPath = join(dir, "task.json");
+  const baseTask = { version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", worktreePath: dir, allowedFiles: ["src/a.ts"], protectedFiles: [] };
+  await writeFile(taskPath, JSON.stringify(baseTask));
+  worker({
+    registerFlag: () => undefined,
+    getFlag: () => taskPath,
+    registerTool: () => undefined,
+    on: (event: string, handler: any) => handlers.set(event, handler),
+  } as any);
+  const guard = handlers.get("tool_call")!;
+  const call = (path: string) => guard({ type: "tool_call", toolCallId: "1", toolName: "write", input: { path } });
+
+  const blocked = await call("src/rogue.ts");
+  assert.ok(blocked?.block, "not yet allowed");
+
+  await writeFile(taskPath, JSON.stringify({ ...baseTask, allowedFiles: ["src/a.ts", "src/rogue.ts"] }));
+  assert.equal(await call("src/rogue.ts"), undefined, "the guard picked up the rewritten task file");
 });
 
 test("the tool_call guard does nothing without a brief", async () => {
