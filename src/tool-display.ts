@@ -45,7 +45,7 @@ export function delegateCall(
 
 function isStartResult(value: unknown): value is StartResult {
   const status = (value as { status?: unknown } | undefined)?.status;
-  return status === "started" || status === "queued" || status === "not_ready" || status === "failed";
+  return status === "started" || status === "not_ready" || status === "failed";
 }
 
 /** First line of a result: what happened, with its glyph; the host text follows when expanded. */
@@ -55,8 +55,6 @@ export function delegateResult(details: unknown, text: string, expanded: boolean
   switch (details.status) {
     case "started":
       return `${paint("accent", "●")} started · ${routeText(details.worker)}${paint("dim", " · in a background Herdr tab")}${routeNote(details.worker, paint)}${more}`;
-    case "queued":
-      return `${paint("dim", "○")} queued · ${routeText(details.worker)}${paint("dim", " · starts when a slot or an overlapping worker frees up")}${routeNote(details.worker, paint)}${more}`;
     case "not_ready":
       return `${paint("warning", "?")} ${expanded ? cleanLines(text) : safePreview(text, 300)}`;
     case "failed":
@@ -76,7 +74,6 @@ const STATE_COLOR: Record<WorkerInfo["state"], Color> = {
   starting: "dim",
   running: "accent",
   waiting: "warning",
-  ci: "dim",
   done: "success",
   failed: "error",
   stopped: "dim",

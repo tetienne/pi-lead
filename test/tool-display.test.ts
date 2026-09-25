@@ -37,15 +37,13 @@ test("model-written arguments cannot reach the terminal raw", () => {
   assert.match(cleanLines(Array.from({ length: 45 }, (_, i) => `l${i}`).join("\n")), /… 5 more lines$/);
 });
 
-test("a delegate result says started or queued, with the route", () => {
+test("a delegate result says started, with the route", () => {
   const started: StartResult = { status: "started", worker: worker(), text: "Delegated…" };
   assert.equal(
     delegateResult(started, "Delegated…", false, paint),
     "<accent>●</accent> started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab",
   );
   assert.equal(delegateResult(started, "Delegated…", true, plain), "● started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab\nDelegated…");
-  const queued: StartResult = { status: "queued", worker: worker({ state: "queued" }), text: "q" };
-  assert.match(delegateResult(queued, "q", false, plain), /^○ queued · a1b2c3d4 · standard/);
   const notReady: StartResult = { status: "not_ready", missing: ["acceptance"], text: "Not delegated: no acceptance criteria." };
   assert.equal(delegateResult(notReady, notReady.text, false, paint), "<warning>?</warning> Not delegated: no acceptance criteria.");
   const failed: StartResult = { status: "failed", text: "PI Lead workers need Herdr." };

@@ -18,7 +18,6 @@ export type TierRoute = {
 
 export type LeadConfig = {
   tiers: Record<Tier, TierRoute>;
-  maxWorkers: number;
   jev: {
     /** Environment variable holding a TypeSafe or OpenRouter key. */
     apiKeyEnv: string;
@@ -66,7 +65,6 @@ export const DEFAULT_CONFIG: LeadConfig = {
     standard: { thinking: "medium" },
     deep: { thinking: "high" },
   },
-  maxWorkers: 2,
   jev: {
     apiKeyEnv: "PI_LEAD_JEV_API_KEY",
     via: "openrouter",
@@ -84,7 +82,6 @@ export const DEFAULT_CONFIG: LeadConfig = {
 
 type PartialConfig = {
   tiers?: Partial<Record<Tier, Partial<TierRoute>>>;
-  maxWorkers?: number;
   jev?: Partial<LeadConfig["jev"]>;
   keepFailedWorkers?: boolean;
   leadGuard?: LeadGuardMode;
@@ -101,7 +98,6 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
   }
   return {
     tiers,
-    maxWorkers: override.maxWorkers ?? base.maxWorkers,
     jev: { ...base.jev, ...override.jev },
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
     leadGuard: override.leadGuard === "off" || override.leadGuard === "confirm" ? override.leadGuard : base.leadGuard,

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { classifyChecks, gitWorkspace } from "../src/workspace.ts";
+import { classifyChecks, gitWorkspace, readChecks } from "../src/workspace.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
@@ -27,6 +27,20 @@ test("classifyChecks: fail/cancel win over pending; pass only when every bucket 
     classifyChecks([{ name: "c", bucket: "cancel", link: "https://y" }]),
     { state: "fail", failed: [{ name: "c", link: "https://y" }] },
   );
+});
+
+test("readChecks: JSON even on a non-zero exit; only gh's own message means no checks; any other failure is error", () => {
+  const failing = JSON.stringify([{ name: "ci", bucket: "fail", link: "https://x" }]);
+  assert.deepEqual(readChecks({ stdout: failing, error: new Error("exit 1") }), { state: "fail", failed: [{ name: "ci", link: "https://x" }] });
+  assert.deepEqual(readChecks({ stdout: "[]" }), { state: "none", failed: [] });
+  assert.deepEqual(readChecks({ stdout: "", stderr: "no checks reported on the 'x' branch", error: new Error("exit 1") }), { state: "none", failed: [] });
+  assert.deepEqual(readChecks({ stderr: "gh: To get started with GitHub CLI, please run: gh auth login\nmore", error: new Error("exit 4") }), {
+    state: "error",
+    failed: [],
+    error: "gh: To get started with GitHub CLI, please run: gh auth login",
+  });
+  assert.equal(readChecks({ error: new Error("spawn gh ENOENT") }).error, "spawn gh ENOENT");
+  assert.equal(readChecks({ stdout: "not json" }).state, "error");
 });
 
 test("a worker's branch and commits are visible from the repo through its worktree", async () => {
@@ -68,23 +82,13 @@ test("a worker's branch and commits are visible from the repo through its worktr
   await assert.rejects(readFile(join(repo, "a.txt")));
 });
 
-test("addedFiles lists only files a branch adds, not ones it modifies", async () => {
+test("currentBranch reports the checkout's branch", async () => {
   const repo = await mkdtemp(join(tmpdir(), "pi-lead-ws-added-"));
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   await writeFile(join(repo, "src.ts"), "one\n");
   git(repo, "add", ".");
   git(repo, "commit", "-qm", "init");
-  const base = await gitWorkspace.resolveBase({ repoRoot: repo });
 
   git(repo, "checkout", "-qb", "feature");
-  await writeFile(join(repo, "src.ts"), "two\n");
-  await mkdir(join(repo, "test"));
-  await writeFile(join(repo, "test", "src.test.ts"), "check");
-  git(repo, "add", ".");
-  git(repo, "commit", "-qm", "work");
-
-  const added = await gitWorkspace.addedFiles({ repoRoot: repo, branch: "feature", base });
-  assert.deepEqual(added, ["test/src.test.ts"]);
-
   assert.equal(await gitWorkspace.currentBranch(repo), "feature");
 });
