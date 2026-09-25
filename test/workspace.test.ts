@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -80,6 +80,20 @@ test("a worker's branch and commits are visible from the repo through its worktr
 
   await gitWorkspace.remove(root);
   await assert.rejects(readFile(join(repo, "a.txt")));
+});
+
+test("mainCheckout resolves a linked worktree back to the main repo", async () => {
+  const repo = await mkdtemp(join(tmpdir(), "pi-lead-ws-main-"));
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  await writeFile(join(repo, "a.txt"), "one\n");
+  git(repo, "add", ".");
+  git(repo, "commit", "-qm", "init");
+
+  const worktree = join(await mkdtemp(join(tmpdir(), "pi-lead-ws-linked-")), "wt");
+  git(repo, "worktree", "add", "-q", "-b", "feature", worktree);
+
+  assert.equal(await realpath(await gitWorkspace.mainCheckout(worktree)), await realpath(repo));
+  assert.equal(await realpath(await gitWorkspace.mainCheckout(repo)), await realpath(repo), "already the main checkout");
 });
 
 test("currentBranch reports the checkout's branch", async () => {

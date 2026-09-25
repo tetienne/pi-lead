@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { rm } from "node:fs/promises";
+import { dirname } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -28,6 +29,8 @@ export function classifyChecks(checks: CheckBucket[]): { state: "pass" | "pendin
  */
 export type Workspace = {
   repoRoot(cwd: string): Promise<string>;
+  /** The main checkout, even when `repoRoot` is a linked worktree. */
+  mainCheckout(repoRoot: string): Promise<string>;
   /** `startFrom` is a local branch name; defaults to the checkout's HEAD. Returns the resolved commit. */
   resolveBase(input: { repoRoot: string; startFrom?: string }): Promise<string>;
   /** The checkout's current branch, or undefined on a detached HEAD. */
@@ -89,6 +92,10 @@ export function readChecks(run: GhRun): { state: "pass" | "fail" | "pending" | "
 
 export const gitWorkspace: Workspace = {
   repoRoot: (cwd) => git(["rev-parse", "--show-toplevel"], cwd),
+
+  async mainCheckout(repoRoot) {
+    return dirname(await git(["rev-parse", "--path-format=absolute", "--git-common-dir"], repoRoot));
+  },
 
   resolveBase: ({ repoRoot, startFrom }) => git(["rev-parse", startFrom ? `refs/heads/${startFrom}` : "HEAD"], repoRoot),
 

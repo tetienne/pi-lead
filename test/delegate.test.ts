@@ -43,6 +43,10 @@ const AUTO_SCOUT: Reply = { status: "done", summary: "mapped the ticket", findin
 function fakeWorkspace(log: Log): Workspace {
   return {
     repoRoot: async (cwd) => cwd,
+    mainCheckout: async (repoRoot) => {
+      log.push(`mainCheckout ${repoRoot}`);
+      return `${repoRoot}/main`;
+    },
     resolveBase: async ({ startFrom }) => {
       log.push(`resolveBase${startFrom ? ` from ${startFrom}` : ""}`);
       return "abc123";
@@ -120,10 +124,11 @@ function fakeHerdr(
     async notify(title, sound) {
       log.push(`notify ${title} (${sound})`);
     },
-    async createWorktree({ branch, label }) {
+    async createWorktree({ cwd, branch, label }) {
       const workspaceId = `tab-${++tabs}`;
       const paneId = `pane-${tabs}`;
       log.push(`create ${branch}`);
+      log.push(`cwd ${cwd}`);
       log.push(`open ${label}`);
       return { workspaceId, paneId };
     },
@@ -249,6 +254,16 @@ test("delegate returns at once; the result arrives later, then the worker is cle
   assert.ok(card.elapsedMs >= 0);
   assert.equal(card.summary, undefined, "the worker's words stay in the report text only");
   assert.ok(card.next.some((line) => line.includes("nothing was pushed")));
+});
+
+test("launch creates the worktree from the main checkout, but resolves base and branch from repoRoot", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t);
+  const pending = nextOutcome();
+  await delegator.start({ kind: "prototype", title: "x", task: "y" }, io);
+  await pending;
+  assert.ok(log.includes("mainCheckout /repo"), "cwd resolution is asked for");
+  assert.ok(log.includes("cwd /repo/main"), "createWorktree gets the main checkout, not the linked worktree");
+  assert.ok(log.includes("resolveBase"), "base is still resolved from repoRoot (the linked worktree)");
 });
 
 test("a worker waiting on a question gets the relayed answer and reports again", async (t) => {
@@ -660,6 +675,15 @@ test("a worker whose Pi exits without finish is reported as failed", async (t) =
   const outcome = await pending;
   assert.equal(outcome.status, "failed");
   assert.match(outcome.text, /exited \(status 1\) without calling finish/);
+});
+
+test("a worker whose tab vanished before Pi ran is reported as failed", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, { replies: ["silent"], herdrOptions: { workspaces: [] } });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "x", task: "y" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.text, /worker tab closed before Pi finished/);
 });
 
 test("the launch script and the task carry stuck detection and the Herdr hint", async (t) => {
