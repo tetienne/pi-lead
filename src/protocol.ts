@@ -107,8 +107,11 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
 /** A scout's brief for the implementer that builds on its branch. */
 export type WorkerBrief = { allowedFiles: string[]; protectedFiles: string[]; text: string };
 
-/** Where and how a `finish`ed ticket must be pushed and its CI watched. */
+/** Where the worker pushes its ticket and opens its draft PR; the worker watches that PR's CI itself. */
 export type PublishTarget = { baseBranch: string; remoteBranch: string; title: string };
+
+// The Lead model writes the title; the worker pastes the command into its shell.
+const shellQuote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
 
 /** First message of the worker session; explicit `/skill:` invocation. */
 export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief, publish?: PublishTarget): string {
@@ -165,7 +168,7 @@ export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief, 
     "",
     "## Publishing",
     `When the work is committed: push it with \`git push -u origin HEAD:${publish.remoteBranch}\`, open a draft PR against`,
-    `\`${publish.baseBranch}\` with \`gh pr create --draft --base ${publish.baseBranch} --head ${publish.remoteBranch} --title ${JSON.stringify(publish.title)} --body ...\``,
+    `\`${publish.baseBranch}\` with \`gh pr create --draft --base ${publish.baseBranch} --head ${publish.remoteBranch} --title ${shellQuote(publish.title)} --body ...\``,
     "(if a PR already exists for that branch, reuse it), then wait for CI with",
     `\`gh pr checks ${publish.remoteBranch} --watch\`. Checks can take a few seconds to register: if it reports none yet,`,
     "wait and retry briefly before concluding the repository runs no checks.",

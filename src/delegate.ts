@@ -783,20 +783,18 @@ export function createDelegator(deps: DelegateDeps) {
     let ci: string | undefined;
     if (status === "done" && PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined) {
       pr = await deps.workspace.prChecks({ repoRoot: worker.repoRoot!, branch: worker.remoteBranch! });
-      if (!pr.url) {
+      if (pr.state === "error") {
+        status = "partial"; // gh could not be read: CI unverified
+        ci = `not checked (${pr.error})`;
+      } else if (!pr.url) {
         status = "partial"; // done reported, but no PR is open on that branch
       } else if (pr.state === "pass") {
         ci = "passed";
       } else if (pr.state === "none") {
         ci = "none"; // the repository runs no checks for this branch
       } else {
-        status = "partial"; // still failing, pending or unreadable: cap the report
-        ci =
-          pr.state === "fail"
-            ? `failed (${pr.failed.length} check${pr.failed.length === 1 ? "" : "s"})`
-            : pr.state === "pending"
-              ? "pending"
-              : `not checked (${pr.error ?? "gh reported no checks"})`;
+        status = "partial"; // still failing or pending: cap the report
+        ci = pr.state === "fail" ? `failed (${pr.failed.length} check${pr.failed.length === 1 ? "" : "s"})` : "pending";
       }
     }
 
@@ -817,8 +815,9 @@ export function createDelegator(deps: DelegateDeps) {
     if (status === "needs_human") next.push(keep ? "Ask the user for what the worker needs, then relay the answer." : "Ask the user for what the worker needed, then delegate a new task with the answer.");
     if (status === "partial" || status === "blocked") next.push("Tell the user what is left; continue only if they agree.");
     if (outOfScope.length > 0) next.push("Files changed outside the scout brief: review them before merging.");
-    if (pr && !pr.url) next.push(`The worker reported done but opened no PR on branch ${worker.remoteBranch}; tell the user.`);
-    if (pr?.url && ci !== "passed" && ci !== "none" && ci !== undefined) next.push(`CI is failing on ${pr.url}; tell the user.`);
+    if (pr?.state === "error") next.push(`PI Lead could not read the PR or its checks (${pr.error}); tell the user.`);
+    else if (pr && !pr.url) next.push(`The worker reported done but opened no PR on branch ${worker.remoteBranch}; tell the user.`);
+    if (pr?.url && (pr.state === "fail" || pr.state === "pending")) next.push(`CI is not green on ${pr.url}; tell the user.`);
     if (worker.kind === "scout") next.push("No implement worker started.");
     if (review?.action === "auto_fix") next.push("Review found fixable issues: delegate an implement task with these findings, starting from the reviewed branch.");
     if (review?.action === "escalate") next.push("Review found serious issues: show them to the user before doing anything else.");

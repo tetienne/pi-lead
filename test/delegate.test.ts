@@ -1191,6 +1191,18 @@ test("no PR found for the branch: capped to partial", async (t) => {
   assert.equal(outcome.details.pr, undefined);
 });
 
+test("gh unreadable: capped to partial, blamed on gh, not on the worker", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, {
+    workspace: { ...fakeWorkspace([]), prChecks: async () => ({ state: "error" as const, failed: [], error: "gh: authentication required" }) },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "partial");
+  assert.match(outcome.text, /could not read the PR or its checks \(gh: authentication required\)/);
+  assert.doesNotMatch(outcome.text, /opened no PR/);
+});
+
 test("a detached HEAD never checks for a PR", async (t) => {
   let checked = 0;
   const { delegator, nextOutcome } = await setup(t, {
@@ -1251,7 +1263,7 @@ test("CI checks failing: capped to partial, check names only inside the untruste
   assert.doesNotMatch(trusted!, /run\/2/);
   const [untrusted] = rest!.split("</worker-report>");
   assert.match(untrusted!, /CI checks failed:\ntest \(https:\/\/example\.test\/run\/2\)/);
-  assert.match(outcome.text, /CI is failing on https:\/\/example\.test\/pr\/1; tell the user\./);
+  assert.match(outcome.text, /CI is not green on https:\/\/example\.test\/pr\/1; tell the user\./);
 });
 
 test("CI still pending: capped to partial", async (t) => {

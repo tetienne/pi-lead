@@ -44,8 +44,7 @@ export type Workspace = {
   /**
    * One non-watching read of the worker's own draft PR and its checks. Never
    * throws: `state` is `none` both when the branch has no open PR and when a
-   * PR exists but runs no checks; `error` is set only when `gh` could not be
-   * read at all.
+   * PR exists but runs no checks; any other `gh` failure is `error`.
    */
   prChecks(input: { repoRoot: string; branch: string }): Promise<{
     url?: string;
@@ -68,6 +67,25 @@ async function git(args: string[], cwd?: string): Promise<string> {
 }
 
 const shortError = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
+
+type GhRun = { stdout?: string; stderr?: string; error?: unknown };
+
+const ghError = (run: GhRun) => run.stderr?.trim().split("\n")[0] || (run.error ? shortError(run.error) : "gh printed nothing");
+
+/** One `gh pr checks --json` run. A gh failure is `error`, never "no checks", so it cannot leave a ticket `done`. */
+export function readChecks(run: GhRun): { state: "pass" | "fail" | "pending" | "none" | "error"; failed: { name: string; link: string }[]; error?: string } {
+  // `gh pr checks` exits non-zero when a check fails or is pending, but still prints its JSON on stdout.
+  if (run.stdout?.trim()) {
+    try {
+      const checks = JSON.parse(run.stdout) as CheckBucket[];
+      return checks.length === 0 ? { state: "none", failed: [] } : classifyChecks(checks);
+    } catch (error) {
+      return { state: "error", failed: [], error: shortError(error) };
+    }
+  }
+  if (/no checks reported/i.test(run.stderr ?? "")) return { state: "none", failed: [] };
+  return { state: "error", failed: [], error: ghError(run) };
+}
 
 export const gitWorkspace: Workspace = {
   repoRoot: (cwd) => git(["rev-parse", "--show-toplevel"], cwd),
@@ -104,29 +122,24 @@ export const gitWorkspace: Workspace = {
 
   async prChecks({ repoRoot, branch }) {
     const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+    const gh = (args: string[]): Promise<GhRun> =>
+      execFileAsync("gh", args, { cwd: repoRoot, encoding: "utf8", env, timeout: 60_000 }).then(
+        ({ stdout, stderr }) => ({ stdout, stderr }),
+        (error: { stdout?: string; stderr?: string }) => ({ stdout: error.stdout, stderr: error.stderr, error }),
+      );
+    const view = await gh(["pr", "view", branch, "--json", "url"]);
+    if (view.error) {
+      if (/no pull requests found/i.test(view.stderr ?? "")) return { state: "none", failed: [] };
+      return { state: "error", failed: [], error: ghError(view) };
+    }
     let url: string | undefined;
     try {
-      const { stdout } = await execFileAsync("gh", ["pr", "view", branch, "--json", "url"], { cwd: repoRoot, encoding: "utf8", env });
-      url = (JSON.parse(stdout) as { url?: string }).url;
-    } catch {
-      return { state: "none", failed: [] }; // no open PR for this branch
+      url = (JSON.parse(view.stdout ?? "") as { url?: string }).url;
+    } catch (error) {
+      return { state: "error", failed: [], error: shortError(error) };
     }
     if (!url) return { state: "none", failed: [] };
-    // `gh pr checks` exits non-zero when a check fails or is pending, but still prints its JSON on stdout.
-    const stdout = await execFileAsync("gh", ["pr", "checks", branch, "--json", "name,bucket,link"], { cwd: repoRoot, encoding: "utf8", env }).then(
-      (result) => result.stdout,
-      (error: unknown) => (error as { stdout?: string }).stdout,
-    );
-    if (!stdout) return { url, state: "none", failed: [] }; // "no checks reported": the repo runs none for this branch
-    let checks: CheckBucket[];
-    try {
-      checks = JSON.parse(stdout) as CheckBucket[];
-    } catch (error) {
-      return { url, state: "error", failed: [], error: shortError(error) };
-    }
-    if (checks.length === 0) return { url, state: "none", failed: [] };
-    const classified = classifyChecks(checks);
-    return { url, state: classified.state, failed: classified.failed };
+    return { url, ...readChecks(await gh(["pr", "checks", branch, "--json", "name,bucket,link"])) };
   },
 
   async remove(path) {

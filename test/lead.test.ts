@@ -168,6 +168,8 @@ test("the publish/CI instruction is added for a published kind with a base branc
   assert.match(withPublish, /git push -u origin HEAD:feature-1/);
   assert.match(withPublish, /gh pr create --draft --base main --head feature-1/);
   assert.match(withPublish, /gh pr checks feature-1 --watch/);
+  const quoted = workerPrompt("implement", "T", undefined, { ...publish, title: "Fix $(whoami) `id` it's" });
+  assert.ok(quoted.includes(`--title 'Fix $(whoami) \`id\` it'\\''s'`), "single-quoted: no expansion in the worker's shell");
   assert.doesNotMatch(workerPrompt("implement", "T"), /## Publishing/, "no publish target: detached HEAD");
   assert.doesNotMatch(workerPrompt("review", "T", undefined, publish), /## Publishing/, "review is never published");
 });

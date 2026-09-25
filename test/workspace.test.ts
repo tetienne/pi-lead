@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { classifyChecks, gitWorkspace } from "../src/workspace.ts";
+import { classifyChecks, gitWorkspace, readChecks } from "../src/workspace.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
@@ -27,6 +27,20 @@ test("classifyChecks: fail/cancel win over pending; pass only when every bucket 
     classifyChecks([{ name: "c", bucket: "cancel", link: "https://y" }]),
     { state: "fail", failed: [{ name: "c", link: "https://y" }] },
   );
+});
+
+test("readChecks: JSON even on a non-zero exit; only gh's own message means no checks; any other failure is error", () => {
+  const failing = JSON.stringify([{ name: "ci", bucket: "fail", link: "https://x" }]);
+  assert.deepEqual(readChecks({ stdout: failing, error: new Error("exit 1") }), { state: "fail", failed: [{ name: "ci", link: "https://x" }] });
+  assert.deepEqual(readChecks({ stdout: "[]" }), { state: "none", failed: [] });
+  assert.deepEqual(readChecks({ stdout: "", stderr: "no checks reported on the 'x' branch", error: new Error("exit 1") }), { state: "none", failed: [] });
+  assert.deepEqual(readChecks({ stderr: "gh: To get started with GitHub CLI, please run: gh auth login\nmore", error: new Error("exit 4") }), {
+    state: "error",
+    failed: [],
+    error: "gh: To get started with GitHub CLI, please run: gh auth login",
+  });
+  assert.equal(readChecks({ error: new Error("spawn gh ENOENT") }).error, "spawn gh ENOENT");
+  assert.equal(readChecks({ stdout: "not json" }).state, "error");
 });
 
 test("a worker's branch and commits are visible from the repo through its worktree", async () => {
