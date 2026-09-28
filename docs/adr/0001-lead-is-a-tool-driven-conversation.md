@@ -2,27 +2,28 @@
 status: accepted
 ---
 
-# The Lead is an ordinary Pi conversation that delegates through one tool
+# The Lead is an ordinary Pi conversation that acts through tools
 
-1. **The Pi model routes, not the extension.** PI Lead does not hook `input`.
-   A question is simply answered; for anything else the model follows the
-   workflow guidance (ADR 0003) and decides what to do.
-2. **Delegation is a tool.** `delegate` is the only way work leaves the Lead
-   conversation. Its result (summary, branch, diff stat, verdict) returns to
-   the model, so the Lead knows what its workers did.
-3. **Matt skills ship with the package** and are loaded natively by Pi. Skills
-   with `disable-model-invocation` are invoked explicitly: by the Lead's
-   workflow guidance, or as `/skill:<name>` in the worker's first message.
-4. **Workers are visible Pi sessions in Herdr.** One `--no-focus` worktree
-   workspace per worker runs an interactive `pi` process with a Jev-chosen model and thinking
-   level. The worker ends by calling `finish`; the Lead waits for that result
-   file and collects the branch.
-5. **Jev judges, code decides** (ADR 0002). Jev answers closed-set questions
-   whose answers map to deterministic actions: model tier, ticket readiness,
-   worker verdicts, review severity, failure kind and ticket overlap.
+PI Lead could have been a command-driven orchestrator that intercepts the
+user's input and runs a fixed pipeline. Instead the Lead is a plain Pi
+session with a short workflow section in its system prompt: the model
+answers questions, follows Matt Pocock's own router for everything else
+(ADR 0003, ADR 0007), and acts through three tools. `delegate` starts a
+worker, `worker` lists, messages or stops workers, and `merge` merges green
+PRs one at a time on the user's go-ahead. PI Lead never hooks the user's
+input.
+
+Delegation does not block: `delegate` returns once the worker is queued, and
+each result arrives later as a message that wakes the Lead, so the Lead keeps
+talking with the user while workers run. The worker's `finish` result, not
+Herdr's view of the pane, decides when a worker is done. Jev answers only the
+closed questions code cannot (the difficulty that picks a model tier, and a
+check of the worker's verdict), within the policy of ADR 0002.
 
 ## Consequences
 
-- Herdr is presentation; the Lead owns completion through the worker's
-  `finish` result. There are no durable task records or restart recovery: an
-  interrupted worker leaves its workspace and branch for the human to inspect.
+- Each worker's task directory holds a record of its Herdr workspace, pane
+  and owning Lead. A Lead that starts in the same repository after its
+  predecessor crashed adopts every worker whose Pi still runs, and removes the
+  worktrees of the others (branches kept). A Lead never adopts the workers of
+  another Lead that is still running.

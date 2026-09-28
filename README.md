@@ -8,27 +8,33 @@ workspaces on a model chosen by [Jev](https://docs.typesafe.ai).
 
 No commands. Ask "how does the session store work?" and you get an answer.
 Say "let's add CSV export" and the Lead reads Matt's own router, `ask-matt`,
-grills you, writes a spec and tickets, then delegates each ticket.
+grills you, then asks: spec, tickets, or implement now? A small change it
+makes itself, in your session; a multi-session build becomes a spec and
+tickets, one worker per ticket.
 
 ## How it works
 
 ```
 you ─► Lead (Pi, your tab)
         question            → answered directly
-        anything else       → ask-matt picks the flow: grill-with-docs → to-spec → to-tickets,
-                              triage, wayfinder… (in the conversation)
-        implement / prototype / diagnosing-bugs / code-review / research
+        anything else       → ask-matt picks the flow: grill-with-docs, triage, wayfinder…
+                              (in the conversation), then: spec, tickets, or implement now?
+        single-session work → /implement here, in the Lead's session
+        a ticket of a multi-session build, or anything you send to the background
+        (implement / prototype / diagnosing-bugs / code-review / research)
                             → delegate tool
                                  Jev: how hard? → model + thinking level
                                  → Herdr worktree workspace (no focus), worker Pi in it
-                                 worker Pi: runs on the host, /skill:implement …
+                                 worker Pi: runs on the host, /skill:implement … as written
                                  worker pushes, opens a draft PR, gets CI green, calls finish
-                                 Jev checks the verdict (unless the PR's CI proved it); a green PR keeps its
-                                 worktree until merged, anything else has it removed (branch kept)
+                                 host checks CI on the PR head (red or pending: back to the worker once);
+                                 Jev checks the verdict unless that CI proved it
                                  (delegate returns at once; the result comes back as a message)
         worker tool         → list workers, relay an answer to one waiting on you, stop one
         merge tool          → on your go-ahead: green PRs one at a time, each updated from base and
                               green again on its new head before it merges
+        sub-agents a skill asks for (Lead or worker)
+                            → a non-interactive Pi in a Herdr pane beside it
 ```
 
 - The **Lead** is ordinary Pi plus a short workflow section in its system
@@ -36,12 +42,14 @@ you ─► Lead (Pi, your tab)
   `delegate`, `worker` and `merge`. It implements single-session work itself with
   `/implement`, delegates each ticket of a multi-session build (or anything
   you ask to run in the background), and inspects worker branches and CI
-  with git and `gh` through bash. It never intercepts your messages.
+  with git and `gh` through bash. It never intercepts your messages (see
+  [ADR 0001](docs/adr/0001-lead-is-a-tool-driven-conversation.md) and
+  [ADR 0007](docs/adr/0007-lead-implements-workers-run-implement-as-written.md)).
 - **Worker reports are untrusted.** The worker's own words reach the Lead
   inside a `<worker-report untrusted>` block, and the Lead is told to report
   them, not follow them. There is no confirmation step: a worker already runs
   on your machine with your access (see
-  [ADR 0006](docs/adr/0006-no-lead-guard.md)). When the worker's
+  [ADR 0006](docs/adr/0006-no-fences-around-host-workers.md)). When the worker's
   branch touches files that can run on your machine or in CI, or steer future
   agents, the report adds a host-generated "Host check" line naming the
   matched patterns: CI workflows and actions, `package.json`,
@@ -52,8 +60,9 @@ you ─► Lead (Pi, your tab)
   lockfiles run too once you use them, and it never blocks.
 - **One worker per ticket.** An `implement` ticket goes to a single worker
   running Matt's `/implement` as written: test-first in vertical slices
-  through `/tdd`, then `/code-review`. There is no scout phase and no list of
-  files the worker may touch.
+  through `/tdd`, then `/code-review`. There is no scout phase, no list of
+  files the worker may touch and no readiness check: an approved ticket
+  always starts, and a worker that finds a real gap asks you (`needs_human`).
 - **A finished ticket becomes a draft PR, opened by the worker itself.** When
   an `implement`, `debug` or `research` worker is about to finish `done`, it
   pushes its branch, opens a draft PR against the branch the ticket started
@@ -145,22 +154,41 @@ you ─► Lead (Pi, your tab)
   stacking. Conflicts surface, and are resolved, in the one-at-a-time merge
   flow. When a finished worker's branch changes files that another worker's
   open PR changes too, its report names that ticket and the shared files.
+- **Sub-agents run in Herdr panes.** When a skill asks for a sub-agent
+  (code-review's two axes, grilling's fact-finding, wayfinder's research,
+  improve-codebase-architecture's exploration, codebase-design), the Lead or
+  worker starts a non-interactive Pi in a pane split beside it, without
+  focus, waits for it and reads its report. Without Herdr, it runs those
+  steps one after the other in its own context and says so.
 - **Jev** answers small closed questions (difficulty, verdict) and code maps
   each answer to an action. Without a key, documented defaults apply.
 
-Design record: [ADR 0001](docs/adr/0001-lead-is-a-tool-driven-conversation.md),
-[ADR 0002](docs/adr/0002-bound-jev-judgments-with-policy.md),
-[ADR 0003](docs/adr/0003-workers-mirror-the-lead.md),
-[ADR 0004](docs/adr/0004-verify-with-a-project-chosen-command.md) and
-[ADR 0005](docs/adr/0005-run-workers-on-the-host.md).
+Design record:
+
+- [ADR 0001](docs/adr/0001-lead-is-a-tool-driven-conversation.md): the Lead is
+  an ordinary Pi conversation that acts through tools.
+- [ADR 0002](docs/adr/0002-bound-jev-judgments-with-policy.md): Jev's answers
+  stay inside deterministic policy.
+- [ADR 0003](docs/adr/0003-workers-mirror-the-lead.md): workers are plain Pi,
+  like the Lead; Matt's router drives the Lead.
+- [ADR 0004](docs/adr/0004-verify-with-a-project-chosen-command.md): a
+  host-run `verify` command (superseded by ADR 0007).
+- [ADR 0005](docs/adr/0005-run-workers-on-the-host.md): workers run on the
+  host, in their own git worktree.
+- [ADR 0006](docs/adr/0006-no-fences-around-host-workers.md): no fences around
+  host workers.
+- [ADR 0007](docs/adr/0007-lead-implements-workers-run-implement-as-written.md):
+  the Lead implements single-session work; one worker per ticket runs
+  `/implement` as written; and the limit of these choices.
 
 ## Requirements
 
 - Pi ≥ 0.87.1 (GPT-6 Sol/Luna), Node ≥ 23.6, git.
 - Herdr: start the Lead's Pi inside a Herdr pane; `herdr integration install pi`
   for worker status badges and reliable Lead → worker messages.
-- Optional: a TypeSafe or OpenRouter key for Jev in `PI_LEAD_JEV_API_KEY`
-  (exported in the shell Herdr starts panes with, so workers get it too).
+- Optional: a TypeSafe or OpenRouter key for Jev in `PI_LEAD_JEV_API_KEY`,
+  exported in the shell Herdr starts the Lead's pane with (only the Lead
+  calls Jev).
   If the key is set but Jev fails (bad key, wrong model, network), PI Lead
   warns you once and falls back to its defaults. PI Lead does not track or
   cap what Jev costs; your TypeSafe or OpenRouter account does.
@@ -209,8 +237,23 @@ A global file, for example:
 }
 ```
 
+Settings:
+
+- `tiers.fast|standard|deep`: `model` (`provider/model-id`, omitted means the
+  Lead's model), `thinking` and `fallbacks`. Defaults: the Lead's model at
+  thinking `low`, `medium` and `high`.
+- `jev.via` (`openrouter`, the default, or `typesafe`), `jev.apiKeyEnv` (the
+  variable holding the key, `PI_LEAD_JEV_API_KEY`), `jev.model` (`jev-1.13`)
+  and `jev.minConfidence` (`0.7`: below it, an answer counts as "don't know").
+- `keepFailedWorkers` (default `true`): a worker that finishes `partial`,
+  `blocked` or `needs_human` stays open, waiting for your answer; one that
+  fails (it dies without `finish`) keeps its workspace while the Lead runs
+  and its task directory after. With `false`, both are removed, branch kept.
+- `stuckDetection` (default `true`), below.
+
 Jev's difficulty score picks the tier (below 1.5 `fast`, below 2.8 `standard`,
-otherwise `deep`; debug and review start at `standard`). The first available
+otherwise `deep`; debug and review never go below `standard`). Without a Jev
+answer, every kind starts at `standard`. The first available
 of `model` and its `fallbacks` runs the worker. A model is available when its
 provider has auth. When none is available the Lead's model runs it. A worker
 whose provider runs out of quota continues on the next available model, from

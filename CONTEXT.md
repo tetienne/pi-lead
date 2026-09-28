@@ -21,21 +21,25 @@ A user-requested engineering outcome, which may require several workers and vali
 _Avoid_: Turn, ticket
 
 **Ticket**:
-A self-contained, verifiable slice of planned work with explicit dependencies on other tickets.
+A self-contained, verifiable slice of planned work, with explicit Blocked-by dependencies on other tickets.
 _Avoid_: Task, conversation turn
+
+**Sub-agent**:
+A one-shot agent that a skill starts, from the Lead or a worker, for an isolated step, and whose report returns to the agent that started it.
+_Avoid_: Worker, subtask
 
 **Human gate**:
 A point at which work requires an explicit human decision or authorization before it can proceed.
 _Avoid_: Model approval
 
 **Policy**:
-The deterministic rules constraining which actions and resources the Lead and workers may use.
+The deterministic rules that turn model judgments and host evidence into actions, which no model answer can override.
 _Avoid_: Prompt, model judgment
 
 **DONE**:
-A task outcome whose required validations passed, results were collected, and temporary resources were cleaned up.
+A worker outcome whose required checks passed and whose results were collected.
 _Avoid_: Agent idle, process exited
 
 **BLOCKED**:
-A task outcome that requires human intervention or has reached an applicable retry limit, with diagnostic evidence preserved.
+A worker outcome that requires human intervention or has reached an applicable retry limit, with diagnostic evidence preserved.
 _Avoid_: DONE, success
