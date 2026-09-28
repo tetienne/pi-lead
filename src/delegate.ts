@@ -6,7 +6,7 @@ import type { LeadConfig, Tier } from "./config.ts";
 import type { Herdr } from "./herdr.ts";
 import { DEFAULT_TIER, VERDICT_ORDER, type Judge, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, shellQuote, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
@@ -277,10 +277,6 @@ export function unmarked(text: string): string {
 export function isSafeBranchName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(name) && !name.includes("..") && !name.endsWith("/") &&
     !name.endsWith(".lock") && !name.includes("//");
-}
-
-export function shellQuote(argument: string): string {
-  return `'${argument.replaceAll("'", `'"'"'`)}'`;
 }
 
 const sleep = (ms: number, signal?: AbortSignal) =>

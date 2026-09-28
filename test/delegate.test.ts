@@ -9,7 +9,6 @@ import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
 import {
   createDelegator,
   isSafeBranchName,
-  shellQuote,
   slugify,
   unmarked,
   type DelegateIO,
@@ -18,7 +17,7 @@ import {
 } from "../src/delegate.ts";
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
 import { createJudge, type Judge, type WorkerVerdict } from "../src/jev.ts";
-import type { WorkerResult, WorkerTask } from "../src/protocol.ts";
+import { shellQuote, type WorkerResult, type WorkerTask } from "../src/protocol.ts";
 import type { MergeMethod, PrView, Workspace } from "../src/workspace.ts";
 
 const noJudge: Judge = {

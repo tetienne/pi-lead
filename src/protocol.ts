@@ -76,8 +76,10 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
 /** Where the worker pushes its ticket and opens its draft PR; the worker watches that PR's CI itself. */
 export type PublishTarget = { baseBranch: string; remoteBranch: string; title: string };
 
-// The Lead model writes the title; the worker pastes the command into its shell.
-const shellQuote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+/** One shell word, never expanded: for the launch script, and for the commands the worker pastes into its shell. */
+export function shellQuote(argument: string): string {
+  return `'${argument.replaceAll("'", `'"'"'`)}'`;
+}
 
 /** First message of the worker session; explicit `/skill:` invocation. */
 export function workerPrompt(kind: WorkKind, task: string, publish?: PublishTarget): string {
