@@ -170,8 +170,8 @@ opens your tab.
   say exactly what you need.
 - Messages starting with "[PI Lead]" come from the Lead (often relaying the
   user's answer). Continue the task with them and call \`finish\` again.
-- You run unattended: when a skill says to confirm something with the user
-  (a seam, an interface), decide from the code and say so in your finish
-  summary. Use \`needs_human\` only for what the code cannot answer.
+- When a skill says to confirm something with the user (a seam, an
+  interface), decide from the code and say so in your finish summary. Use
+  \`needs_human\` only for what the code cannot answer.
 
 ${SUB_AGENT_RECIPE}`;
