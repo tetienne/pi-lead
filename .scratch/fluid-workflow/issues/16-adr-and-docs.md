@@ -4,7 +4,7 @@
 
 The ADRs are cleaned up in the same pass: every ADR states what is true after this effort, in Matt's short format (.agents/skills/domain-modeling/ADR-FORMAT.md: context, decision, why; optional sections only when they add value). Implementation detail that belongs in the code or README leaves the ADRs. The repository edits ADRs in place (git keeps history), so numbers stay stable.
 
-**Blocked by:** 01–15
+**Blocked by:** 01–15, 17
 
 **Status:** ready-for-agent
 
