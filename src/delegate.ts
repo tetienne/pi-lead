@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import type { LeadConfig, Tier } from "./config.ts";
 import type { Herdr } from "./herdr.ts";
@@ -279,20 +280,6 @@ export function isSafeBranchName(name: string): boolean {
     !name.endsWith(".lock") && !name.includes("//");
 }
 
-const sleep = (ms: number, signal?: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason);
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
@@ -541,7 +528,7 @@ export function createDelegator(deps: DelegateDeps) {
         }
         lastBeat = Date.now();
       }
-      await sleep(pollMs, worker.controller.signal);
+      await sleep(pollMs, undefined, { signal: worker.controller.signal });
     }
   };
 
