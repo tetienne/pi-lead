@@ -27,7 +27,17 @@ const noJudge: Judge = {
 
 type Log = string[];
 type Reply =
-  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string; uncommitted?: boolean }
+  | {
+      status: WorkerVerdict;
+      summary?: string;
+      findings?: string;
+      delayMs?: number;
+      /** The fake worker finishes only once this settles (given the fake Herdr's log): an event, not a delay, orders it. */
+      after?: (log: Log) => Promise<unknown>;
+      quota?: WorkerResult["quota"];
+      modelError?: string;
+      uncommitted?: boolean;
+    }
   | "exit"
   | "silent";
 
@@ -164,7 +174,7 @@ function fakeHerdr(
     const next = replies[Math.min(options.sharedTurns ? sharedTurn++ : worker.turn++, replies.length - 1)]!;
     if (next === "silent") return;
     if (next === "exit") return void setTimeout(() => void writeFile(worker.exitPath, "1\n"), 5);
-    setTimeout(() => void write(worker, next), next.delayMs ?? 5);
+    void Promise.resolve(next.after?.(log)).then(() => setTimeout(() => void write(worker, next), next.delayMs ?? 5));
   };
   return {
     workspace: "w1",
@@ -587,7 +597,9 @@ test("a branch touching only ordinary files gets no host warning", async (t) => 
 
 test("code-writing tickets start in parallel, with or without a Jev key", async (t) => {
   for (const judge of [{}, { modelTier: async () => ({ tier: "standard" as const, difficulty: 2 }) }]) {
-    const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", delayMs: 30 }], judge });
+    // No worker finishes before Two has opened: it opens while One still runs, or never.
+    const twoOpened = (log: Log) => until(() => log.includes("open ○ Two"));
+    const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", after: twoOpened }], judge });
     const both = [nextOutcome(), nextOutcome()];
     await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
     await delegator.start({ kind: "prototype", title: "Two", task: "b" }, io);
@@ -970,7 +982,9 @@ test("a new Lead adopts a dead Lead's live worker: listed, messaged, and its fin
 });
 
 test("a finish that lands while no Lead is alive reaches the Lead that adopts the worker", async (t) => {
-  const { herdr, stateRoot } = await crashedLead(t, [{ status: "needs_human", summary: "Which colour?", delayMs: 30 }]);
+  // Lands once the dead Lead has started watching (its first look finds nothing; the next is a minute away).
+  const watching = (log: Log) => until(() => log.includes("meta pane-1 state=running"));
+  const { herdr, stateRoot } = await crashedLead(t, [{ status: "needs_human", summary: "Which colour?", after: watching }]);
   const { dir } = await recordWhen(stateRoot, () => true);
   await until(() => existsSync(join(dir, "result.json")));
   const lead = await setup(t, { herdr, stateRoot, pid: 333, processAlive: (pid) => pid !== 111 });
@@ -1045,7 +1059,8 @@ test("worker panes get Herdr metadata on every state and an agent name, best-eff
   const seen: Seen = {};
   const { delegator, log, nextOutcome } = await setup(t, {
     seen,
-    replies: [{ status: "done", delayMs: 80 }],
+    // Finishes only once the heartbeat has retried the agent name.
+    replies: [{ status: "done", after: (log) => until(() => log.filter((line) => line.startsWith("rename")).length === 2) }],
     herdrOptions: { renameFailures: 1 },
   });
   const pending = nextOutcome();
