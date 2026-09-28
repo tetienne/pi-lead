@@ -50,14 +50,6 @@ export type PaneMetadata = {
 /** `--agent pi` makes Herdr apply the presentation fields only while a Pi occupies the pane. */
 export const METADATA_SOURCE = "custom:pi-lead";
 
-function collectStrings(value: unknown, field: string, found: string[] = []): string[] {
-  if (!value || typeof value !== "object") return found;
-  const record = value as Record<string, unknown>;
-  if (typeof record[field] === "string") found.push(record[field]);
-  for (const nested of Object.values(record)) collectStrings(nested, field, found);
-  return found;
-}
-
 /** The workspace is the prefix of a pane or tab id (`<workspace>:<pane>`, `<workspace>:<tab>`). */
 export function workspaceFromPaneId(paneId: string | undefined): string | undefined {
   const separator = paneId?.indexOf(":") ?? -1;
@@ -67,19 +59,19 @@ export function workspaceFromPaneId(paneId: string | undefined): string | undefi
 export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): Herdr | undefined {
   const workspace = workspaceFromPaneId(environment.HERDR_PANE_ID);
   if (environment.HERDR_ENV !== "1" || !workspace) return undefined;
-  const herdr = async (args: string[]) => {
+  /** Herdr answers `{ id, result }` as JSON; a failure exits non-zero, with its error on stderr. */
+  const herdr = async <Result = unknown>(args: string[]): Promise<Partial<Result> | undefined> => {
     const { stdout } = await execFileAsync("herdr", args, { encoding: "utf8", timeout: 10_000, maxBuffer: 1 << 20 });
-    return stdout.trim() ? (JSON.parse(stdout) as unknown) : undefined;
+    return stdout.trim() ? (JSON.parse(stdout) as { result?: Partial<Result> }).result : undefined;
   };
   return {
     workspace,
     async createWorktree({ cwd, branch, base, path, label }) {
-      const created = await herdr(["worktree", "create", "--cwd", cwd, "--branch", branch, "--base", base, "--path", path, "--label", label, "--no-focus"]);
-      const result = (created as { result?: unknown } | undefined)?.result as
-        | { workspace?: { workspace_id?: unknown }; root_pane?: { pane_id?: unknown } }
-        | undefined;
-      const workspaceId = result?.workspace?.workspace_id;
-      const paneId = result?.root_pane?.pane_id;
+      const created = await herdr<{ workspace: { workspace_id?: unknown }; root_pane: { pane_id?: unknown } }>(
+        ["worktree", "create", "--cwd", cwd, "--branch", branch, "--base", base, "--path", path, "--label", label, "--no-focus"],
+      );
+      const workspaceId = created?.workspace?.workspace_id;
+      const paneId = created?.root_pane?.pane_id;
       if (typeof workspaceId !== "string" || typeof paneId !== "string") throw new Error("herdr did not return a workspace_id and pane_id");
       return { workspaceId, paneId };
     },
@@ -96,7 +88,8 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
       await herdr(["worktree", "remove", "--workspace", workspaceId, "--force"]);
     },
     async listWorkspaces() {
-      return collectStrings(await herdr(["workspace", "list"]), "workspace_id");
+      const listed = await herdr<{ workspaces: Array<{ workspace_id: string }> }>(["workspace", "list"]);
+      return (listed?.workspaces ?? []).map((workspace) => workspace.workspace_id);
     },
     async hasAgent(paneId) {
       return herdr(["agent", "get", paneId]).then(
