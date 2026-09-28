@@ -883,7 +883,7 @@ test("reconcile closes tabs of dead Leads that still exist and removes their dir
     herdrOptions: { workspaces: ["w1", "w7"] },
     workspace: { ...fakeWorkspace([]), remove: async (path) => void removed.push(basename(path)) },
   });
-  assert.equal(await delegator.reconcile(), 1);
+  assert.equal(await delegator.reconcile(io), 1);
   assert.deepEqual(log.filter((line) => line.startsWith("close")), ["close w7"], "only the dead Lead's live worktree");
   assert.deepEqual(removed.sort(), ["dead-gone", "dead-open"]);
   const failed = JSON.parse(await readFile(join(stateRoot, "dead-failed", "tab.json"), "utf8"));
@@ -896,7 +896,7 @@ test("reconcile keeps every record when Herdr does not answer", async (t) => {
   await mkdir(join(stateRoot, "dead"));
   await writeFile(join(stateRoot, "dead", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x", workspaceId: "w7" }));
   const { delegator, log } = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: {} });
-  assert.equal(await delegator.reconcile(), 0);
+  assert.equal(await delegator.reconcile(io), 0);
   assert.ok(!log.some((line) => line.startsWith("close") || line.startsWith("remove")));
   assert.ok((await readdir(stateRoot)).includes("dead"));
 });
@@ -910,7 +910,7 @@ test("reconcile never touches the task dirs of a Lead that is still running", as
   assert.equal(JSON.parse(await readFile(join(stateRoot, dir!, "tab.json"), "utf8")).workspaceId, "tab-1");
   // Same process: even with processAlive faked away, its own records are skipped.
   const other = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: { workspaces: ["w1", "tab-1"] } });
-  assert.equal(await other.delegator.reconcile(), 0);
+  assert.equal(await other.delegator.reconcile(io), 0);
   assert.ok(!other.log.some((line) => line.startsWith("close")));
 });
 
@@ -923,12 +923,12 @@ test("reconcile keeps a dead Lead's directory until its worktree is confirmed re
     processAlive: () => false,
     herdrOptions: { workspaces: ["w1", "w7"], closeFailures: 1 },
   });
-  assert.equal(await delegator.reconcile(), 0);
+  assert.equal(await delegator.reconcile(io), 0);
   assert.ok(log.includes("close w7"));
   assert.ok(!log.includes("remove dir"));
   assert.ok((await readdir(stateRoot)).includes("dead-task"));
 
-  assert.equal(await delegator.reconcile(), 1);
+  assert.equal(await delegator.reconcile(io), 1);
   assert.ok(log.includes("remove dir"));
 });
 

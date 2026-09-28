@@ -1217,7 +1217,7 @@ export function createDelegator(deps: DelegateDeps) {
      * branch is kept). Records of live Leads (other sessions, or this
      * process) are left alone. Returns how many worktrees were removed.
      */
-    async reconcile(io?: DelegateIO): Promise<number> {
+    async reconcile(io: DelegateIO): Promise<number> {
       let names: string[];
       try {
         names = await readdir(deps.stateRoot);
@@ -1236,13 +1236,11 @@ export function createDelegator(deps: DelegateDeps) {
       const workspaces = await herdr.listWorkspaces().catch(() => undefined);
       // If Herdr does not answer, or not even for the Lead's own workspace, try again on the next start.
       if (!workspaces || !workspaces.includes(herdr.workspace)) return 0;
-      const repo = io
-        ? await deps.workspace.repoRoot(io.cwd).then((root) => deps.workspace.mainCheckout(root)).catch(() => undefined)
-        : undefined;
+      const repo = await deps.workspace.repoRoot(io.cwd).then((root) => deps.workspace.mainCheckout(root)).catch(() => undefined);
       let closed = 0;
       for (const { dir, record } of orphans) {
         const live = record.worker;
-        if (io && live && record.workspaceId && workspaces.includes(record.workspaceId) && (await piRuns(dir, record))) {
+        if (live && record.workspaceId && workspaces.includes(record.workspaceId) && (await piRuns(dir, record))) {
           // Another repository's worker: its own Lead may still adopt it.
           if (live.repo !== repo) continue;
           // Lost the claim: another Lead started at the same moment and adopts it.
