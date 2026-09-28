@@ -1,6 +1,6 @@
 # Fluid workflow: prune the processes that no longer protect anything
 
-**Status:** ready-for-agent (awaiting spec approval)
+**Status:** ready-for-agent (approved 2026-09-28)
 
 Research: [research-ecosystem.md](research-ecosystem.md). Decisions made with the
 user in conversation on 2026-09-28; ADR 0005 (workers on the host) and ADR
