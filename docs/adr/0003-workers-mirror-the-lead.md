@@ -2,21 +2,26 @@
 status: accepted
 ---
 
-# Workers mirror the Lead; Matt's router drives the Lead
+# Workers mirror the Lead; Matt's router maps fuzzy work
 
-1. **ask-matt is the Lead's router.** For anything that is not a plain
-   question, the Lead reads Matt Pocock's `ask-matt` skill and follows the
-   flow it names. Execution skills (`implement`, `prototype`,
+1. **ask-matt is an optional map.** A question is answered and a clear,
+   well-scoped change is delegated directly. For fuzzy, large or
+   multi-session work the Lead reads Matt Pocock's `ask-matt` skill and
+   follows the flow it names. Execution skills (`implement`, `prototype`,
    `diagnosing-bugs`, `code-review`, `research`) map to `delegate`; every other
    skill runs in the Lead conversation. The guidance carries an index of skill
    files because many of Matt's skills are hidden from Pi's skill list
    (`disable-model-invocation`).
 2. **A worker is a Pi like the Lead.** Same package skills, same global skills
-   and prompts, the repository's `AGENTS.md`, and, when the Lead trusts the
-   project, the repository's `.agents/skills`, `.pi/skills`, `.pi/prompts` and
-   `.pi/APPEND_SYSTEM.md`, snapshotted right after cloning. Workers load only
-   the PI Lead worker extension and Herdr's own Pi integration, not project or
-   global extensions.
+   and prompts, the repository's `AGENTS.md`. Workers load the same global
+   extensions and packages as the Lead (Herdr's Pi integration among them)
+   plus the PI Lead worker extension; the Lead extension turns itself off in
+   a worker. Pi saves trust per path and the fresh worktree has none, so the
+   worker inherits the Lead's decision for its run: `--approve` when the Lead
+   trusts the project (its packages, extensions, skills, prompts and
+   `APPEND_SYSTEM.md` load from the worktree), `--no-approve` otherwise.
+   Project packages install under the worktree's `.pi/`, so each worker
+   installs them again at startup.
 3. **Herdr shows and carries messages; files decide.** Workers run with
    `HERDR_AGENT=pi` and, when installed (`herdr integration install pi`),
    Herdr's Pi integration, so Herdr shows their working/idle state. Results

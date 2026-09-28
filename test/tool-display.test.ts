@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { StartResult, WorkerInfo } from "../src/delegate.ts";
-import { cleanLines, delegateCall, delegateResult, workerCall, workerResult, type Paint } from "../src/tool-display.ts";
+import { cleanLines, delegateCall, delegateResult, safePreview, workerCall, workerResult, type Paint } from "../src/tool-display.ts";
 
 /** Colours as visible tags, so tests see what is painted how. */
 const paint: Paint = (color, text) => (color === "dim" ? text : `<${color}>${text}</${color}>`);
@@ -28,6 +28,14 @@ test("a delegate call shows kind, title and the start of the task", () => {
   assert.equal(delegateCall({}, plain), "delegate  ");
 });
 
+test("safePreview strips escapes and controls, and clips with a count", () => {
+  assert.equal(safePreview(undefined), "null");
+  const preview = safePreview("echo \x1b[2Jhi\nrm -rf /" + "x".repeat(1000));
+  assert.doesNotMatch(preview, /[\x00-\x1f\x7f]/);
+  assert.match(preview, /^echo hi⏎ rm -rf \//);
+  assert.match(preview, /more chars\)$/);
+});
+
 test("model-written arguments cannot reach the terminal raw", () => {
   const call = delegateCall({ kind: "implement", title: "\x1b[2Jwipe\x1b]0;x\x07", task: "a‮b" }, plain);
   assert.ok(!/[\x00-\x09\x0b-\x1f\x7f‮]/.test(call), JSON.stringify(call));
@@ -44,8 +52,6 @@ test("a delegate result says started, with the route", () => {
     "<accent>●</accent> started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab",
   );
   assert.equal(delegateResult(started, "Delegated…", true, plain), "● started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab\nDelegated…");
-  const notReady: StartResult = { status: "not_ready", missing: ["acceptance"], text: "Not delegated: no acceptance criteria." };
-  assert.equal(delegateResult(notReady, notReady.text, false, paint), "<warning>?</warning> Not delegated: no acceptance criteria.");
   const failed: StartResult = { status: "failed", text: "PI Lead workers need Herdr." };
   assert.equal(delegateResult(failed, failed.text, false, paint), "<error>✗</error> PI Lead workers need Herdr.");
   const noted: StartResult = { status: "started", worker: worker({ route: { model: "a/b", thinking: "high", tier: "deep", note: "a/x ran out of quota" } }), text: "" };

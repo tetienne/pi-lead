@@ -14,12 +14,11 @@ status: accepted
    with `disable-model-invocation` are invoked explicitly: by the Lead's
    workflow guidance, or as `/skill:<name>` in the worker's first message.
 4. **Workers are visible Pi sessions in Herdr.** One `--no-focus` worktree
-   workspace per worker runs an interactive `pi` process with a Jev-chosen model and thinking
-   level. The worker ends by calling `finish`; the Lead waits for that result
+   workspace per worker runs an interactive `pi` process on the model and
+   thinking level of the tier the Lead picked (`fast`, `standard` or `deep`). The worker ends by calling `finish`; the Lead waits for that result
    file and collects the branch.
-5. **Jev judges, code decides** (ADR 0002). Jev answers closed-set questions
-   whose answers map to deterministic actions: model tier, ticket readiness,
-   worker verdicts, review severity, failure kind and ticket overlap.
+5. **The Lead model judges; the worker's gates decide completion.** There is
+   no separate judge model (ADR 0002 is superseded by ADR 0006).
 
 ## Consequences
 

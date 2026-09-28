@@ -38,9 +38,6 @@
       "./src/lead.ts"
     ]
   },
-  "dependencies": {
-    "@typesafe-ai/sdk": "^0.6.0"
-  },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-coding-agent": "0.87.1",

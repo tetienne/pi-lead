@@ -60,9 +60,14 @@ test("an unavailable configured model falls back to the first available fallback
 });
 
 test("config merging keeps defaults for unspecified fields", () => {
-  const config = mergeConfig(DEFAULT_CONFIG, { jev: { dailyBudgetUsd: 0.5 } });
-  assert.equal(config.jev.dailyBudgetUsd, 0.5);
-  assert.equal(config.jev.model, DEFAULT_CONFIG.jev.model);
-  assert.equal(config.stuckDetection, true);
-  assert.equal(mergeConfig(DEFAULT_CONFIG, { stuckDetection: false }).stuckDetection, false);
+  const config = mergeConfig(DEFAULT_CONFIG, { waitingTimeoutMinutes: 30 });
+  assert.equal(config.waitingTimeoutMinutes, 30);
+  assert.equal(config.keepFailedWorkers, DEFAULT_CONFIG.keepFailedWorkers);
+  assert.equal(mergeConfig(DEFAULT_CONFIG, { keepFailedWorkers: false }).keepFailedWorkers, false);
+});
+
+test("the review tier uses its own route when configured, else the standard tier", () => {
+  assert.deepEqual(resolveRoute("review", DEFAULT_CONFIG.tiers, lead, available), { model: "anthropic/claude-sonnet-5", thinking: "medium", tier: "review" });
+  const config = mergeConfig(DEFAULT_CONFIG, { tiers: { review: { model: "openai-codex/gpt-5.6-mini" } } });
+  assert.deepEqual(resolveRoute("review", config.tiers, lead, available), { model: "openai-codex/gpt-5.6-mini", thinking: "medium", tier: "review" });
 });

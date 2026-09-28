@@ -1,5 +1,4 @@
 import type { StartResult, WorkerInfo } from "./delegate.ts";
-import { safePreview } from "./report-guard.ts";
 import { stateGlyph } from "./worker-display.ts";
 
 /**
@@ -12,6 +11,18 @@ import { stateGlyph } from "./worker-display.ts";
 
 export type Color = "toolTitle" | "accent" | "muted" | "dim" | "success" | "warning" | "error";
 export type Paint = (color: Color, text: string) => string;
+
+const PREVIEW_LIMIT = 400;
+
+/** One line of printable text: no terminal escapes or control characters from a model-written argument. */
+export function safePreview(value: unknown, limit = PREVIEW_LIMIT): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? null) ?? "";
+  const clean = text
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, "\u00b7")
+    .replace(/\n/g, "\u23ce ");
+  return clean.length > limit ? `${clean.slice(0, limit)}… (${clean.length - limit} more chars)` : clean;
+}
 
 /** Multi-line text with every line cleaned like `safePreview`, for expanded views. */
 export function cleanLines(text: string, maxLines = 40, lineLimit = 400): string {
@@ -45,7 +56,7 @@ export function delegateCall(
 
 function isStartResult(value: unknown): value is StartResult {
   const status = (value as { status?: unknown } | undefined)?.status;
-  return status === "started" || status === "not_ready" || status === "failed";
+  return status === "started" || status === "failed";
 }
 
 /** First line of a result: what happened, with its glyph; the host text follows when expanded. */
@@ -55,8 +66,6 @@ export function delegateResult(details: unknown, text: string, expanded: boolean
   switch (details.status) {
     case "started":
       return `${paint("accent", "●")} started · ${routeText(details.worker)}${paint("dim", " · in a background Herdr tab")}${routeNote(details.worker, paint)}${more}`;
-    case "not_ready":
-      return `${paint("warning", "?")} ${expanded ? cleanLines(text) : safePreview(text, 300)}`;
     case "failed":
       return `${paint("error", "✗")} ${expanded ? cleanLines(text) : safePreview(text, 300)}`;
   }

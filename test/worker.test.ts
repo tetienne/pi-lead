@@ -6,66 +6,6 @@ import { test } from "node:test";
 
 import { parseWorkerResult } from "../src/protocol.ts";
 import worker, { COMMIT_LEFTOVERS } from "../src/worker/extension.ts";
-import { runVerification, shouldVerify, VERIFY_OUTPUT_TAIL } from "../src/worker/verify.ts";
-
-/** A worker's `tool_result` event, as narrowed by `isBashToolResult`/`isWriteToolResult`. */
-const toolResult = (toolName: string, input: Record<string, unknown>, isError: boolean) => ({
-  type: "tool_result",
-  toolCallId: "1",
-  toolName,
-  input,
-  isError,
-  content: [],
-});
-
-test("stuck detection is fed by Pi's own tool_result event for bash, and cleared by a file change", async () => {
-  const handlers = new Map<string, (event: any, ctx?: any) => any>();
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
-  const taskPath = join(dir, "task.json");
-  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x" }));
-  const messages: any[] = [];
-  worker({
-    registerFlag: () => undefined,
-    getFlag: () => taskPath,
-    registerTool: () => undefined,
-    getSessionName: () => undefined,
-    setSessionName: () => undefined,
-    sendMessage: (message: unknown) => messages.push(message),
-    on: (event: string, handler: any) => handlers.set(event, handler),
-  } as any);
-  const ctx = { isIdle: () => false, ui: { setStatus: () => undefined } };
-  await handlers.get("session_start")!({}, ctx);
-
-  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
-  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
-  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
-  assert.equal(messages.length, 1, "steered after 3 identical failures");
-  assert.match(messages[0].content, /npm test.*3 times/);
-
-  messages.length = 0;
-  await handlers.get("tool_result")!(toolResult("write", {}, false), ctx);
-  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
-  await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
-  assert.equal(messages.length, 0, "a file change resets the streak");
-});
-
-test("a worker result may carry a verification, which must be well formed", () => {
-  const base = { version: 1, id: "t", seq: 1, status: "done", summary: "s" };
-  const verification = { command: "npm test", exitCode: 1, outputTail: "1 failing", ms: 1_200 };
-  assert.equal(parseWorkerResult(base, "t").verification, undefined);
-  assert.deepEqual(parseWorkerResult({ ...base, verification }, "t").verification, verification);
-  for (const bad of [
-    "npm test",
-    { ...verification, exitCode: "1" },
-    { ...verification, exitCode: 1.5 },
-    { ...verification, outputTail: undefined },
-    { ...verification, command: 1 },
-    { ...verification, ms: -1 },
-    { ...verification, ms: Number.NaN },
-  ]) {
-    assert.throws(() => parseWorkerResult({ ...base, verification: bad }, "t"), /malformed/, JSON.stringify(bad));
-  }
-});
 
 test("the worker only adds finish and web_search; stock file/shell tools come from Pi itself", async () => {
   const tools: string[] = [];
@@ -133,111 +73,6 @@ test("a run that ends on a provider error reports it to the Lead instead of idli
   assert.equal(second.modelError, "401 unauthorized");
 });
 
-test("finish runs the verify command only for code work that claims progress, when the project names one", () => {
-  const verify = "npm test";
-  for (const kind of ["implement", "prototype", "debug"] as const) {
-    assert.equal(shouldVerify({ kind, verify }, "done"), true, kind);
-    assert.equal(shouldVerify({ kind, verify }, "partial"), true, kind);
-  }
-  for (const status of ["blocked", "needs_human"] as const) assert.equal(shouldVerify({ kind: "implement", verify }, status), false, status);
-  for (const kind of ["review", "research"] as const) assert.equal(shouldVerify({ kind, verify }, "done"), false, kind);
-  assert.equal(shouldVerify({ kind: "implement" }, "done"), false, "no verify configured");
-  assert.equal(shouldVerify({ kind: "implement", verify: "  " }, "done"), false);
-});
-
-test("the verify run executes in the given cwd on the host and keeps the exit code and an output tail", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-verify-"));
-  await writeFile(join(dir, "marker"), "");
-  let clock = 1_000;
-  const result = await runVerification({
-    command: `test -f marker || exit 9; node -e "process.stdout.write('y'.repeat(3000) + '\\n1 failing')"; exit 3`,
-    cwd: dir,
-    now: () => (clock += 500),
-  });
-  assert.equal(result.command.startsWith("test -f marker"), true);
-  assert.equal(result.exitCode, 3, "ran in the given cwd, where marker exists");
-  assert.equal(result.ms, 500);
-  assert.equal(result.outputTail.length, VERIFY_OUTPUT_TAIL);
-  assert.ok(result.outputTail.endsWith("\n1 failing"));
-  assert.doesNotThrow(() => parseWorkerResult({ version: 1, id: "t", seq: 1, status: "done", summary: "s", verification: result }, "t"));
-});
-
-test("a verify run that errors or times out has exit code -1 and never throws", async () => {
-  const failed = await runVerification({ command: "true", cwd: "/no/such/directory-pi-lead-test" });
-  assert.equal(failed.exitCode, -1);
-  assert.match(failed.outputTail, /could not run:/);
-
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-verify-"));
-  const timedOut = await runVerification({ command: "sleep 5", cwd: dir, timeoutMinutes: 0.0005 });
-  assert.equal(timedOut.exitCode, -1);
-  assert.match(timedOut.outputTail, /\[PI Lead: stopped after 0\.0005 minutes\]$/);
-
-  const stop = new AbortController();
-  const stopping = runVerification({ command: "sleep 5", cwd: dir, signal: stop.signal });
-  stop.abort();
-  const stoppedByUser = await stopping;
-  assert.equal(stoppedByUser.exitCode, -1);
-  assert.match(stoppedByUser.outputTail, /\[PI Lead: aborted\]$/);
-});
-
-test("a scout finishing done without allowedFiles is refused", async () => {
-  const handlers = new Map<string, (event: any, ctx?: any) => any>();
-  const tools = new Map<string, any>();
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
-  const taskPath = join(dir, "task.json");
-  const resultPath = join(dir, "result.json");
-  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "scout", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: dir }));
-  worker({
-    registerFlag: () => undefined,
-    getFlag: () => taskPath,
-    registerTool: (tool: any) => tools.set(tool.name, tool),
-    on: (event: string, handler: any) => handlers.set(event, handler),
-  } as any);
-  const ctx = { ui: { setStatus: () => undefined } };
-  await assert.rejects(
-    () => tools.get("finish")!.execute("1", { status: "done", summary: "s" }, undefined, undefined, ctx),
-    /must call finish with a non-empty allowedFiles/,
-  );
-  await assert.rejects(
-    () => tools.get("finish")!.execute("1", { status: "done", summary: "s", allowedFiles: [] }, undefined, undefined, ctx),
-    /must call finish with a non-empty allowedFiles/,
-    "an empty array counts as missing",
-  );
-  await assert.rejects(readFile(resultPath, "utf8"), "nothing was written");
-});
-
-test("a scout finishing done with allowedFiles reports them", async () => {
-  const { execFile } = await import("node:child_process");
-  const run = (args: string[], cwd: string) => new Promise<void>((resolve, reject) => execFile("git", args, { cwd }, (error) => (error ? reject(error) : resolve())));
-  const worktree = await mkdtemp(join(tmpdir(), "pi-lead-worker-git-"));
-  await run(["init", "-q"], worktree);
-  await run(["config", "user.email", "worker@test"], worktree);
-  await run(["config", "user.name", "Worker"], worktree);
-  await writeFile(join(worktree, "a.txt"), "x");
-
-  const stateDir = await mkdtemp(join(tmpdir(), "pi-lead-worker-state-"));
-  const taskPath = join(stateDir, "task.json");
-  const resultPath = join(stateDir, "result.json");
-  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "scout", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: worktree }));
-  const tools = new Map<string, any>();
-  worker({
-    registerFlag: () => undefined,
-    getFlag: () => taskPath,
-    registerTool: (tool: any) => tools.set(tool.name, tool),
-    on: () => undefined,
-  } as any);
-  await tools.get("finish")!.execute(
-    "1",
-    { status: "done", summary: "mapped it", findings: "brief", allowedFiles: ["src/a.ts"] },
-    undefined,
-    undefined,
-    { ui: { setStatus: () => undefined } },
-  );
-  const result = parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t");
-  assert.deepEqual(result.allowedFiles, ["src/a.ts"]);
-  assert.equal(result.findings, "brief");
-});
-
 test("finish with a non-done status commits leftovers despite a failing pre-commit hook; done still runs it", async () => {
   const { execFile } = await import("node:child_process");
   const { chmod, mkdir } = await import("node:fs/promises");
@@ -254,7 +89,7 @@ test("finish with a non-done status commits leftovers despite a failing pre-comm
   const stateDir = await mkdtemp(join(tmpdir(), "pi-lead-worker-state-"));
   const taskPath = join(stateDir, "task.json");
   const resultPath = join(stateDir, "result.json");
-  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: worktree }));
+  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "prototype", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: worktree }));
   const tools = new Map<string, any>();
   worker({
     registerFlag: () => undefined,
@@ -276,80 +111,6 @@ test("finish with a non-done status commits leftovers despite a failing pre-comm
   );
 });
 
-test("the tool_call guard blocks write/edit outside the scout brief and on a protected file, and leaves bash alone", async () => {
-  const handlers = new Map<string, (event: any, ctx?: any) => any>();
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
-  const taskPath = join(dir, "task.json");
-  await writeFile(
-    taskPath,
-    JSON.stringify({
-      version: 1,
-      id: "t",
-      kind: "implement",
-      branch: "pi-lead/x-1",
-      title: "x",
-      worktreePath: dir,
-      allowedFiles: ["src/a.ts"],
-      protectedFiles: ["test/a.test.ts"],
-    }),
-  );
-  worker({
-    registerFlag: () => undefined,
-    getFlag: () => taskPath,
-    registerTool: () => undefined,
-    on: (event: string, handler: any) => handlers.set(event, handler),
-  } as any);
-  const guard = handlers.get("tool_call")!;
-  const call = (toolName: string, path: string) => guard({ type: "tool_call", toolCallId: "1", toolName, input: { path } });
-
-  assert.equal(await call("write", "src/a.ts"), undefined, "inside the allowed list");
-  const outside = await call("write", "src/rogue.ts");
-  assert.ok(outside?.block);
-  assert.match(outside!.reason, /src\/rogue\.ts is not in the scout's allowed files/);
-  assert.match(outside!.reason, /Allowed files: src\/a\.ts/);
-  const guarded = await call("edit", "test/a.test.ts");
-  assert.ok(guarded?.block);
-  assert.match(guarded!.reason, /is a scout test; make it pass instead of changing it/);
-  assert.equal(await call("bash", "src/rogue.ts"), undefined, "bash is never intercepted");
-});
-
-test("the tool_call guard re-reads task.json on every call, so a Lead-side widen takes effect without a restart", async () => {
-  const handlers = new Map<string, (event: any, ctx?: any) => any>();
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
-  const taskPath = join(dir, "task.json");
-  const baseTask = { version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", worktreePath: dir, allowedFiles: ["src/a.ts"], protectedFiles: [] };
-  await writeFile(taskPath, JSON.stringify(baseTask));
-  worker({
-    registerFlag: () => undefined,
-    getFlag: () => taskPath,
-    registerTool: () => undefined,
-    on: (event: string, handler: any) => handlers.set(event, handler),
-  } as any);
-  const guard = handlers.get("tool_call")!;
-  const call = (path: string) => guard({ type: "tool_call", toolCallId: "1", toolName: "write", input: { path } });
-
-  const blocked = await call("src/rogue.ts");
-  assert.ok(blocked?.block, "not yet allowed");
-
-  await writeFile(taskPath, JSON.stringify({ ...baseTask, allowedFiles: ["src/a.ts", "src/rogue.ts"] }));
-  assert.equal(await call("src/rogue.ts"), undefined, "the guard picked up the rewritten task file");
-});
-
-test("the tool_call guard does nothing without a brief", async () => {
-  const handlers = new Map<string, (event: any, ctx?: any) => any>();
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
-  const taskPath = join(dir, "task.json");
-  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", worktreePath: dir }));
-  worker({
-    registerFlag: () => undefined,
-    getFlag: () => taskPath,
-    registerTool: () => undefined,
-    on: (event: string, handler: any) => handlers.set(event, handler),
-  } as any);
-  const guard = handlers.get("tool_call")!;
-  assert.equal(await guard({ type: "tool_call", toolCallId: "1", toolName: "write", input: { path: "anything.ts" } }), undefined);
-});
-
 test("the leftovers commit reports git add's own error on stdout", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-lead-not-a-repo-"));
   const { execFile } = await import("node:child_process");
@@ -360,4 +121,148 @@ test("the leftovers commit reports git add's own error on stdout", async () => {
   });
   assert.notEqual(result.code, 0);
   assert.match(result.stdout, /not a git repository/);
+});
+
+async function reviewedWorker(kind = "implement", runs: Array<{ exitCode: number; stdout: string }> = []) {
+  const { execFile } = await import("node:child_process");
+  const git = (args: string[], cwd: string) =>
+    new Promise<string>((resolve, reject) => execFile("git", args, { cwd }, (error, stdout) => (error ? reject(error) : resolve(stdout.trim()))));
+  const worktree = await mkdtemp(join(tmpdir(), "pi-lead-review-git-"));
+  await git(["init", "-q"], worktree);
+  await git(["config", "user.email", "worker@test"], worktree);
+  await git(["config", "user.name", "Worker"], worktree);
+  const commit = async (file: string, text: string) => {
+    await writeFile(join(worktree, file), text);
+    await git(["add", "-A"], worktree);
+    await git(["commit", "-q", "-m", `edit ${file}`], worktree);
+  };
+  await commit("a.txt", "base");
+  const base = await git(["rev-parse", "HEAD"], worktree);
+  await commit("a.txt", "work");
+
+  const stateDir = await mkdtemp(join(tmpdir(), "pi-lead-review-state-"));
+  const taskPath = join(stateDir, "task.json");
+  const resultPath = join(stateDir, "result.json");
+  const review = { model: "opencode-go/reviewer", thinking: "medium" };
+  await writeFile(
+    taskPath,
+    JSON.stringify({ version: 1, id: "t", kind, branch: "pi-lead/x-1", title: "x", task: "Make a.txt say work.", resultPath, worktreePath: worktree, base, review }),
+  );
+  const calls: string[][] = [];
+  /** A fresh worker process on the same task, as after a /reload. */
+  const boot = async () => {
+    const tools = new Map<string, any>();
+    const handlers = new Map<string, (event: any, ctx?: any) => any>();
+    worker(
+      {
+        registerFlag: () => undefined,
+        getFlag: () => taskPath,
+        registerTool: (tool: any) => tools.set(tool.name, tool),
+        on: (event: string, handler: any) => handlers.set(event, handler),
+        getSessionName: () => "x",
+      } as any,
+      async (argv) => {
+        calls.push(argv);
+        return runs.shift() ?? { exitCode: 0, stdout: "1. a.txt: finding\n" };
+      },
+    );
+    await handlers.get("session_start")!({}, { ui: { setStatus: () => undefined } });
+    const call = (name: string, params: object) => tools.get(name)!.execute("1", params, undefined, undefined, {});
+    return { tools, call };
+  };
+  const { tools, call } = await boot();
+  return { tools, calls, call, boot, commit, worktree, resultPath, base };
+}
+
+test("the review tool runs a read-only one-shot reviewer from the ticket's base, three calls at most", async () => {
+  const { calls, call, base } = await reviewedWorker();
+  const first = await call("review", {});
+  assert.match(first.content[0].text, /Review 1\/3 .* by opencode-go\/reviewer/);
+  assert.match(first.content[0].text, /<review-output untrusted>\n1\. a\.txt: finding\n<\/review-output>/);
+  const argv = calls[0]!;
+  for (const flag of ["--print", "--no-session", "--no-extensions", "--no-approve"]) assert.ok(argv.includes(flag), flag);
+  assert.equal(argv[argv.indexOf("--tools") + 1], "read,grep,find,ls");
+  assert.equal(argv[argv.indexOf("--model") + 1], "opencode-go/reviewer");
+  const prompt = argv.at(-1)!;
+  assert.match(prompt, new RegExp(`^/skill:code-review Fixed point: ${base}\\.`));
+  assert.match(prompt, /<ticket>\nMake a\.txt say work\.\n<\/ticket>/);
+  assert.doesNotMatch(prompt, /re-review/);
+
+  await call("review", { previousFindings: "1. a.txt: finding" });
+  assert.match(calls[1]!.at(-1)!, /This is a re-review[\s\S]*<previous-findings>\n1\. a\.txt: finding\n<\/previous-findings>/);
+  await call("review", {});
+  await assert.rejects(() => call("review", {}), /All 3 review calls are used\. Call `finish` with status `blocked`/);
+  assert.equal(calls.length, 3, "the fourth call never reaches the reviewer");
+});
+
+test("finish done needs a review of the current, clean HEAD; partial never waits for one", async () => {
+  const { call, commit, worktree, resultPath } = await reviewedWorker();
+  await assert.rejects(() => call("finish", { status: "done", summary: "s" }), /no review covers the current HEAD/);
+  await call("review", {});
+  await commit("b.txt", "after review");
+  await assert.rejects(() => call("finish", { status: "done", summary: "s" }), /no review covers the current HEAD/, "a commit after the review");
+  await call("review", {});
+  await writeFile(join(worktree, "c.txt"), "dirty");
+  await assert.rejects(() => call("finish", { status: "done", summary: "s" }), /uncommitted changes/);
+  await call("finish", { status: "partial", summary: "s" });
+  assert.equal(parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t").status, "partial");
+});
+
+test("finish done passes once the last review covers HEAD", async () => {
+  const { call, resultPath } = await reviewedWorker();
+  await call("review", {});
+  await call("finish", { status: "done", summary: "s" });
+  assert.equal(parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t").status, "done");
+});
+
+test("only implement and debug workers get the review tool and its gate", async () => {
+  const { tools, call, resultPath } = await reviewedWorker("prototype");
+  assert.ok(!tools.has("review"));
+  await call("finish", { status: "done", summary: "s" });
+  assert.equal(parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t").status, "done");
+});
+
+test("a failed or empty reviewer run uses a review call and never unlocks finish", async () => {
+  const { call, calls } = await reviewedWorker("implement", [
+    { exitCode: 1, stdout: "boom" },
+    { exitCode: 0, stdout: "  \n" },
+    { exitCode: 2, stdout: "boom" },
+  ]);
+  await assert.rejects(() => call("review", {}), /reviewer failed \(exit 1\); 2 review calls left; call review again/);
+  await assert.rejects(() => call("finish", { status: "done", summary: "s" }), /no review covers the current HEAD/);
+  await assert.rejects(() => call("review", {}), /reviewer failed \(empty output\); 1 review call left/);
+  await assert.rejects(() => call("finish", { status: "done", summary: "s" }), /no review covers the current HEAD/);
+  await assert.rejects(() => call("review", {}), /no review calls left; call `finish` with status `blocked`/);
+  await assert.rejects(() => call("review", {}), /All 3 review calls are used/);
+  assert.equal(calls.length, 3);
+});
+
+test("an empty diff skips the reviewer, costs no call, and counts as reviewed", async () => {
+  const { call, calls, commit, resultPath } = await reviewedWorker();
+  await commit("a.txt", "base");
+  const result = await call("review", {});
+  assert.match(result.content[0].text, /^No changes to review/);
+  assert.equal(calls.length, 0);
+  assert.equal(result.details.reviews, 0);
+  await call("finish", { status: "done", summary: "s" });
+  assert.equal(parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t").status, "done");
+});
+
+test("review refuses a dirty tree without calling the reviewer", async () => {
+  const { call, calls, worktree } = await reviewedWorker();
+  await writeFile(join(worktree, "c.txt"), "dirty");
+  await assert.rejects(() => call("review", {}), /Commit your changes before calling review/);
+  assert.equal(calls.length, 0);
+});
+
+test("the review count and reviewed HEAD survive a reload of the worker", async () => {
+  const { call, boot, resultPath } = await reviewedWorker();
+  await call("review", {});
+  const reloaded = await boot();
+  await reloaded.call("review", {});
+  await reloaded.call("review", {});
+  await assert.rejects(() => reloaded.call("review", {}), /All 3 review calls are used/);
+  const again = await boot();
+  await again.call("finish", { status: "done", summary: "s" });
+  assert.equal(parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t").status, "done");
 });

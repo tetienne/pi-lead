@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by 0006
 ---
 
 # Verify code work with a command the project chooses, not one the worker ran

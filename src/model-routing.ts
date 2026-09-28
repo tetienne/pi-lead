@@ -1,7 +1,9 @@
 import type { LeadConfig, ThinkingLevel, Tier } from "./config.ts";
 
 export type ModelRef = { provider: string; id: string };
-export type WorkerRoute = { model: string; thinking: ThinkingLevel; tier: Tier; note?: string };
+/** `review` falls back to the `standard` tier when it is not configured. */
+export type RouteTier = Tier | "review";
+export type WorkerRoute = { model: string; thinking: ThinkingLevel; tier: RouteTier; note?: string };
 
 const refToString = (ref: ModelRef) => `${ref.provider}/${ref.id}`;
 
@@ -11,12 +13,12 @@ const refToString = (ref: ModelRef) => `${ref.provider}/${ref.id}`;
  * the Lead's own model rather than failing, and says so.
  */
 export function resolveRoute(
-  tier: Tier,
+  tier: RouteTier,
   tiers: LeadConfig["tiers"],
   lead: ModelRef | undefined,
   available: readonly ModelRef[],
 ): WorkerRoute | { error: string } {
-  const configured = tiers[tier];
+  const configured = tier === "review" ? (tiers.review ?? tiers.standard) : tiers[tier];
   if (!configured.model) {
     if (!lead) return { error: `no model configured for tier ${tier} and the Lead has no model` };
     return { model: refToString(lead), thinking: configured.thinking, tier };

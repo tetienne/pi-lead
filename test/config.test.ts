@@ -18,11 +18,11 @@ async function dirs(global?: object, project?: object) {
 }
 
 test("settings in their right place produce no notice", async () => {
-  const { agentDir, cwd } = await dirs({ leadGuard: "off" }, { verify: "npm test" });
+  const { agentDir, cwd } = await dirs({ keepFailedWorkers: false }, { waitingTimeoutMinutes: 30 });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
   assert.deepEqual(ignored, []);
-  assert.equal(config.leadGuard, "off");
-  assert.equal(config.verify, "npm test");
+  assert.equal(config.keepFailedWorkers, false);
+  assert.equal(config.waitingTimeoutMinutes, 30);
 
   const none = await dirs();
   assert.deepEqual((await loadConfigWithNotices(none.cwd, { projectTrusted: false, agentDir: none.agentDir })).ignored, []);
@@ -35,32 +35,13 @@ test("an old maxWorkers key in a user file is ignored, no error and no notice", 
   assert.equal((config as { maxWorkers?: number }).maxWorkers, undefined);
 });
 
-test("verify in the global config is dropped with a notice naming the file", async () => {
-  const { agentDir, cwd } = await dirs({ verify: "make secret-target" });
-  const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
-  assert.equal(config.verify, undefined);
-  assert.equal(ignored.length, 1);
-  assert.equal(
-    ignored[0],
-    `PI Lead: \`verify\` in ${join(agentDir, "pi-lead.json")} is ignored; set it in the project's .pi/pi-lead.json.`,
-  );
-  assert.doesNotMatch(ignored[0]!, /secret-target/, "never the value");
-});
-
 test("a project file of an untrusted project is ignored with a notice on how to trust it", async () => {
-  const { agentDir, cwd } = await dirs(undefined, { verify: "npm test" });
+  const { agentDir, cwd } = await dirs(undefined, { waitingTimeoutMinutes: 5 });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: false, agentDir });
-  assert.equal(config.verify, undefined);
+  assert.equal(config.waitingTimeoutMinutes, 120);
   assert.equal(ignored.length, 1);
   assert.match(ignored[0]!, /^PI Lead: \.pi\/pi-lead\.json is ignored because this project is not trusted in Pi \(.*\/trust.*--approve.*\)\.$/);
-  assert.doesNotMatch(ignored[0]!, /npm test/);
-});
-
-test("leadGuard in the project file is dropped with a notice", async () => {
-  const { agentDir, cwd } = await dirs(undefined, { leadGuard: "off" });
-  const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
-  assert.equal(config.leadGuard, "confirm");
-  assert.deepEqual(ignored, ["PI Lead: `leadGuard` in .pi/pi-lead.json is ignored; only the global config can change it."]);
+  assert.doesNotMatch(ignored[0]!, /waitingTimeoutMinutes/);
 });
 
 test("a config file that is not an object still loads without a notice", async () => {
@@ -69,19 +50,15 @@ test("a config file that is not an object still loads without a notice", async (
   assert.deepEqual((await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir })).ignored, []);
 });
 
-test("a notice shows a path under the home directory with ~", async () => {
-  const home = await mkdtemp(join(tmpdir(), "pi-lead-config-home-"));
-  const agentDir = join(home, ".pi", "agent");
-  await mkdir(agentDir, { recursive: true });
-  await writeFile(join(agentDir, "pi-lead.json"), JSON.stringify({ verify: "npm test" }));
-  const previous = process.env.HOME;
-  process.env.HOME = home;
-  try {
-    const { cwd } = await dirs();
-    const { ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
-    assert.deepEqual(ignored, ["PI Lead: `verify` in ~/.pi/agent/pi-lead.json is ignored; set it in the project's .pi/pi-lead.json."]);
-  } finally {
-    if (previous === undefined) delete process.env.HOME;
-    else process.env.HOME = previous;
-  }
+test("tiers.review is optional, inherits the standard thinking level, and a project file layers on the global one", async () => {
+  const none = await dirs();
+  assert.equal((await loadConfigWithNotices(none.cwd, { projectTrusted: true, agentDir: none.agentDir })).config.tiers.review, undefined);
+  const { agentDir, cwd } = await dirs(
+    { tiers: { standard: { thinking: "high" }, review: { model: "opencode-go/deepseek-v4.1-flash", fallbacks: [{ model: "a/b" }] } } },
+    { tiers: { review: { thinking: "low" } } },
+  );
+  const { config } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
+  assert.deepEqual(config.tiers.review, { model: "opencode-go/deepseek-v4.1-flash", thinking: "low", fallbacks: [{ model: "a/b" }] });
+  const inherited = await dirs({ tiers: { standard: { thinking: "high" }, review: { model: "a/b" } } });
+  assert.equal((await loadConfigWithNotices(inherited.cwd, { projectTrusted: true, agentDir: inherited.agentDir })).config.tiers.review?.thinking, "high");
 });

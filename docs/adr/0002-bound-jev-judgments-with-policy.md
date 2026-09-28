@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by 0006
 ---
 
 # Keep Jev judgments inside deterministic policy

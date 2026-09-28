@@ -1,10 +1,10 @@
-import type { WorkKind, WorkerVerdict } from "./jev.ts";
+import type { WorkKind, WorkerVerdict } from "./protocol.ts";
 
 /**
  * How workers show outside the conversation: Herdr tab labels and state
  * labels, notifications, the Lead's footer and progress lines. Pure
- * formatting, like jev-display.ts. Every glyph is one column wide, and each
- * is a distinct shape, so none relies on colour:
+ * formatting. Every glyph is one column wide, and each is a distinct shape,
+ * so none relies on colour:
  *
  * - `○` queued or starting, `●` running;
  * - `?` waiting for the user's answer, `~` partial, `✗` blocked or failed;
