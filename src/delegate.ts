@@ -156,16 +156,12 @@ type TabRecord = {
   worker?: AdoptableWorker;
 };
 
-/** The watcher's view of a worker, as a later Lead rebuilds it. */
-type AdoptableWorker = Pick<
-  Worker,
-  | "id" | "title" | "kind" | "state" | "verdict" | "branch" | "route" | "params" | "difficulty" | "repoRoot" | "base"
-  | "originBase" | "baseBranch" | "remoteBranch" | "handledSeq" | "attempts" | "delegatedAt" | "runningSince" | "resumed"
-  | "reroutes" | "sentBack"
-> & {
-  /** The repository's main checkout: only a Lead of that repository adopts the worker. */
-  repo: string;
-};
+/** The watcher's view of a worker, as a later Lead rebuilds it. `repo`, the main checkout, keys adoption to its repository. */
+const ADOPTED = [
+  "id", "title", "kind", "state", "verdict", "branch", "route", "params", "difficulty", "repoRoot", "repo", "base", "originBase",
+  "baseBranch", "remoteBranch", "handledSeq", "attempts", "delegatedAt", "runningSince", "resumed", "reroutes", "sentBack",
+] as const satisfies readonly (keyof Worker)[];
+type AdoptableWorker = Pick<Worker, (typeof ADOPTED)[number]>;
 
 const RECORD = "tab.json";
 
@@ -195,7 +191,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-type Worker = WorkerInfo & {
+type Worker = Omit<WorkerInfo, "tabOpen"> & {
   params: DelegateParams;
   io: DelegateIO;
   difficulty: number | undefined;
@@ -340,14 +336,8 @@ export function createDelegator(deps: DelegateDeps) {
   const processAlive = deps.processAlive ?? isProcessAlive;
   const pid = deps.pid ?? process.pid;
 
-  /** Herdr presentation is never needed for correctness: fire and forget, swallow every error. */
-  const bestEffort = (call: () => Promise<unknown> | undefined) => {
-    try {
-      void call()?.catch(() => undefined);
-    } catch {
-      // A synchronous throw is swallowed too.
-    }
-  };
+  /** Herdr presentation is never needed for correctness: fire and forget, swallow every error, a synchronous throw included. */
+  const bestEffort = (call: () => Promise<unknown> | undefined) => void (async () => call())().catch(() => undefined);
 
   /** `[a-z][a-z0-9_-]{0,31}`, unique enough among live agents thanks to the id. */
   const agentName = (worker: Worker) =>
@@ -433,15 +423,8 @@ export function createDelegator(deps: DelegateDeps) {
     );
   };
 
-  const adoptable = (worker: Worker): AdoptableWorker | undefined => {
-    if (!worker.paneId || !worker.repo) return undefined;
-    const { id, title, kind, state, verdict, branch, route, params, difficulty, repoRoot, repo, base, originBase, baseBranch, remoteBranch } = worker;
-    const { handledSeq, attempts, delegatedAt, runningSince, resumed, reroutes, sentBack } = worker;
-    return {
-      id, title, kind, state, verdict, branch, route, params, difficulty, repoRoot, repo, base, originBase, baseBranch, remoteBranch,
-      handledSeq, attempts, delegatedAt, runningSince, resumed, reroutes, sentBack,
-    };
-  };
+  const adoptable = (worker: Worker): AdoptableWorker | undefined =>
+    worker.paneId && worker.repo ? (Object.fromEntries(ADOPTED.map((key) => [key, worker[key]])) as AdoptableWorker) : undefined;
 
   /**
    * Best-effort as well: without a record a crashed Lead's tab is only left
@@ -866,12 +849,9 @@ export function createDelegator(deps: DelegateDeps) {
     worker.resumed = true;
     progress(`"${worker.title}": ${from} ran out of quota; continuing on ${route.model}`);
     // A worker left waiting (the user may have typed in its tab) no longer waits on the user.
-    const wasRunning = worker.state === "running";
     await closeAndClean(worker);
-    if (wasRunning) setState(worker, "starting");
-    else markStarting(worker);
-    // Stopped meanwhile: open no new tab.
-    if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
+    // Throws when stopped meanwhile: open no new tab.
+    markStarting(worker);
     await launch(worker);
     setState(worker, "running");
     return true;
@@ -1075,7 +1055,6 @@ export function createDelegator(deps: DelegateDeps) {
       lastSeq: live.handledSeq,
       // A worker whose Lead died mid-launch already runs its Pi.
       state: live.state === "starting" ? "running" : live.state,
-      tabOpen: true,
       io,
       controller: new AbortController(),
       done,
@@ -1124,7 +1103,6 @@ export function createDelegator(deps: DelegateDeps) {
         kind: params.kind,
         state: "queued",
         route,
-        tabOpen: false,
         params,
         io,
         difficulty: judged?.difficulty,
