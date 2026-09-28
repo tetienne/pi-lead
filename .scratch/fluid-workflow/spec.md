@@ -73,6 +73,7 @@ before reaching the user. Dead code from the sandbox era is deleted.
 - **Workers are plain Pi.** Worker Pi starts without `--no-extensions` and without naming Herdr's extension; it names only the worker extension. The Lead extension stays inert in any Pi started by PI Lead (worker or sub-agent), detected from a marker PI Lead sets when launching it (an environment variable). Pi has no flag to exclude one extension for a single run: `--no-extensions` drops them all, and package filters in settings are persistent and would also apply to the Lead. The marker is the only per-process switch, so the user's global install of PI Lead never turns a worker into a Lead.
 - **Sub-agents through Herdr.** The Lead's guidance and the worker rules carry one recipe: split a pane beside the caller without focus (`herdr pane split --current … --no-focus`), run a non-interactive Pi there with the PI Lead marker set, writing its answer to a report file, wait for its completion marker (`herdr pane wait-output`), read the report, close the pane. Skills that ask for sub-agents use it as written; if Herdr is unavailable, run the sub-agent steps one after the other in the same context and say so in the output.
 - **`git_read` removed.** The Lead uses git and gh through bash.
+- **Waiting timeout removed.** A worker waiting on the user's answer waits until answered or stopped: the `waitingTimeoutMinutes` setting, its timer and its "timed out" report are removed (a waiting worker holds no slot since the worker cap is gone; an old key in a config file is ignored).
 - **Default tier.** With no Jev difficulty, debug and review start at `standard`, as documented.
 - **Dead code.** Remove the legacy Herdr metadata fallback and tab-rename switch-off (Herdr 0.9.1 is required), the stale "workers never receive the Herdr socket" comments, the context snapshot's symlink rejection and size budgets, and the host check's anti-evasion parts (symlinked parents, case folding, `package.json` scripts diff); the host check keeps its short pattern list as a review hint.
 - **ADR 0007** records: the Lead implements single-session work; one worker per ticket running `/implement` as written (no scout, no scope fence, no readiness gate); workers are plain Pi; sub-agents run in Herdr panes.
@@ -87,7 +88,6 @@ before reaching the user. Dead code from the sandbox era is deleted.
 
 ## Out of Scope
 
-- `waitingTimeoutMinutes`: unchanged.
 - Removing `web_search`: revisit once workers load the user's extensions and it is clear whether it is still needed.
 - Simplifying the Jev budget ledger, hard-coding rarely used Jev settings, and changing overlap scheduling.
 - Removing `verify` or the host check entirely.
