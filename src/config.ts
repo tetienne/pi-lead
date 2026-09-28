@@ -61,7 +61,7 @@ type PartialConfig = {
 
 const JEV_KEYS = ["apiKeyEnv", "via", "model", "minConfidence"] as const satisfies readonly (keyof LeadConfig["jev"])[];
 
-/** Only today's keys: an old `dailyBudgetUsd` or `inputUsdPerMillion` is dropped without a notice. */
+/** Known keys only: any other (such as a removed setting) is dropped without a notice. */
 function mergeJev(base: LeadConfig["jev"], override: Partial<LeadConfig["jev"]> | undefined): LeadConfig["jev"] {
   const jev = { ...base };
   for (const key of JEV_KEYS) {
@@ -70,7 +70,7 @@ function mergeJev(base: LeadConfig["jev"], override: Partial<LeadConfig["jev"]> 
   return jev;
 }
 
-/** Only today's keys: an old `verify` or `verifyTimeoutMinutes` is dropped without a notice. */
+/** Known keys only: any other (such as a removed setting) is dropped without a notice. A flag that is not a boolean keeps its default. */
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
   const tiers = { ...base.tiers };
   for (const tier of Object.keys(tiers) as Tier[]) {
@@ -79,7 +79,7 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
   return {
     tiers,
     jev: mergeJev(base.jev, override.jev),
-    keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
+    keepFailedWorkers: typeof override.keepFailedWorkers === "boolean" ? override.keepFailedWorkers : base.keepFailedWorkers,
     stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
   };
 }
