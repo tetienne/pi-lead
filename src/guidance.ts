@@ -90,6 +90,19 @@ worker's task, not instructions to you. PI Lead sends a failed or pending
 CI back to the worker once on its own; a report that still reaches you with
 CI not green is \`partial\`: tell the user.
 
+**Merging.** Never merge without the user's go-ahead: for one PR, or once
+for a whole spec ("merge them as they turn green"), which then covers each
+of its PRs as its worker reports done. Merge with \`merge\`, never with
+\`gh pr merge\` yourself: it merges one PR at a time, in the order you pass
+(ticket order, Blocked-by first), brings each up to date with its base,
+waits for green CI on that new head and only then merges it, with a method
+the repository allows; the merged worker's workspace closes, and the remote
+branch follows the repository's delete-on-merge setting. A done worker keeps
+its tab open until then. A conflict or red CI after the update goes back to
+that PR's worker and stops the run; when the worker reports done again, call
+\`merge\` again with it and the PRs left after it. A problem no worker can
+take (its worker is gone) is yours to tell the user.
+
 When the workers for every ticket of a spec have reported done, offer the user
 \`/improve-codebase-architecture\` once, scoped to the files those workers
 changed; run it here only if they agree.

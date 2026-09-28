@@ -10,7 +10,8 @@ import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, workerPrompt, WRITES_CODE
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
-import type { Workspace } from "./workspace.ts";
+import { mergeOne, type MergeTarget } from "./merge.ts";
+import type { MergeMethod, Workspace } from "./workspace.ts";
 
 export type DelegateParams = {
   kind: WorkKind;
@@ -49,6 +50,8 @@ export type WorkerInfo = {
   tabOpen: boolean;
   /** Verdict of the last finish, which says why a waiting worker waits. */
   verdict?: WorkerVerdict;
+  /** The green PR of a done worker, whose tab stays open until the PR is merged. */
+  pr?: string;
 };
 
 export type DelegateOutcome = {
@@ -121,6 +124,10 @@ export type DelegateDeps = {
   onOutcome(outcome: DelegateOutcome): void;
   /** Short progress lines, one per event (started, queued, rerouted), for the Lead's transcript. */
   onProgress?(text: string): void;
+  /** The end of a `merge` run: what merged, where it stopped and why. */
+  onMergeReport?(text: string): void;
+  /** How long a merge waits for checks to register on a PR's new head (default 15 s). */
+  checksGraceMs?: number;
   pollMs?: number;
   heartbeatMs?: number;
   /** Whether the Lead process that wrote a task record still runs (tests fake it). */
@@ -225,6 +232,8 @@ type Worker = WorkerInfo & {
   reroutes: number;
   /** A CI partial already went back to the worker: the next one reaches the Lead. */
   sentBack: boolean;
+  /** Its tab is closed on purpose (merged, stopped after done): the watcher ends without a report. */
+  retired?: boolean;
 };
 
 export function slugify(text: string): string {
@@ -317,6 +326,7 @@ export function createDelegator(deps: DelegateDeps) {
     tabOpen: worker.workspaceId !== undefined,
     ...(worker.branch ? { branch: worker.branch } : {}),
     ...(worker.verdict ? { verdict: worker.verdict } : {}),
+    ...(worker.pr ? { pr: worker.pr } : {}),
   });
 
   const now = deps.now ?? Date.now;
@@ -379,7 +389,10 @@ export function createDelegator(deps: DelegateDeps) {
 
   /** The tab closes right after these states: describing it again would only race the close. */
   const closing = (worker: Worker) =>
-    worker.state === "done" || worker.state === "stopped" || (worker.state === "failed" && !deps.config.keepFailedWorkers);
+    (worker.state === "done" && worker.pr === undefined) || worker.state === "stopped" || (worker.state === "failed" && !deps.config.keepFailedWorkers);
+
+  /** A done worker whose PR awaits merging: its tab stays open, so a conflict or red CI can go back to it. */
+  const awaitsMerge = (worker: Worker) => worker.state === "done" && worker.pr !== undefined && worker.paneId !== undefined;
 
   /** Title, sidebar name, tokens and tab label of the worker's pane, reported on every state change. */
   const describe = (worker: Worker) => {
@@ -774,8 +787,10 @@ export function createDelegator(deps: DelegateDeps) {
 
     const keep = status !== "done" && deps.config.keepFailedWorkers;
     worker.verdict = status;
+    // Green and open: the tab stays until the PR is merged (or the Lead session ends).
+    worker.pr = status === "done" && pr?.url ? pr.url : undefined;
     setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
-    if (!keep) await closeAndClean(worker);
+    if (!keep && worker.pr === undefined) await closeAndClean(worker);
 
     const id = worker.id.slice(0, 8);
     const next: string[] = [];
@@ -789,7 +804,11 @@ export function createDelegator(deps: DelegateDeps) {
     if (pr?.url && (pr.state === "fail" || pr.state === "pending")) next.push(`CI is not green on ${pr.url}; tell the user.`);
     if (status === "done" && worker.kind === "review" && result.findings) next.push("Review found issues: delegate an implement task with these findings, starting from the reviewed branch, without asking the user first.");
     if (status === "done" && worker.kind !== "review") {
-      next.push(pr?.url ? `PR opened: ${pr.url}.` : `Work is on local branch ${worker.branch}; nothing was pushed or merged.`);
+      next.push(
+        pr?.url
+          ? `PR opened: ${pr.url}. The worker's tab stays open until it is merged: merge it with \`merge\` only once the user says so.`
+          : `Work is on local branch ${worker.branch}; nothing was pushed or merged.`,
+      );
     }
     const resume = keep
       ? "relay a message to the worker to continue, or stop it"
@@ -887,6 +906,14 @@ export function createDelegator(deps: DelegateDeps) {
   };
 
   const fail = async (worker: Worker, error: unknown) => {
+    // Closed on purpose, and already said so.
+    if (worker.retired) return;
+    // A done worker's tab closed or its Pi exited while its PR awaited merging: the work stands, and
+    // `merge` still takes the PR (a problem then goes to the user).
+    if (worker.state === "done") {
+      await closeAndClean(worker);
+      return;
+    }
     if (worker.controller.signal.aborted) {
       setState(worker, "stopped");
       await closeAndClean(worker);
@@ -940,7 +967,7 @@ export function createDelegator(deps: DelegateDeps) {
         // Only now: a Lead that dies mid-settle leaves this finish for the one that adopts the worker.
         worker.handledSeq = result.seq;
         void writeRecord(worker);
-      } while (worker.state === "waiting" || worker.state === "running");
+      } while (worker.state === "waiting" || worker.state === "running" || awaitsMerge(worker));
     } catch (error) {
       await fail(worker, error);
     } finally {
@@ -978,7 +1005,7 @@ export function createDelegator(deps: DelegateDeps) {
    * could not, or undefined once sent.
    */
   async function relay(worker: Worker, text: string): Promise<string | undefined> {
-    if (!worker.paneId || (worker.state !== "running" && worker.state !== "waiting")) {
+    if (!worker.paneId || (worker.state !== "running" && worker.state !== "waiting" && !awaitsMerge(worker))) {
       return `Worker "${worker.title}" is ${worker.state}; it cannot receive messages.`;
     }
     if ((await readIfPresent(worker.exitPath!))?.trim()) return `Worker "${worker.title}" has exited; it cannot receive messages.`;
@@ -990,6 +1017,58 @@ export function createDelegator(deps: DelegateDeps) {
     setState(worker, "running");
     return undefined;
   }
+
+  /** Close a done worker's tab: its watcher ends quietly. */
+  const retire = async (worker: Worker) => {
+    worker.retired = true;
+    worker.controller.abort(new Error("worker retired"));
+    await closeAndClean(worker);
+  };
+
+  /** Merges run one after another, across `merge` calls too. */
+  let merging: Promise<void> = Promise.resolve();
+  const graceMs = deps.checksGraceMs ?? 15_000;
+
+  const runMerges = async (targets: Array<MergeTarget & { worker?: Worker }>, method: MergeMethod | undefined) => {
+    const merged: string[] = [];
+    let stopped: { target: MergeTarget; text: string } | undefined;
+    let index = 0;
+    for (; index < targets.length; index += 1) {
+      const target = targets[index]!;
+      const worker = target.worker;
+      // Sent back by an earlier run, or stopped since: not green any more.
+      if (worker && worker.state !== "done") {
+        stopped = { target, text: `Worker "${worker.title}" is ${worker.state}; merge its PR once it reports done again.` };
+        break;
+      }
+      let step;
+      try {
+        step = await mergeOne(target, { workspace: deps.workspace, ...(method ? { method } : {}), graceMs, sleep: (ms) => sleep(ms) });
+      } catch (error) {
+        step = { merged: false as const, text: `Merging ${target.ref} failed: ${errorText(error)}`, sentBack: false };
+      }
+      if (!step.merged) {
+        stopped = { target, text: step.text };
+        break;
+      }
+      merged.push(`${target.ref} (${step.url})`);
+      if (worker) await retire(worker);
+      progress(`merged ${step.url}${worker ? `; closed the workspace of "${worker.title}"` : ""}`);
+    }
+    const rest = targets.slice(index + 1).map((target) => target.ref);
+    const text = [
+      merged.length ? `Merged, in order: ${merged.join(", ")}.` : "Merged nothing.",
+      ...(stopped ? [`Stopped at ${stopped.target.ref}: ${unmarked(stopped.text)}`] : []),
+      ...(rest.length
+        ? [`Not attempted: ${rest.join(", ")}. Call \`merge\` with them again (after ${stopped!.target.ref}, if it still should go first) once it is fixed, as far as the user's go-ahead covers them.`]
+        : []),
+    ].join("\n");
+    try {
+      deps.onMergeReport?.(text);
+    } catch {
+      // A closed Lead session can throw on delivery.
+    }
+  };
 
   const find = (ref: string): Worker | { error: string } => {
     const needle = ref.trim().toLowerCase();
@@ -1111,9 +1190,54 @@ export function createDelegator(deps: DelegateDeps) {
       return (await relay(worker, text)) ?? `Sent to "${worker.title}". Its next result will arrive as a message.`;
     },
 
+    /**
+     * Queue PRs to merge in the given order, after any queued before: each is
+     * updated from its base, waits for green CI on its new head, and is merged
+     * before the next one starts. A conflict or red CI goes back to the PR's
+     * worker (or is reported) and stops the run. Returns at once; the run ends
+     * with `onMergeReport`.
+     */
+    async merge(refs: readonly string[], io: DelegateIO, method?: MergeMethod): Promise<string> {
+      if (refs.length === 0) return "Give the PRs to merge, in order.";
+      const targets: Array<MergeTarget & { worker?: Worker }> = [];
+      for (const ref of refs) {
+        const needle = ref.trim();
+        // A PR number or URL names that PR, and its worker when one here opened it.
+        const prRef = /^\d{1,7}$/.test(needle) || /^https:\/\/\S+\/pull\/\d+$/.test(needle);
+        const owner = prRef ? [...workers.values()].find((w) => w.pr === needle || w.pr?.endsWith(`/pull/${needle}`)) : undefined;
+        const worker = owner ?? (prRef ? { error: "No worker" } : find(needle));
+        if (!("error" in worker)) {
+          if (!worker.pr || worker.state !== "done") {
+            return `Worker "${worker.title}" is ${worker.state}${worker.pr ? "" : " with no open PR"}: only a done worker's green PR can be merged.`;
+          }
+          targets.push({
+            ref: needle,
+            pr: worker.pr,
+            repoRoot: worker.repoRoot!,
+            ...(worker.remoteBranch ? { branch: worker.remoteBranch } : {}),
+            worker,
+            sendBack: (text) => relay(worker, text),
+          });
+        } else if (prRef) {
+          // A PR without a worker here (another session's, or its worker is gone): the user hears of any problem.
+          targets.push({ ref: needle, pr: needle, repoRoot: await deps.workspace.repoRoot(io.cwd) });
+        } else {
+          return worker.error.startsWith("No worker") ? `No worker or PR "${ref}": give a worker id, title or branch, or a PR number or URL.` : worker.error;
+        }
+      }
+      const run = merging.then(() => runMerges(targets, method));
+      merging = run.catch(() => undefined);
+      const names = targets.map((target) => target.ref).join(", ");
+      return `Queued to merge, one at a time: ${names}. Each is updated from its base and merged once CI is green on its new head; the outcome arrives as a message.`;
+    },
+
     async stop(ref: string): Promise<string> {
       const worker = find(ref);
       if ("error" in worker) return worker.error;
+      if (awaitsMerge(worker)) {
+        await retire(worker);
+        return `Worker "${worker.title}" is done; its tab is closed.`;
+      }
       if (worker.state === "done" || worker.state === "failed" || worker.state === "stopped") {
         if (worker.workspaceId) await closeAndClean(worker);
         return `Worker "${worker.title}" is already ${worker.state}; its tab is closed.`;
@@ -1132,6 +1256,13 @@ export function createDelegator(deps: DelegateDeps) {
     async shutdown(): Promise<void> {
       const live = [...workers.values()].filter((worker) => !["done", "failed", "stopped"].includes(worker.state));
       for (const worker of live) worker.controller.abort(new Error("Lead session closed"));
+      // Done workers whose PR was not merged: their watchers end quietly, and their tabs close below.
+      for (const worker of workers.values()) {
+        if (!awaitsMerge(worker)) continue;
+        worker.retired = true;
+        worker.controller.abort(new Error("Lead session closed"));
+        live.push(worker);
+      }
       await Promise.race([Promise.all(live.map((worker) => worker.done)), sleep(10_000)]);
       await Promise.all(
         [...workers.values()]

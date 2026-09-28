@@ -17,10 +17,12 @@ import { ROLE_ENV } from "./protocol.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
 import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
-import { gitWorkspace } from "./workspace.ts";
+import { gitWorkspace, MERGE_METHODS } from "./workspace.ts";
 
 /** The custom message type the Lead uses to deliver worker results. */
 const WORKER_REPORT_TYPE = "pi-lead-worker";
+/** The custom message type that ends a `merge` run. */
+const MERGE_REPORT_TYPE = "pi-lead-merge";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SKILLS_DIR = join(PACKAGE_ROOT, ".agents", "skills");
@@ -151,6 +153,12 @@ export default function lead(pi: ExtensionAPI) {
           { customType: WORKER_REPORT_TYPE, content: outcome.text, display: true, details: { status: outcome.status, worker: outcome.worker, ...outcome.details } },
           { triggerTurn: true, deliverAs: "followUp" },
         );
+      },
+      // Wakes the Lead too: it tells the user what merged, and where and why the run stopped.
+      onMergeReport(text) {
+        if (closed) return;
+        status();
+        pi.sendMessage({ customType: MERGE_REPORT_TYPE, content: text, display: true }, { triggerTurn: true, deliverAs: "followUp" });
       },
       onProgress(text) {
         if (closed) return;
@@ -283,7 +291,7 @@ export default function lead(pi: ExtensionAPI) {
         details = { workers };
         text = workers.length
           ? workers
-              .map((w) => `- [${w.id.slice(0, 8)}] ${w.title} · ${w.kind} · ${w.state}${w.branch ? ` · ${w.branch}` : ""} · ${w.route.model}`)
+              .map((w) => `- [${w.id.slice(0, 8)}] ${w.title} · ${w.kind} · ${w.state}${w.branch ? ` · ${w.branch}` : ""} · ${w.route.model}${w.pr ? ` · PR ${w.pr}` : ""}`)
               .join("\n")
           : "No workers.";
       } else if (!params.id) {
@@ -299,5 +307,26 @@ export default function lead(pi: ExtensionAPI) {
     renderCall: (args, theme) => new Text(workerCall(args, paint(theme)), 0, 0),
     renderResult: (result, { isPartial }, theme) =>
       new Text(isPartial ? theme.fg("dim", "…") : workerResult(result.details, resultText(result), paint(theme)), 0, 0),
+  });
+
+  pi.registerTool({
+    name: "merge",
+    label: "Merge",
+    description:
+      "Merge green PRs one at a time, in the order given, only after the user said to merge them. Each PR is updated from its base (gh pr update-branch), waits for green CI on its new head (gh pr checks --watch) and is merged at that head (gh pr merge --match-head-commit) with a method the repository allows; the worker's workspace then closes. A conflict or red CI goes back to the PR's worker and stops the run. Returns at once; the outcome arrives as a message.",
+    promptSnippet: "merge: merge green PRs one at a time, in ticket order, once the user said so",
+    promptGuidelines: [
+      "Never call merge without the user's go-ahead, for these PRs or for the whole spec.",
+      "Pass the PRs in ticket order (Blocked-by first): worker ids, titles or branches, or PR numbers or URLs.",
+    ],
+    parameters: Type.Object({
+      prs: Type.Array(Type.String(), { description: "PRs in merge order: worker id, title or branch, or PR number or URL" }),
+      method: Type.Optional(StringEnum(MERGE_METHODS, { description: "Only when the user names one; otherwise the repository's first allowed method" })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const current = delegator ?? (await setup(ctx));
+      const text = await current.merge(params.prs, sessionIO(ctx), params.method);
+      return { content: [{ type: "text", text }], details: undefined };
+    },
   });
 }

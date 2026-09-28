@@ -23,14 +23,17 @@ you ─► Lead (Pi, your tab)
                                  → Herdr worktree workspace (no focus), worker Pi in it
                                  worker Pi: runs on the host, /skill:implement …
                                  worker pushes, opens a draft PR, gets CI green, calls finish
-                                 Jev checks the verdict (unless the PR's CI proved it), worktree removed (branch kept)
+                                 Jev checks the verdict (unless the PR's CI proved it); a green PR keeps its
+                                 worktree until merged, anything else has it removed (branch kept)
                                  (delegate returns at once; the result comes back as a message)
         worker tool         → list workers, relay an answer to one waiting on you, stop one
+        merge tool          → on your go-ahead: green PRs one at a time, each updated from base and
+                              green again on its new head before it merges
 ```
 
 - The **Lead** is ordinary Pi plus a short workflow section in its system
-  prompt (questions: answer; otherwise follow `ask-matt`) and two tools,
-  `delegate` and `worker`. It implements single-session work itself with
+  prompt (questions: answer; otherwise follow `ask-matt`) and three tools,
+  `delegate`, `worker` and `merge`. It implements single-session work itself with
   `/implement`, delegates each ticket of a multi-session build (or anything
   you ask to run in the background), and inspects worker branches and CI
   with git and `gh` through bash. It never intercepts your messages.
@@ -69,6 +72,30 @@ you ─► Lead (Pi, your tab)
   checks), the host has proven the work and Jev's verdict is not asked; other
   work (a prototype, which opens no PR) is judged by the worker's status and
   Jev's verdict, the more pessimistic of the two.
+- **Green PRs merge one at a time, and only when you say so.** Parallel
+  branches merged at once break each other
+  ([mattpocock/skills#493](https://github.com/mattpocock/skills/issues/493)),
+  so the Lead merges with its `merge` tool, never with `gh pr merge` itself,
+  and only after your go-ahead: for one PR, or once for a whole spec ("merge
+  them as they turn green"). A done worker keeps its workspace open until
+  its PR is merged. The Lead passes the PRs in ticket order, and each one,
+  strictly after the previous one merged, is marked ready if it is a draft (`gh pr ready`;
+  GitHub does not merge drafts), is brought up to date with its base (`gh pr
+  update-branch`, a merge of the base into the PR branch), waits for CI on
+  that new head (`gh pr checks --watch --fail-fast`, allowing a few seconds for
+  checks to register), and is merged at exactly that head (`gh pr merge
+  --match-head-commit <sha>`) with the method you name or else the first the
+  repository allows, in gh's own order (merge commit, rebase, squash, from
+  `gh repo view --json mergeCommitAllowed,rebaseMergeAllowed,squashMergeAllowed`;
+  gh itself requires a method when it cannot prompt). No `--delete-branch`:
+  the remote branch follows the repository's delete-on-merge setting, and
+  the local branch stays. The merged worker's workspace then closes. A
+  conflict or red CI after the update goes back to that PR's worker, which
+  reports again once it is fixed; the run stops there, and the Lead hears
+  which PRs merged and which were not attempted. A PR whose worker is gone
+  (stopped, or from before a restart) is reported to you instead. A merge
+  that a merge queue or auto-merge accepts without merging yet also stops
+  the run.
 - A **worker** is an interactive Pi session in its own Herdr worktree
   workspace (`herdr worktree create`), running directly on the host on its own
   branch; its
@@ -109,8 +136,9 @@ you ─► Lead (Pi, your tab)
   one whose pane still runs its Pi: it shows in `worker list`, you can
   message or stop it, and its result arrives as usual, including a `finish`
   it made while no Lead was running. Workers whose Pi is gone are removed,
-  branch kept. A Lead never adopts the workers of another Lead that is still
-  running.
+  branch kept, and so are done workers waiting for their merge: their PRs
+  still merge by number or URL, with any problem reported to you. A Lead
+  never adopts the workers of another Lead that is still running.
 - **Jev** answers small closed questions (difficulty, verdict, ticket
   overlap) and code maps each answer to an action. Without a key, documented
   defaults apply.

@@ -19,7 +19,7 @@ import {
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
 import { createJudge, type Judge, type WorkerVerdict } from "../src/jev.ts";
 import type { WorkerResult, WorkerTask } from "../src/protocol.ts";
-import type { Workspace } from "../src/workspace.ts";
+import type { MergeMethod, PrView, Workspace } from "../src/workspace.ts";
 
 const noJudge: Judge = {
   available: false,
@@ -34,8 +34,87 @@ type Reply =
   | "exit"
   | "silent";
 
-function fakeWorkspace(log: Log): Workspace {
+/** A PR on the fake GitHub: `update-branch` gives it a new head once its base moved (another PR merged). */
+type FakePr = {
+  head: string;
+  state?: PrView["state"];
+  isDraft?: boolean;
+  conflict?: boolean;
+  checks?: (head: string) => "pass" | "fail" | "pending" | "none";
+  /** A merge queue takes it: gh succeeds, the PR stays open. */
+  queued?: boolean;
+  baseSeen?: number;
+};
+
+/**
+ * gh against a fake GitHub, keyed by the selector the delegator passes (a PR
+ * URL or number). Each merge moves the base, so a later `update-branch` makes
+ * a new head `<head>+<merges>`.
+ */
+function fakeGh(log: Log, prs: Record<string, FakePr>, methods: MergeMethod[] = ["merge", "squash"]) {
+  let merges = 0;
+  // A worker's PR URL ends in its branch, `pi-lead/<slug>-<id>`: a key `<slug>` names it.
+  const lookup = (pr: string) =>
+    prs[pr] ?? (pr.startsWith("https://") ? Object.entries(prs).find(([key]) => pr.includes(`/pi-lead/${key}-`))?.[1] : undefined);
+  const get = (pr: string) => {
+    const found = lookup(pr);
+    if (!found) throw new Error(`fake gh: no PR ${pr}`);
+    return found;
+  };
+  const number = (pr: string) => Number(/(\d+)$/.exec(pr)?.[1] ?? 1);
   return {
+    async prView({ pr }: { pr: string }) {
+      log.push(`gh view ${pr}`);
+      const found = get(pr);
+      return { number: number(pr), url: pr, state: found.state ?? "OPEN", isDraft: found.isDraft ?? false, head: found.head, base: "main" };
+    },
+    async prReady({ pr }: { pr: string }) {
+      log.push(`gh ready ${pr}`);
+      get(pr).isDraft = false;
+      return {};
+    },
+    async updateBranch({ pr }: { pr: string }) {
+      log.push(`gh update-branch ${pr}`);
+      const found = get(pr);
+      if (found.conflict) return { state: "conflict" as const };
+      if ((found.baseSeen ?? 0) < merges) {
+        found.head = `${found.head.split("+")[0]}+${merges}`;
+        found.baseSeen = merges;
+      }
+      return { state: "updated" as const };
+    },
+    async watchChecks({ pr }: { pr: string }) {
+      log.push(`gh checks --watch ${pr}`);
+    },
+    async mergeMethods() {
+      log.push("gh repo view");
+      return { methods };
+    },
+    async mergePr({ pr, method, head }: { pr: string; method: MergeMethod; head: string }) {
+      log.push(`gh merge ${pr} --${method} --match-head-commit ${head}`);
+      const found = get(pr);
+      if (found.isDraft) return { error: "Pull Request is still a draft" };
+      if (found.head !== head) return { error: "head moved" };
+      if (found.queued) return {};
+      found.state = "MERGED";
+      merges += 1;
+      return {};
+    },
+    /** Checks of a merge selector; worker branches keep the default. */
+    checksOf(pr: string) {
+      const found = lookup(pr);
+      if (!found) return undefined;
+      log.push(`gh checks ${pr} @${found.head}`);
+      const state = found.checks?.(found.head) ?? "pass";
+      return { url: pr, head: found.head, state, failed: state === "fail" ? [{ name: "test", link: "https://ci.test/1" }] : [] };
+    },
+  };
+}
+
+function fakeWorkspace(log: Log, gh = fakeGh(log, {})): Workspace {
+  const { checksOf, ...ghWorkspace } = gh;
+  return {
+    ...ghWorkspace,
     repoRoot: async (cwd) => cwd,
     mainCheckout: async (repoRoot) => {
       log.push(`mainCheckout ${repoRoot}`);
@@ -49,6 +128,8 @@ function fakeWorkspace(log: Log): Workspace {
     collect: async ({ branch }) => ({ commits: `def456 work on ${branch}`, diffStat: " src/a.ts | 3 ++-", changedFiles: ["src/a.ts"], head: "def456" }),
     // Most tests don't care about CI: no checks reported, so the report goes out at once.
     prChecks: async ({ branch }) => {
+      const merging = checksOf(branch);
+      if (merging) return merging;
       log.push(`prChecks ${branch}`);
       return { url: `https://example.test/pr/${branch}`, head: "def456", state: "none", failed: [] };
     },
@@ -161,9 +242,14 @@ async function setup(t: TestContext, options: {
   /** This Lead's own pid, as its task records carry it. */
   pid?: number;
   pollMs?: number;
+  /** PRs on the fake GitHub, for `merge`. */
+  gh?: Record<string, FakePr>;
+  methods?: MergeMethod[];
 } = {}) {
   const log: Log = [];
   const outcomes: DelegateOutcome[] = [];
+  const mergeReports: string[] = [];
+  const mergeWaiters: Array<(text: string) => void> = [];
   const waiters: Array<(outcome: DelegateOutcome) => void> = [];
   const progress: string[] = [];
   const stateRoot = options.stateRoot ?? (await mkdtemp(join(tmpdir(), "pi-lead-state-")));
@@ -174,7 +260,12 @@ async function setup(t: TestContext, options: {
       options.herdr === false
         ? undefined
         : options.herdr ?? fakeHerdr(log, options.replies ?? [{ status: "done" }], options.seen, options.herdrOptions),
-    workspace: options.workspace ?? fakeWorkspace(log),
+    workspace: options.workspace ?? fakeWorkspace(log, fakeGh(log, options.gh ?? {}, options.methods)),
+    onMergeReport: (text) => {
+      mergeReports.push(text);
+      mergeWaiters.shift()?.(text);
+    },
+    checksGraceMs: 1,
     ...(options.processAlive ? { processAlive: options.processAlive } : {}),
     ...(options.pid ? { pid: options.pid } : {}),
     workerCommand: options.workerCommand ?? (({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt]),
@@ -197,7 +288,15 @@ async function setup(t: TestContext, options: {
         resolve(outcome);
       });
     });
-  return { delegator, log, outcomes, nextOutcome, progress, stateRoot };
+  const nextMergeReport = () =>
+    new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("no merge report")), 3_000);
+      mergeWaiters.push((text) => {
+        clearTimeout(timer);
+        resolve(text);
+      });
+    });
+  return { delegator, log, outcomes, nextOutcome, progress, stateRoot, mergeReports, nextMergeReport };
 }
 
 /** Tab lifecycle only: open, close, remove (metadata calls are checked on their own). */
@@ -506,7 +605,7 @@ test("independent tickets run in parallel", async (t) => {
   await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
   await delegator.start({ kind: "implement", title: "Two", task: "b" }, io);
   await Promise.all(both);
-  assert.ok(log.indexOf("open ○ Two") < log.indexOf("close tab-1"));
+  assert.ok(log.indexOf("open ○ Two") < log.findIndex((line) => line.startsWith("prChecks")), "Two opened before One finished");
 });
 
 test("without Herdr or with a bad branch name nothing starts", async (t) => {
@@ -637,7 +736,7 @@ test("a Lead that throws on delivery does not take the watcher down", async (t) 
     heartbeatMs: 20,
   });
   t.after(() => delegator.shutdown());
-  await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
+  await delegator.start({ kind: "prototype", title: "x", task: "y" }, io);
   for (let i = 0; i < 100 && delegator.list()[0]!.state !== "done"; i++) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(delegator.list()[0]!.state, "done");
   assert.ok(log.includes("close tab-1"), "cleanup still ran");
@@ -867,7 +966,8 @@ test("a new Lead adopts a dead Lead's live worker: listed, messaged, and its fin
   assert.equal(outcome.status, "done");
   assert.match(outcome.text, /finished after the restart/);
   assert.equal(lead.delegator.list()[0]!.state, "done");
-  assert.ok(log.includes("close tab-1"));
+  assert.ok(!log.includes("close tab-1"), "a green PR keeps its tab until merged");
+  assert.match(lead.delegator.list()[0]!.pr!, /^https:\/\/example\.test\/pr\//);
 });
 
 test("a finish that lands while no Lead is alive reaches the Lead that adopts the worker", async (t) => {
@@ -996,7 +1096,7 @@ test("failing Herdr metadata never affects the worker", async (t) => {
   };
   const { delegator, nextOutcome } = await setup(t, { herdr });
   const pending = nextOutcome();
-  await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
+  await delegator.start({ kind: "prototype", title: "x", task: "y" }, io);
   assert.equal((await pending).status, "done");
   assert.ok(log.includes("close tab-1"));
 });
@@ -1407,4 +1507,180 @@ test("no Jev verdict call once the host proved the work: a PR with CI green on t
     await pending;
     assert.equal(calls, asked, `${kind}, CI ${state}`);
   }
+});
+
+/** gh calls and tab closes, with each worker PR's URL shortened to its title slug. */
+const ghTrail = (log: Log) =>
+  log
+    .filter((line) => line.startsWith("gh ") || line.startsWith("close ") || line.startsWith("send "))
+    .map((line) => line.replace(/https:\/\/example\.test\/pr\/pi-lead\/([a-z]+)-[0-9a-f]+/g, "$1"));
+
+/** Delegate implement tickets and wait until each reports done with its green PR. */
+async function doneWorkers(lead: Awaited<ReturnType<typeof setup>>, titles: string[]) {
+  const outcomes = titles.map(() => lead.nextOutcome());
+  for (const title of titles) await lead.delegator.start({ kind: "implement", title, task: `ticket ${title}` }, io);
+  for (const outcome of await Promise.all(outcomes)) assert.equal(outcome.status, "done");
+}
+
+test("a done worker's green PR keeps its tab open until it is merged or the Lead ends", async (t) => {
+  const lead = await setup(t);
+  await doneWorkers(lead, ["One"]);
+  const [worker] = lead.delegator.list();
+  assert.equal(worker!.tabOpen, true);
+  assert.match(worker!.pr!, /^https:\/\/example\.test\/pr\/pi-lead\/one-/);
+  assert.ok(!lead.log.includes("close tab-1"));
+  assert.match(lead.outcomes[0]!.text, /tab stays open until it is merged: merge it with `merge` only once the user says so/);
+  await lead.delegator.shutdown();
+  assert.ok(lead.log.includes("close tab-1"));
+  assert.equal(lead.outcomes.length, 1, "no stopped or failed report for a done worker");
+});
+
+test("green PRs merge one at a time: the next is updated from base and must be green on its new head", async (t) => {
+  const lead = await setup(t, { gh: { one: { head: "def456" }, two: { head: "def456" } } });
+  await doneWorkers(lead, ["One", "Two"]);
+  const report = lead.nextMergeReport();
+  assert.match(await lead.delegator.merge(["One", "Two"], io), /Queued to merge, one at a time: One, Two/);
+  assert.match(await report, /^Merged, in order: One \(https:\/\/example\.test\/pr\/pi-lead\/one-\w+\), Two \(/);
+  assert.deepEqual(ghTrail(lead.log), [
+    "gh view one",
+    "gh update-branch one",
+    "gh checks --watch one",
+    "gh checks one @def456",
+    "gh repo view",
+    "gh merge one --merge --match-head-commit def456",
+    "gh view one",
+    "close tab-1",
+    "gh view two",
+    "gh update-branch two",
+    "gh checks --watch two",
+    // One merged: Two's head is the update from base, and only its checks count.
+    "gh checks two @def456+1",
+    "gh repo view",
+    "gh merge two --merge --match-head-commit def456+1",
+    "gh view two",
+    "close tab-2",
+  ]);
+  assert.ok(lead.progress.some((line) => /^merged https:.*one-.*; closed the workspace of "One"$/.test(line)));
+  assert.equal(lead.outcomes.length, 2, "a merged worker ends without another report");
+});
+
+test("merge calls queue behind each other", async (t) => {
+  const lead = await setup(t, { gh: { one: { head: "def456" }, two: { head: "def456" } } });
+  await doneWorkers(lead, ["One", "Two"]);
+  const reports = [lead.nextMergeReport(), lead.nextMergeReport()];
+  await lead.delegator.merge(["One"], io);
+  await lead.delegator.merge(["Two"], io);
+  await Promise.all(reports);
+  const trail = ghTrail(lead.log);
+  assert.ok(trail.indexOf("gh view two") > trail.indexOf("gh merge one --merge --match-head-commit def456"));
+  assert.ok(trail.includes("gh merge two --merge --match-head-commit def456+1"));
+});
+
+test("a conflict after the update goes back to the PR's worker and stops the run", async (t) => {
+  const lead = await setup(t, { gh: { one: { head: "def456" }, two: { head: "def456", conflict: true }, three: { head: "def456" } } });
+  await doneWorkers(lead, ["One", "Two", "Three"]);
+  const report = lead.nextMergeReport();
+  const again = lead.nextOutcome();
+  await lead.delegator.merge(["One", "Two", "Three"], io);
+  const text = await report;
+  assert.match(text, /Merged, in order: One \(/);
+  assert.match(text, /Stopped at Two: .* conflicts with main now that the PRs before it are merged; sent back to its worker/);
+  assert.match(text, /Not attempted: Three\. Call `merge` with them again/);
+  const sent = ghTrail(lead.log).find((line) => line.startsWith("send pane-2"));
+  assert.match(sent!, /^send pane-2: \[PI Lead\] two conflicts with main .*git fetch origin && git merge origin\/main.*push to pi-lead\/two-\w+.*call `finish` again\.$/);
+  assert.ok(!ghTrail(lead.log).some((line) => line.includes("three")), "nothing after the stop");
+  assert.ok(!lead.log.includes("close tab-2"), "the worker keeps its tab to fix it");
+  // The worker fixes it and reports again, as any finish.
+  assert.equal((await again).status, "done");
+});
+
+test("red CI on the updated head goes back to the PR's worker", async (t) => {
+  const lead = await setup(t, { gh: { one: { head: "def456" }, two: { head: "def456", checks: (head) => (head.includes("+") ? "fail" : "pass") } } });
+  await doneWorkers(lead, ["One", "Two"]);
+  const report = lead.nextMergeReport();
+  await lead.delegator.merge(["One", "Two"], io);
+  const text = await report;
+  assert.match(text, /Stopped at Two: CI failed on .* after it was updated from main \(new head def456\+1, 1 failed check\); sent back/);
+  assert.doesNotMatch(text, /ci\.test/, "repo-controlled check names and links go to the worker only");
+  const sent = ghTrail(lead.log).find((line) => line.startsWith("send pane-2"));
+  assert.match(sent!, /1 failed check\): test \(https:\/\/ci\.test\/1\)\. The update is a merge commit/);
+  assert.match(sent!, /git pull --no-rebase origin pi-lead\/two-\w+/);
+  assert.ok(!ghTrail(lead.log).some((line) => line.startsWith("gh merge two")));
+});
+
+test("a PR whose worker is gone is reported to the user instead", async (t) => {
+  const lead = await setup(t, { gh: { "42": { head: "h42", conflict: true } } });
+  const report = lead.nextMergeReport();
+  await lead.delegator.merge(["42"], io);
+  assert.match(await report, /^Merged nothing\.\nStopped at 42: 42 conflicts with main .*No worker is open for it: tell the user\.$/);
+  assert.ok(!lead.log.some((line) => line.startsWith("send ")));
+});
+
+test("a stopped done worker cannot take a conflict back: the user hears of it", async (t) => {
+  const lead = await setup(t, { gh: { one: { head: "def456", conflict: true } } });
+  await doneWorkers(lead, ["One"]);
+  assert.match(await lead.delegator.stop("One"), /is done; its tab is closed/);
+  assert.ok(lead.log.includes("close tab-1"));
+  const report = lead.nextMergeReport();
+  await lead.delegator.merge(["One"], io);
+  assert.match(await report, /conflicts with main .*cannot receive messages\. Tell the user\./);
+  assert.equal(lead.outcomes.length, 1, "no stopped report either");
+});
+
+test("a draft is marked ready, the method comes from the repository or the user, and the branch is left to its setting", async (t) => {
+  const lead = await setup(t, { gh: { "7": { head: "h7", isDraft: true }, "8": { head: "h8" } }, methods: ["squash"] });
+  let report = lead.nextMergeReport();
+  await lead.delegator.merge(["7"], io);
+  assert.match(await report, /^Merged, in order: 7 \(7\)\.$/);
+  const trail = ghTrail(lead.log);
+  assert.ok(trail.indexOf("gh ready 7") < trail.indexOf("gh update-branch 7"));
+  assert.ok(trail.includes("gh merge 7 --squash --match-head-commit h7"));
+  report = lead.nextMergeReport();
+  await lead.delegator.merge(["8"], io, "rebase");
+  await report;
+  assert.ok(ghTrail(lead.log).includes("gh merge 8 --rebase --match-head-commit h8+1"), "7 moved the base: 8 merges its updated head");;
+  assert.equal(ghTrail(lead.log).filter((line) => line === "gh repo view").length, 1, "the user's method needs no lookup");
+});
+
+test("checks that have not registered on the new head yet are waited for", async (t) => {
+  let calls = 0;
+  const lead = await setup(t, { gh: { one: { head: "def456" }, two: { head: "def456", checks: (head) => (head.includes("+") && calls++ === 0 ? "none" : "pass") } } });
+  await doneWorkers(lead, ["One", "Two"]);
+  const report = lead.nextMergeReport();
+  await lead.delegator.merge(["One", "Two"], io);
+  assert.match(await report, /Merged, in order: One .*, Two /);
+  assert.equal(ghTrail(lead.log).filter((line) => line === "gh checks --watch two").length, 2);
+});
+
+test("a merge a queue holds is not counted as merged", async (t) => {
+  const lead = await setup(t, { gh: { one: { head: "def456", queued: true } } });
+  await doneWorkers(lead, ["One"]);
+  const report = lead.nextMergeReport();
+  await lead.delegator.merge(["One"], io);
+  assert.match(await report, /Stopped at One: .* is not merged yet \(a merge queue or auto-merge may hold it\)/);
+  assert.ok(!lead.log.includes("close tab-1"));
+});
+
+test("merge refuses what is not a done worker's PR, before running gh", async (t) => {
+  const lead = await setup(t, { replies: ["silent"] });
+  await lead.delegator.start({ kind: "implement", title: "Busy", task: "x" }, io);
+  await until(() => lead.delegator.list()[0]!.state === "running");
+  assert.match(await lead.delegator.merge(["Busy"], io), /Worker "Busy" is running with no open PR: only a done worker's green PR can be merged/);
+  assert.match(await lead.delegator.merge(["--admin"], io), /No worker or PR "--admin"/);
+  assert.match(await lead.delegator.merge([], io), /Give the PRs to merge/);
+  assert.ok(!lead.log.some((line) => line.startsWith("gh ")));
+});
+
+test("a done worker whose tab closes while its PR awaits merging stays done and mergeable", async (t) => {
+  const workspaces = ["w1", "tab-1"];
+  const lead = await setup(t, { gh: { one: { head: "def456" } }, herdrOptions: { workspaces } });
+  await doneWorkers(lead, ["One"]);
+  // The user closes the worker's tab: Herdr stops listing it, and the watcher notices at its next heartbeat.
+  workspaces.pop();
+  await until(() => !lead.delegator.list()[0]!.tabOpen);
+  assert.equal(lead.delegator.list()[0]!.state, "done");
+  assert.equal(lead.outcomes.length, 1, "no failure report");
+  const report = lead.nextMergeReport();
+  await lead.delegator.merge(["One"], io);
+  assert.match(await report, /^Merged, in order: One \(/);
 });
