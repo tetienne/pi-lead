@@ -32,13 +32,6 @@ export type LeadConfig = {
   };
   /** Keep the Herdr worktree workspace of a worker that did not finish cleanly. */
   keepFailedWorkers: boolean;
-  /**
-   * `confirm`: once a worker report is in the conversation, every host tool
-   * call of the Lead that can execute or write (bash, write, edit…) needs your
-   * confirmation until you send a message yourself (see report-guard.ts).
-   * Only the global config can turn it `off`.
-   */
-  leadGuard: LeadGuardMode;
   /** A worker waiting on a question this long without an answer is stopped and its tab closed. 0 disables. */
   waitingTimeoutMinutes: number;
   /**
@@ -57,8 +50,6 @@ export type LeadConfig = {
   verifyTimeoutMinutes: number;
 };
 
-export type LeadGuardMode = "confirm" | "off";
-
 export const DEFAULT_CONFIG: LeadConfig = {
   tiers: {
     fast: { thinking: "low" },
@@ -74,7 +65,6 @@ export const DEFAULT_CONFIG: LeadConfig = {
     minConfidence: 0.7,
   },
   keepFailedWorkers: true,
-  leadGuard: "confirm",
   waitingTimeoutMinutes: 120,
   stuckDetection: true,
   verifyTimeoutMinutes: 15,
@@ -84,7 +74,6 @@ type PartialConfig = {
   tiers?: Partial<Record<Tier, Partial<TierRoute>>>;
   jev?: Partial<LeadConfig["jev"]>;
   keepFailedWorkers?: boolean;
-  leadGuard?: LeadGuardMode;
   waitingTimeoutMinutes?: number;
   stuckDetection?: boolean;
   verify?: string;
@@ -100,7 +89,6 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     tiers,
     jev: { ...base.jev, ...override.jev },
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
-    leadGuard: override.leadGuard === "off" || override.leadGuard === "confirm" ? override.leadGuard : base.leadGuard,
     waitingTimeoutMinutes: override.waitingTimeoutMinutes ?? base.waitingTimeoutMinutes,
     stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
     ...(typeof override.verify === "string" && override.verify.trim()
@@ -144,10 +132,8 @@ async function exists(path: string): Promise<boolean> {
 /**
  * Global `<agent dir>/pi-lead.json` (`~/.pi/agent` unless PI_CODING_AGENT_DIR
  * moves it), then project `.pi/pi-lead.json`. The project file is read only
- * for trusted projects, and it can never turn the Lead guard off: a
- * repository (or a worker's branch merged into it) must not be able to
- * disable the check that protects the host from worker reports. `verify` is
- * the reverse: a command for one project, so only the project file sets it
+ * for trusted projects. `verify` is a command for one project, so only the
+ * project file sets it
  * (it runs on the host in the worker's own worktree, never in the user's
  * checkout).
  *
@@ -173,10 +159,6 @@ export async function loadConfigWithNotices(
   if (options.projectTrusted) {
     const project = await readJson(projectPath);
     if (project) {
-      if (has(project, "leadGuard")) {
-        ignored.push("PI Lead: `leadGuard` in .pi/pi-lead.json is ignored; only the global config can change it.");
-        delete project.leadGuard;
-      }
       config = mergeConfig(config, project);
     }
   } else if (await exists(projectPath)) {

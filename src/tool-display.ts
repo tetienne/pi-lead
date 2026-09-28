@@ -1,5 +1,5 @@
 import type { StartResult, WorkerInfo } from "./delegate.ts";
-import { safePreview } from "./report-guard.ts";
+import { safePreview } from "./safe-preview.ts";
 import { stateGlyph } from "./worker-display.ts";
 
 /**

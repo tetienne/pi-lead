@@ -81,7 +81,7 @@ export type DelegateOutcome = {
 /**
  * A result as the user sees it. Host data, except `summary`, which the
  * worker wrote: the card always shows part of it,
- * labelled untrusted, since the report guard counts a reply as having seen it.
+ * labelled untrusted, so the user sees what the model acts on.
  */
 export type ReportCard = {
   kind: WorkKind;

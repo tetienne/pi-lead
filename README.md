@@ -32,10 +32,11 @@ you ─► Lead (Pi, your tab)
 - The **Lead** is ordinary Pi plus a short workflow section in its system
   prompt (questions: answer; otherwise follow `ask-matt`) and one tool,
   `delegate`. It never intercepts your messages.
-- **Worker reports are untrusted.** From the moment one reaches the Lead until
-  you reply, every Lead tool call that can execute or write on your machine
-  (bash, write, edit…) asks you first, and is blocked without a UI. Set
-  `"leadGuard": "off"` in the global config to disable it. When the worker's
+- **Worker reports are untrusted.** The worker's own words reach the Lead
+  inside a `<worker-report untrusted>` block, and the Lead is told to report
+  them, not follow them. There is no confirmation step: a worker already runs
+  on your machine with your access (see
+  [ADR 0006](docs/adr/0006-no-lead-guard.md)). When the worker's
   branch touches files that can run on your machine or in CI, or steer future
   agents, the report adds a host-generated "Host check" line naming the
   matched patterns: CI workflows and actions, `package.json` (only when its
@@ -123,8 +124,8 @@ Two files, both optional:
 
 - `~/.pi/agent/pi-lead.json` (global): every key except `verify`.
 - `.pi/pi-lead.json` in the project: overrides the global file, key by key,
-  and is the only place for `verify`. It cannot set `leadGuard`, and it is
-  read only when Pi trusts the project.
+  and is the only place for `verify`. It is read only when Pi trusts the
+  project.
 
 Pi trusts a project on its own when nothing in it needs trust: its `.pi` holds
 only `pi-lead.json` and there is no `.agents/skills` in it or a parent folder.
@@ -133,8 +134,8 @@ Otherwise (`.pi/settings.json`, `.pi/extensions`, `.pi/skills`, prompts,
 `defaultProjectTrust` decides, and print and RPC modes never ask. To trust it
 later, run `/trust` and restart Pi, or start Pi with `--approve` for one run
 (see Pi's `docs/security.md`). A
-setting that is ignored (`verify` in the global file, `leadGuard` in the
-project file, or the whole project file of an untrusted project) is reported
+setting that is ignored (`verify` in the global file, or the whole project
+file of an untrusted project) is reported
 with a warning when the session starts.
 
 A global file, for example:
@@ -151,7 +152,6 @@ A global file, for example:
   },
   "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
   "keepFailedWorkers": true,
-  "leadGuard": "confirm",
   "waitingTimeoutMinutes": 120,
   "stuckDetection": true,
   "verifyTimeoutMinutes": 15

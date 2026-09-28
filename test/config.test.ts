@@ -18,21 +18,22 @@ async function dirs(global?: object, project?: object) {
 }
 
 test("settings in their right place produce no notice", async () => {
-  const { agentDir, cwd } = await dirs({ leadGuard: "off" }, { verify: "npm test" });
+  const { agentDir, cwd } = await dirs({ keepFailedWorkers: false }, { verify: "npm test" });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
   assert.deepEqual(ignored, []);
-  assert.equal(config.leadGuard, "off");
+  assert.equal(config.keepFailedWorkers, false);
   assert.equal(config.verify, "npm test");
 
   const none = await dirs();
   assert.deepEqual((await loadConfigWithNotices(none.cwd, { projectTrusted: false, agentDir: none.agentDir })).ignored, []);
 });
 
-test("an old maxWorkers key in a user file is ignored, no error and no notice", async () => {
-  const { agentDir, cwd } = await dirs({ maxWorkers: 3 });
+test("an old maxWorkers or leadGuard key in a user file is ignored, no error and no notice", async () => {
+  const { agentDir, cwd } = await dirs({ maxWorkers: 3 }, { leadGuard: "off" });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
   assert.deepEqual(ignored, []);
   assert.equal((config as { maxWorkers?: number }).maxWorkers, undefined);
+  assert.equal((config as { leadGuard?: string }).leadGuard, undefined);
 });
 
 test("verify in the global config is dropped with a notice naming the file", async () => {
@@ -54,13 +55,6 @@ test("a project file of an untrusted project is ignored with a notice on how to 
   assert.equal(ignored.length, 1);
   assert.match(ignored[0]!, /^PI Lead: \.pi\/pi-lead\.json is ignored because this project is not trusted in Pi \(.*\/trust.*--approve.*\)\.$/);
   assert.doesNotMatch(ignored[0]!, /npm test/);
-});
-
-test("leadGuard in the project file is dropped with a notice", async () => {
-  const { agentDir, cwd } = await dirs(undefined, { leadGuard: "off" });
-  const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
-  assert.equal(config.leadGuard, "confirm");
-  assert.deepEqual(ignored, ["PI Lead: `leadGuard` in .pi/pi-lead.json is ignored; only the global config can change it."]);
 });
 
 test("a config file that is not an object still loads without a notice", async () => {

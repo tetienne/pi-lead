@@ -81,7 +81,7 @@ export default function worker(pi: ExtensionAPI) {
 
   /**
    * Real-time scope enforcement for an implementer built on a scout brief
-   * (pattern: report-guard.ts's `tool_call` block). Only write and edit are
+   * (a `tool_call` block). Only write and edit are
    * intercepted: bash is not, since the host check after `finish` (delegate.ts
    * settle) covers whatever it changes.
    */

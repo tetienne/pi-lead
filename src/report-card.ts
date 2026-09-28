@@ -3,14 +3,13 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works
 import { INVISIBLE, type ReportCard } from "./delegate.ts";
 import type { WorkerVerdict } from "./jev.ts";
 import { cleanLines, type Paint } from "./tool-display.ts";
-import { safePreview } from "./report-guard.ts";
+import { safePreview } from "./safe-preview.ts";
 
 /**
  * A worker report as a card in the Lead's transcript. The model receives the
- * report's full text either way; this is only what the user sees. The report
- * guard treats the user's next message as having seen every report, so the
- * card never hides a line the worker wrote: collapsed, it shortens only the
- * host lines, and expanding shows the full text.
+ * report's full text either way; this is only what the user sees. The card
+ * never hides a line the worker wrote, so the user reads what the model reads:
+ * collapsed, it shortens only the host lines, and expanding shows the full text.
  */
 
 type Status = WorkerVerdict | "failed" | "stopped";

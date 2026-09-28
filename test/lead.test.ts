@@ -42,14 +42,7 @@ function fakePi() {
 test("the Lead never intercepts user input: the model answers questions itself", () => {
   const pi = fakePi();
   lead(pi.api as any);
-  // Only the report guard listens to input, to see the human is back; it never rewrites or handles it.
-  for (const handler of pi.handlers.get("input") ?? []) {
-    const ctx = { sessionManager: { getBranch: () => [] } };
-    for (const source of ["interactive", "rpc", "extension"]) {
-      assert.deepEqual(handler({ type: "input", text: "how does X work?", source }, ctx), { action: "continue" });
-    }
-  }
-  assert.ok(pi.handlers.has("tool_call"), "the report guard is registered");
+  assert.ok(!pi.handlers.has("input"), "no input handler");
   assert.deepEqual(pi.commands, ["jev"]);
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker", "git_read"]);
 });

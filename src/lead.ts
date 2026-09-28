@@ -15,10 +15,12 @@ import { createHerdrCli } from "./herdr.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
-import { registerReportGuard, WORKER_REPORT_TYPE } from "./report-guard.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
 import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
 import { gitWorkspace } from "./workspace.ts";
+
+/** The custom message type the Lead uses to deliver worker results. */
+const WORKER_REPORT_TYPE = "pi-lead-worker";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SKILLS_DIR = join(PACKAGE_ROOT, ".agents", "skills");
@@ -104,7 +106,6 @@ export default function lead(pi: ExtensionAPI) {
   let usageTimer: ReturnType<typeof setInterval> | undefined;
   /** This session's last decisions, for `/jev`. */
   const recent: JevDecision[] = [];
-  registerReportGuard(pi);
 
   /** `delegate` calls in their start phase, which share Pi's working message. */
   let delegating = 0;

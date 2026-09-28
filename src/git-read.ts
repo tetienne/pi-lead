@@ -51,7 +51,7 @@ export function registerGitRead(pi: ExtensionAPI) {
     name: "git_read",
     label: "Git read",
     description:
-      "Read-only git inspection of the Lead's repository, e.g. worker branches: rev-parse, log, diff, show, status, worktree list. Runs without confirmation, even after a worker report.",
+      "Read-only git inspection of the Lead's repository, e.g. worker branches: rev-parse, log, diff, show, status, worktree list.",
     promptSnippet: "git_read: read-only git (rev-parse, log, diff, show, status, worktree list) in the Lead's repository",
     parameters: Type.Object({
       args: Type.Array(Type.String(), { description: 'git arguments, subcommand first, e.g. ["diff", "--stat", "main...pi-lead/x"]' }),
