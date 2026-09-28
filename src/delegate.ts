@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
@@ -167,6 +167,13 @@ type AdoptableWorker = Pick<
 };
 
 const RECORD = "tab.json";
+
+/** Replace a task record in one step (write aside, then rename), so a reading Lead never sees half of it. */
+async function replaceRecord(dir: string, record: unknown): Promise<void> {
+  const aside = join(dir, `${RECORD}.${process.pid}.tmp`);
+  await writeFile(aside, JSON.stringify(record, null, 2));
+  await rename(aside, join(dir, RECORD));
+}
 
 /** States whose Pi a later Lead can keep watching. */
 const ADOPTABLE: readonly WorkerState[] = ["starting", "running", "waiting"];
@@ -472,7 +479,7 @@ export function createDelegator(deps: DelegateDeps) {
         ...(worker.state === "failed" ? { failed: true } : {}),
         ...(snapshot ? { worker: snapshot } : {}),
       };
-      await writeFile(join(worker.taskDir, RECORD), JSON.stringify(record, null, 2)).catch(() => undefined);
+      await replaceRecord(worker.taskDir, record).catch(() => undefined);
     });
     return worker.recording;
   };
@@ -1322,7 +1329,7 @@ export function createDelegator(deps: DelegateDeps) {
         }
         if (record.failed && deps.config.keepFailedWorkers) {
           const { workspaceId: _workspace, paneId: _pane, ...kept } = record;
-          await writeFile(join(dir, RECORD), JSON.stringify(kept, null, 2)).catch(() => undefined);
+          await replaceRecord(dir, kept).catch(() => undefined);
         } else {
           await deps.workspace.remove(dir).catch(() => undefined);
         }
