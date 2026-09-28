@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join, posix } from "node:path";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
 import type { Herdr } from "./herdr.ts";
-import { DEFAULT_TIER, tierForDifficulty, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
+import { DEFAULT_TIER, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, PUBLISHED_KINDS, readJsonFile, workerPrompt, WRITES_CODE, type Verification, type WorkerBrief, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, PUBLISHED_KINDS, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
@@ -69,8 +69,6 @@ export type DelegateOutcome = {
     sensitive?: string[];
     /** The project's `verify` run; a non-zero exit made `done` at most `partial`. */
     verification?: { exitCode: number; ms: number };
-    /** Changed files outside the scout's brief; changing any made `done` at most `partial`. */
-    outOfScope?: string[];
     /** The worker's own draft PR for a finished ticket. */
     pr?: string;
     /** What the Lead's transcript shows as a card (the model reads `text`). */
@@ -178,10 +176,6 @@ type Worker = WorkerInfo & {
   params: DelegateParams;
   io: DelegateIO;
   difficulty: number | undefined;
-  /** Set on a scout worker: the tier its implementer will get once it hands off. */
-  implementTier?: Tier;
-  /** Set once a scout hands off: the implementer's scope, carried across a reroute too. */
-  brief?: WorkerBrief;
   /** Set on the first launch that publishes: the remote branch to push to, reused across a reroute so it lands on the same PR. */
   remoteBranch?: string;
   controller: AbortController;
@@ -191,7 +185,7 @@ type Worker = WorkerInfo & {
   worktreePath?: string;
   repoRoot?: string;
   base?: string;
-  /** The ticket's original base commit, set once at first launch and carried through a scout hand-off. */
+  /** The ticket's original base commit, set once at first launch. */
   originBase?: string;
   /** The branch the checkout was on when the ticket was first delegated; the PR base. Undefined on a detached HEAD. */
   baseBranch?: string;
@@ -586,14 +580,14 @@ export function createDelegator(deps: DelegateDeps) {
       repoRoot: worker.repoRoot,
       ...(params.startFrom ? { startFrom: params.startFrom } : {}),
     });
-    // Captured once, at the ticket's first launch: a scout hand-off resets `worker.base` to its own
-    // branch, but publish needs the original starting point, not the scout's. Gated on `originBase`
+    // Captured once, at the ticket's first launch: a reroute starts from the previous worker
+    // branch, but the PR still targets the original one. Gated on `originBase`
     // (always set once resolved), not `baseBranch` (stays undefined on a detached HEAD).
     if (worker.originBase === undefined) {
       worker.baseBranch = params.startFrom ?? (await deps.workspace.currentBranch(worker.repoRoot));
       worker.originBase = worker.base;
     }
-    // Set on the first launch of a publishing kind (never the scout); a later reroute keeps
+    // Set on the first launch of a publishing kind; a later reroute keeps
     // pushing onto this same remote branch instead of opening a second PR.
     if (PUBLISHED_KINDS.includes(worker.kind)) worker.remoteBranch ??= worker.branch;
     worker.tabLabel = tabLabel(worker);
@@ -622,7 +616,6 @@ export function createDelegator(deps: DelegateDeps) {
       branch: worker.branch,
       worktreePath: worker.worktreePath,
       resultPath: worker.resultPath,
-      ...(worker.brief ? { allowedFiles: worker.brief.allowedFiles, protectedFiles: worker.brief.protectedFiles } : {}),
       stuckDetection: deps.config.stuckDetection,
       ...(deps.config.verify ? { verify: deps.config.verify, verifyTimeoutMinutes: deps.config.verifyTimeoutMinutes } : {}),
     };
@@ -635,7 +628,7 @@ export function createDelegator(deps: DelegateDeps) {
         : undefined;
     const argv = deps.workerCommand({
       taskPath,
-      prompt: workerPrompt(worker.kind, params.task, worker.brief, publish) + (worker.resumed ? RESUME_NOTE : ""),
+      prompt: workerPrompt(worker.kind, params.task, publish) + (worker.resumed ? RESUME_NOTE : ""),
       route: worker.route,
       label,
       resources,
@@ -679,56 +672,7 @@ export function createDelegator(deps: DelegateDeps) {
     elapsedMs: Math.max(0, now() - (worker.runningSince ?? worker.delegatedAt)),
   });
 
-  /** Repo-relative, no leading "./", never absolute or reaching outside the repo. */
-  const normalizeAllowed = (paths: string[] | undefined): string[] => {
-    const seen = new Set<string>();
-    for (const raw of paths ?? []) {
-      const path = raw.trim().replace(/^\.\//, "");
-      if (!path || path.startsWith("/") || path.split("/").includes("..")) continue;
-      seen.add(path);
-    }
-    return [...seen];
-  };
-
-  /**
-   * A scout finishing `done` with allowed files hands off to an implement
-   * worker that builds on its branch, instead of being reported: same Worker,
-   * relaunched, so `find` and the id returned by `delegate` still reach it.
-   * Returns false for every other scout outcome, which is reported as usual.
-   */
-  const scoutHandOff = async (worker: Worker, result: WorkerResult): Promise<boolean> => {
-    if (worker.kind !== "scout" || result.status !== "done") return false;
-    const allowedFiles = normalizeAllowed(result.allowedFiles);
-    if (allowedFiles.length === 0) return false;
-    const scouted = await deps.workspace.collect({ repoRoot: worker.repoRoot!, branch: worker.branch!, base: worker.base! });
-    // The scout's own test files: whatever it changed that it did not also allow the implementer to touch.
-    const protectedFiles = scouted.changedFiles.filter((path) => !allowedFiles.includes(path));
-    const implementTier = worker.implementTier ?? DEFAULT_TIER;
-    const { lead, available } = routable(worker.io);
-    const resolved = resolveRoute(implementTier, deps.config.tiers, lead, available);
-    // Thrown, not reported here: watch()'s catch turns it into a normal failed report for this (still scout) worker.
-    if ("error" in resolved) throw new Error(`No worker model for the implementer: ${resolved.error}`);
-    const skipped = exhaustedNote();
-    const route = skipped && resolved.note ? { ...resolved, note: `${resolved.note} (${skipped})` } : resolved;
-    const scoutBranch = worker.branch!;
-    worker.kind = "implement";
-    worker.params = { ...worker.params, startFrom: scoutBranch };
-    worker.route = route;
-    worker.brief = { allowedFiles, protectedFiles, text: result.findings ? unmarked(result.findings) : "" };
-    worker.base = undefined; // resolved fresh from the scout branch
-    worker.resumed = false;
-    await closeAndClean(worker);
-    setState(worker, "queued");
-    await takeSlot(worker); // implement writes code: overlap waits apply now
-    if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
-    await launch(worker);
-    setState(worker, "running");
-    progress(`"${worker.title}" scout mapped ${allowedFiles.length} file${allowedFiles.length === 1 ? "" : "s"}; implement starting on ${route.model}`);
-    return true;
-  };
-
   const settle = async (worker: Worker, result: WorkerResult) => {
-    if (await scoutHandOff(worker, result)) return;
     // Only a run of this Lead's own command counts; the command shown comes from the config, not the result file.
     const verify = deps.config.verify;
     const verification = verify && result.verification?.command === verify ? result.verification : undefined;
@@ -751,11 +695,7 @@ export function createDelegator(deps: DelegateDeps) {
     const judged =
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     const verifyFailed = verification !== undefined && verification.exitCode !== 0;
-    // An implementer built on a scout brief: anything it touched outside the allowed list, or a protected test it changed.
-    const outOfScope = worker.brief
-      ? collected.changedFiles.filter((path) => !worker.brief!.allowedFiles.includes(path) || worker.brief!.protectedFiles.includes(path))
-      : [];
-    let status = judged === "done" && (verifyFailed || outOfScope.length > 0) ? "partial" : judged;
+    let status = judged === "done" && verifyFailed ? "partial" : judged;
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
     const sensitive = sensitivePatterns(collected.changedFiles);
 
@@ -792,11 +732,9 @@ export function createDelegator(deps: DelegateDeps) {
     }
     if (status === "needs_human") next.push(keep ? "Ask the user for what the worker needs, then relay the answer." : "Ask the user for what the worker needed, then delegate a new task with the answer.");
     if (status === "partial" || status === "blocked") next.push("Tell the user what is left; continue only if they agree.");
-    if (outOfScope.length > 0) next.push("Files changed outside the scout brief: review them before merging.");
     if (pr?.state === "error") next.push(`PI Lead could not read the PR or its checks (${pr.error}); tell the user.`);
     else if (pr && !pr.url) next.push(`The worker reported done but opened no PR on branch ${worker.remoteBranch}; tell the user.`);
     if (pr?.url && (pr.state === "fail" || pr.state === "pending")) next.push(`CI is not green on ${pr.url}; tell the user.`);
-    if (worker.kind === "scout") next.push("No implement worker started.");
     if (status === "done" && worker.kind === "review" && result.findings && review?.action !== "none") next.push("Review found issues: delegate an implement task with these findings, starting from the reviewed branch, without asking the user first.");
     if (status === "done" && worker.kind !== "review") {
       next.push(pr?.url ? `PR opened: ${pr.url}.` : `Work is on local branch ${worker.branch}; nothing was pushed or merged.`);
@@ -826,8 +764,6 @@ export function createDelegator(deps: DelegateDeps) {
         // Host-written; check names and links (repo-controlled) stay inside the untrusted block below.
         ...(ci ? [`CI: ${ci}`] : []),
         ...(claimsProgress ? [verificationLine(verify, verification)] : []),
-        // Host-written count only: worker-chosen file names stay inside the untrusted block below.
-        ...(outOfScope.length ? [`${outOfScope.length} changed file${outOfScope.length === 1 ? "" : "s"} outside the scout brief.`] : []),
         ...(pr?.url ? [`PR: ${pr.url}`] : []),
         `Branch: ${worker.branch}`,
         `Head: ${collected.head}`,
@@ -841,7 +777,6 @@ export function createDelegator(deps: DelegateDeps) {
         ...(collected.diffStat ? ["", "Diff stat:", unmarked(collected.diffStat)] : []),
         ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
         ...(verification?.outputTail ? ["", "Verify output (tail):", unmarked(verification.outputTail)] : []),
-        ...(outOfScope.length ? ["", "Out-of-scope files:", unmarked(outOfScope.join("\n"))] : []),
         ...(pr?.failed.length ? ["", "CI checks failed:", unmarked(pr.failed.map((check) => `${check.name} (${check.link})`).join("\n"))] : []),
         "</worker-report>",
         // Host-generated from the fixed pattern list, so it sits outside the block; worker-chosen file names stay inside.
@@ -861,7 +796,6 @@ export function createDelegator(deps: DelegateDeps) {
         ...(result.quota ? { quota: result.quota } : {}),
         ...(sensitive.length ? { sensitive } : {}),
         ...(verification ? { verification: { exitCode: verification.exitCode, ms: verification.ms } } : {}),
-        ...(outOfScope.length ? { outOfScope } : {}),
         ...(pr?.url ? { pr: pr.url } : {}),
         card: {
           ...cardBase(worker),
@@ -1037,12 +971,8 @@ export function createDelegator(deps: DelegateDeps) {
         };
       }
       const tier: Tier = judged?.tier ?? DEFAULT_TIER;
-      // Every implement ticket is scouted first: the scout gets its own (never
-      // below standard) tier, and the implement tier it hands off to is kept for later.
-      const scouted = params.kind === "implement";
-      const scoutTier: Tier = judged ? tierForDifficulty(judged.difficulty, "scout") : DEFAULT_TIER;
       const { lead, available } = routable(io);
-      const resolved = resolveRoute(scouted ? scoutTier : tier, deps.config.tiers, lead, available);
+      const resolved = resolveRoute(tier, deps.config.tiers, lead, available);
       const skipped = exhaustedNote();
       if ("error" in resolved) return { status: "failed", text: `No worker model: ${resolved.error}${skipped ? ` (${skipped})` : ""}.` };
       const route = skipped && resolved.note ? { ...resolved, note: `${resolved.note} (${skipped})` } : resolved;
@@ -1052,7 +982,7 @@ export function createDelegator(deps: DelegateDeps) {
       const worker: Worker = {
         id: randomUUID(),
         title: params.title,
-        kind: scouted ? "scout" : params.kind,
+        kind: params.kind,
         state: "queued",
         route,
         tabOpen: false,
@@ -1069,7 +999,6 @@ export function createDelegator(deps: DelegateDeps) {
         renameTries: 0,
         resumed: false,
         reroutes: 0,
-        ...(scouted ? { implementTier: tier } : {}),
       };
       workers.set(worker.id, worker);
       void drive(worker).catch(() => undefined);
@@ -1086,44 +1015,15 @@ export function createDelegator(deps: DelegateDeps) {
     },
 
     /** Relay text to a worker: steer a running one, or resume one waiting on a question. */
-    async message(ref: string, text: string, allowFiles?: string[]): Promise<string> {
+    async message(ref: string, text: string): Promise<string> {
       const worker = find(ref);
       if ("error" in worker) return worker.error;
       if (!worker.paneId || (worker.state !== "running" && worker.state !== "waiting")) {
         return `Worker "${worker.title}" is ${worker.state}; it cannot receive messages.`;
       }
       if ((await readIfPresent(worker.exitPath!))?.trim()) return `Worker "${worker.title}" has exited; it cannot receive messages.`;
-      let sent = text;
-      if (allowFiles?.length) {
-        if (!worker.brief) return `Worker "${worker.title}" has no scout brief to widen; it is not scoped to an allowed-files list.`;
-        const valid = new Set<string>();
-        for (const raw of allowFiles) {
-          const normalized = posix.normalize(raw.trim());
-          if (!normalized || normalized === "." || normalized.startsWith("/") || normalized.split("/").includes("..") || normalized.endsWith("/")) continue;
-          valid.add(normalized);
-        }
-        if (valid.size === 0) return `No valid file path to allow for "${worker.title}": give exact repo-relative file paths.`;
-        const allowedFiles = [...new Set([...worker.brief.allowedFiles, ...valid])];
-        const protectedFiles = worker.brief.protectedFiles.filter((path) => !valid.has(path));
-        if (worker.taskDir) {
-          const taskPath = join(worker.taskDir, "task.json");
-          try {
-            const task = await readJsonFile<WorkerTask>(taskPath);
-            task.allowedFiles = allowedFiles;
-            task.protectedFiles = protectedFiles;
-            const temporary = `${taskPath}.tmp`;
-            await writeFile(temporary, JSON.stringify(task, null, 2));
-            await rename(temporary, taskPath);
-          } catch (error) {
-            return `Could not widen the scope of "${worker.title}": ${errorText(error)}`;
-          }
-        }
-        worker.brief.allowedFiles = allowedFiles;
-        worker.brief.protectedFiles = protectedFiles;
-        sent = `${text}\n\n(The Lead widened your allowed files; you may now also change: ${[...valid].join(", ")}.)`;
-      }
       try {
-        await deps.herdr!.sendToAgent(worker.paneId, `[PI Lead] ${sent}`);
+        await deps.herdr!.sendToAgent(worker.paneId, `[PI Lead] ${text}`);
       } catch (error) {
         return `Could not reach "${worker.title}" through Herdr: ${errorText(error)}`;
       }

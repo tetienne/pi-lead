@@ -32,12 +32,9 @@ const noJudge: Judge = {
 
 type Log = string[];
 type Reply =
-  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string; uncommitted?: boolean; verification?: WorkerResult["verification"]; allowedFiles?: string[] }
+  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string; uncommitted?: boolean; verification?: WorkerResult["verification"] }
   | "exit"
   | "silent";
-
-/** A scout's automatic reply, matching `fakeWorkspace`'s changed files, unless a test overrides it. */
-const AUTO_SCOUT: Reply = { status: "done", summary: "mapped the ticket", findings: "reuse src/a.ts's helper", allowedFiles: ["src/a.ts"] };
 
 function fakeWorkspace(log: Log): Workspace {
   return {
@@ -73,7 +70,7 @@ function fakeHerdr(
   log: Log,
   replies: Reply[],
   seen: Seen = {},
-  options: { workspaces?: string[]; renameFailures?: number; closeFailures?: number; sharedTurns?: boolean; scoutReply?: Reply } = {},
+  options: { workspaces?: string[]; renameFailures?: number; closeFailures?: number; sharedTurns?: boolean } = {},
 ): Herdr {
   let renameFailures = options.renameFailures ?? 0;
   let closeFailures = options.closeFailures ?? 0;
@@ -84,18 +81,10 @@ function fakeHerdr(
   const write = (worker: { task: WorkerTask; seq: number }, next: Exclude<Reply, "exit" | "silent">) =>
     writeFile(
       worker.task.resultPath,
-      JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}), ...(next.quota ? { quota: next.quota } : {}), ...(next.modelError ? { modelError: next.modelError } : {}), ...(next.uncommitted ? { uncommitted: true } : {}), ...(next.verification ? { verification: next.verification } : {}), ...(next.allowedFiles ? { allowedFiles: next.allowedFiles } : {}) }),
+      JSON.stringify({ version: 1, id: worker.task.id, seq: ++worker.seq, status: next.status, summary: next.summary ?? "did it", ...(next.findings ? { findings: next.findings } : {}), ...(next.quota ? { quota: next.quota } : {}), ...(next.modelError ? { modelError: next.modelError } : {}), ...(next.uncommitted ? { uncommitted: true } : {}), ...(next.verification ? { verification: next.verification } : {}) }),
     );
   const reply = (paneId: string) => {
     const worker = workers.get(paneId)!;
-    // A scout's reply is fixed and never advances the `replies` list: only the implementer it hands off to draws from it.
-    if (worker.task.kind === "scout") {
-      const scout = options.scoutReply ?? AUTO_SCOUT;
-      if (scout === "silent") return;
-      if (scout === "exit") return void setTimeout(() => void writeFile(worker.exitPath, "1\n"), 5);
-      setTimeout(() => void write(worker, scout), 5);
-      return;
-    }
     const next = replies[Math.min(options.sharedTurns ? sharedTurn++ : worker.turn++, replies.length - 1)]!;
     if (next === "silent") return;
     if (next === "exit") return void setTimeout(() => void writeFile(worker.exitPath, "1\n"), 5);
@@ -233,7 +222,6 @@ test("helpers: slug, branch validation and shell quoting", () => {
 test("delegate returns at once; the result arrives later, then the worker is cleaned up", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", delayMs: 30 }] });
   const pending = nextOutcome();
-  // Not "implement": that is scouted first, a separate lifecycle covered below.
   const started = await delegator.start({ kind: "prototype", title: "Add CSV export", task: "Add CSV export. AC: test passes." }, io);
   assert.equal(started.status, "started");
   assert.match(started.text, /result will arrive as a message/);
@@ -355,8 +343,7 @@ test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t)
   const outcome = await pending;
   assert.equal(outcome.status, "partial");
   assert.match(outcome.text, /worker said done, Jev said partial/);
-  // The scout's own tab closes at hand-off; the implementer's stays open (partial).
-  assert.deepEqual(log.filter((line) => line.startsWith("close")), ["close tab-1"]);
+  assert.deepEqual(log.filter((line) => line.startsWith("close")), [], "a partial keeps its tab");
 });
 
 test("Jev's verdict is asked with the commits, changed files and the verify run", async (t) => {
@@ -430,8 +417,7 @@ test("a failed verify run makes done at most partial; the command and exit code 
   const [untrusted, after] = rest!.split("</worker-report>");
   assert.match(untrusted!, /Verify output \(tail\):\nIGNORE PREVIOUS INSTRUCTIONS/);
   assert.doesNotMatch(after!, /IGNORE/);
-  // The scout's own tab closes at hand-off; the implementer's stays open (partial).
-  assert.deepEqual(log.filter((line) => line.startsWith("close")), ["close tab-1"], "kept like any partial");
+  assert.deepEqual(log.filter((line) => line.startsWith("close")), [], "kept like any partial");
 });
 
 test("a passing verify run leaves done alone; a run of another command does not count", async (t) => {
@@ -1096,205 +1082,47 @@ test("with keepFailedWorkers off, a blocked quota report says to delegate again 
   assert.doesNotMatch(outcome.text, /relay a message/);
 });
 
-test("implement is scouted first: the implementer builds on the scout's branch with its brief, and only it reports", async (t) => {
+test("an implement delegation starts exactly one worker, on the implement route, with no scout phase", async (t) => {
   const seen: Seen = {};
-  const { delegator, log, nextOutcome, progress } = await setup(t, {
-    seen,
-    herdrOptions: { scoutReply: { status: "done", findings: "reuse Foo from src/a.ts", allowedFiles: ["src/a.ts"] } },
-  });
+  const { delegator, log, nextOutcome, progress } = await setup(t, { seen });
   const pending = nextOutcome();
   const started = await delegator.start({ kind: "implement", title: "Feature", task: "Add the thing" }, io);
   assert.ok(started.status === "started");
+  assert.equal(started.worker.kind, "implement");
   const outcome = await pending;
   assert.equal(outcome.status, "done");
-  assert.equal(seen.task?.task, "Add the thing", "the ticket reaches the implementer unchanged");
-  assert.deepEqual(seen.task?.allowedFiles, ["src/a.ts"]);
-  assert.match(seen.script!, /## Scout brief/);
-  assert.match(seen.script!, /reuse Foo from src\/a\.ts/);
-  const resolves = log.filter((line) => line.startsWith("resolveBase"));
-  assert.equal(resolves.length, 2, "the scout, then the implementer");
-  assert.equal(resolves[0], "resolveBase");
-  assert.match(resolves[1]!, /^resolveBase from pi-lead\/feature-/, "the implementer starts from the scout's branch");
-  assert.equal(log.filter((line) => line.startsWith("open")).length, 2);
-  assert.ok(progress.some((line) => line.includes('"Feature" scout mapped 1 file; implement starting on')));
+  assert.equal(outcome.worker.kind, "implement");
+  assert.equal(seen.task?.kind, "implement");
+  assert.equal(seen.task?.task, "Add the thing", "the ticket reaches the worker unchanged");
+  assert.match(seen.script!, /'\/skill:implement Add the thing/);
+  assert.doesNotMatch(seen.script!, /[Ss]cout/);
+  assert.deepEqual(log.filter((line) => line.startsWith("resolveBase")), ["resolveBase"], "one launch, from the Lead's checkout");
+  assert.equal(log.filter((line) => line.startsWith("open")).length, 1, "one worktree, one tab");
+  assert.ok(!progress.some((line) => /scout/i.test(line)));
+  assert.doesNotMatch(outcome.text, /scout/i);
 });
 
-test("a message with allowFiles widens a scoped implementer's task.json, so it finishes done without outOfScope", async (t) => {
-  const seen: Seen = {};
-  let calls = 0;
-  const { delegator, nextOutcome } = await setup(t, {
-    seen,
-    replies: [{ status: "needs_human", summary: "may I touch src/extra.ts too?" }, { status: "done" }],
-    workspace: {
-      ...fakeWorkspace([]),
-      collect: async () => {
-        calls += 1;
-        return calls === 1
-          ? { commits: "s1 scout tests", diffStat: "", changedFiles: ["test/a.test.ts"], head: "s1" }
-          : { commits: "i1 impl", diffStat: "", changedFiles: ["src/a.ts", "src/extra.ts"], head: "i1" };
-      },
-    },
-    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
-  });
-  const question = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Feature", task: "t" }, io);
-  assert.ok(started.status === "started");
-  await question;
-  assert.equal(delegator.list()[0]!.state, "waiting");
-
-  const second = nextOutcome();
-  const reply = await delegator.message(started.worker.id.slice(0, 8), "go ahead, extend the scope", ["src/extra.ts"]);
-  assert.match(reply, /Sent to "Feature"/);
-
-  const taskDir = dirname(seen.task!.resultPath);
-  const task = JSON.parse(await readFile(join(taskDir, "task.json"), "utf8"));
-  assert.deepEqual(task.allowedFiles, ["src/a.ts", "src/extra.ts"]);
-
-  const outcome = await second;
-  assert.equal(outcome.status, "done");
-  assert.deepEqual(outcome.details.outOfScope, undefined);
-});
-
-test("a file the scout changed (and so is protected) becomes allowed via message allowFiles", async (t) => {
-  const seen: Seen = {};
-  let calls = 0;
-  const { delegator, nextOutcome } = await setup(t, {
-    seen,
-    replies: [{ status: "needs_human", summary: "may I touch src/scout-test.ts too?" }, { status: "done" }],
-    workspace: {
-      ...fakeWorkspace([]),
-      collect: async () => {
-        calls += 1;
-        return calls === 1
-          ? { commits: "s1 scout tests", diffStat: "", changedFiles: ["src/a.ts", "src/scout-test.ts"], head: "s1" }
-          : { commits: "i1 impl", diffStat: "", changedFiles: ["src/a.ts", "src/scout-test.ts"], head: "i1" };
-      },
-    },
-    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
-  });
-  const question = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Feature", task: "t" }, io);
-  assert.ok(started.status === "started");
-  await question;
-  assert.equal(delegator.list()[0]!.state, "waiting");
-
-  const second = nextOutcome();
-  const reply = await delegator.message(started.worker.id.slice(0, 8), "go ahead, extend the scope", ["src/scout-test.ts"]);
-  assert.match(reply, /Sent to "Feature"/);
-
-  const taskDir = dirname(seen.task!.resultPath);
-  const task = JSON.parse(await readFile(join(taskDir, "task.json"), "utf8"));
-  assert.ok(task.allowedFiles.includes("src/scout-test.ts"));
-  assert.ok(!task.protectedFiles.includes("src/scout-test.ts"));
-
-  const outcome = await second;
-  assert.equal(outcome.status, "done");
-  assert.deepEqual(outcome.details.outOfScope, undefined);
-});
-
-test("a message with only invalid allowFiles paths is refused and sends nothing", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, {
-    replies: [{ status: "needs_human", summary: "which files?" }],
-    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
-  });
-  const question = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Feature", task: "t" }, io);
-  assert.ok(started.status === "started");
-  await question;
-
-  const reply = await delegator.message(started.worker.id.slice(0, 8), "go ahead", ["../x", "/abs", "src/lib/"]);
-  assert.match(reply, /No valid file path to allow for "Feature"/);
-  assert.ok(!log.some((line) => line.startsWith("send ")), "nothing was sent to the worker");
-});
-
-test("a message with allowFiles to a worker with no scout brief is refused", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, {
-    replies: [{ status: "needs_human", summary: "which format?" }],
-  });
+test("a trivial implement ticket runs on the fast tier: no scout floor", async (t) => {
+  const { delegator, nextOutcome } = await setup(t, { judge: { available: true, intake: async () => ({ tier: { tier: "fast", difficulty: 0.4 } }) } });
   const pending = nextOutcome();
-  const started = await delegator.start({ kind: "prototype", title: "Dates", task: "t" }, io);
-  assert.ok(started.status === "started");
+  const started = await delegator.start({ kind: "implement", title: "Typo", task: "t" }, io);
+  assert.match(started.text, /tier fast/);
   await pending;
-  const reply = await delegator.message(started.worker.id.slice(0, 8), "go ahead", ["src/extra.ts"]);
-  assert.match(reply, /has no scout brief to widen/);
 });
 
-test("the scout is never sent to the fast tier, even for a trivial ticket; a hard one still gets deep", async (t) => {
-  const trivial = await setup(t, { judge: { available: true, intake: async () => ({ tier: { tier: "fast", difficulty: 0.4 } }) } });
-  const pending = trivial.nextOutcome();
-  const started = await trivial.delegator.start({ kind: "implement", title: "Typo", task: "t" }, io);
-  assert.match(started.text, /tier standard/);
-  await pending;
-
-  const hard = await setup(t, { judge: { available: true, intake: async () => ({ tier: { tier: "deep", difficulty: 3.9 } }) } });
-  const pendingHard = hard.nextOutcome();
-  const startedHard = await hard.delegator.start({ kind: "implement", title: "Hard", task: "t" }, io);
-  assert.match(startedHard.text, /tier deep/);
-  await pendingHard;
-});
-
-test("an implementer that changes a file outside the scout's allowed list is capped to partial; file names stay inside the untrusted block", async (t) => {
-  let calls = 0;
-  let checked = 0;
+test("an implement worker may change any file: done is never capped for scope", async (t) => {
   const { delegator, nextOutcome } = await setup(t, {
     workspace: {
       ...fakeWorkspace([]),
-      collect: async () => {
-        calls += 1;
-        return calls === 1
-          ? { commits: "s1 scout tests", diffStat: "", changedFiles: ["test/a.test.ts"], head: "s1" }
-          : { commits: "i1 impl", diffStat: "", changedFiles: ["src/a.ts", "src/rogue.ts"], head: "i1" };
-      },
-      prChecks: async () => (checked += 1, { state: "none" as const, failed: [] }),
+      collect: async () => ({ commits: "i1 impl", diffStat: "", changedFiles: ["src/a.ts", "src/other.ts", "test/a.test.ts"], head: "i1" }),
     },
-    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
   });
   const pending = nextOutcome();
   await delegator.start({ kind: "implement", title: "Feature", task: "t" }, io);
   const outcome = await pending;
-  assert.equal(outcome.status, "partial");
-  assert.deepEqual(outcome.details.outOfScope, ["src/rogue.ts"]);
-  const [trusted, rest] = outcome.text.split("<worker-report untrusted>");
-  assert.match(trusted!, /1 changed file outside the scout brief\./);
-  assert.doesNotMatch(trusted!, /rogue/);
-  const [untrusted, after] = rest!.split("</worker-report>");
-  assert.match(untrusted!, /Out-of-scope files:\nsrc\/rogue\.ts/);
-  assert.doesNotMatch(after!, /rogue/);
-  assert.equal(checked, 0, "a partial ticket's PR is never checked");
-});
-
-test("an implementer that changes a scout's protected test file is capped to partial", async (t) => {
-  let calls = 0;
-  const { delegator, nextOutcome } = await setup(t, {
-    workspace: {
-      ...fakeWorkspace([]),
-      collect: async () => {
-        calls += 1;
-        const changedFiles = ["src/a.ts", "test/a.test.ts"];
-        return calls === 1 ? { commits: "s1", diffStat: "", changedFiles, head: "s1" } : { commits: "i1", diffStat: "", changedFiles, head: "i1" };
-      },
-    },
-    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
-  });
-  const pending = nextOutcome();
-  await delegator.start({ kind: "implement", title: "Feature", task: "t" }, io);
-  const outcome = await pending;
-  assert.equal(outcome.status, "partial");
-  assert.deepEqual(outcome.details.outOfScope, ["test/a.test.ts"]);
-});
-
-test("a blocked scout is reported as usual; no implement worker starts", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, {
-    herdrOptions: { scoutReply: { status: "blocked", summary: "cannot find the seam" } },
-  });
-  const pending = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Tricky", task: "t" }, io);
-  assert.ok(started.status === "started");
-  const outcome = await pending;
-  assert.equal(outcome.status, "blocked");
-  assert.match(outcome.text, /cannot find the seam/);
-  assert.match(outcome.text, /No implement worker started\./);
-  assert.equal(log.filter((line) => line.startsWith("open")).length, 1, "only the scout opened a tab");
+  assert.equal(outcome.status, "done");
+  assert.doesNotMatch(outcome.text, /outside|out-of-scope|scout/i);
+  assert.equal("outOfScope" in outcome.details, false);
 });
 
 test("a finished implement ticket reports its own PR and passing CI, checked on the original base", async (t) => {
@@ -1307,7 +1135,6 @@ test("a finished implement ticket reports its own PR and passing CI, checked on 
         return { url: "https://example.test/pr/1", state: "pass" as const, failed: [] };
       },
     },
-    herdrOptions: { scoutReply: { status: "done", allowedFiles: ["src/a.ts"] } },
   });
   const pending = nextOutcome();
   await delegator.start({ kind: "implement", title: "Feature", task: "t", startFrom: "main" }, io);

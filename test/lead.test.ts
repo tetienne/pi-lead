@@ -47,6 +47,13 @@ test("the Lead never intercepts user input: the model answers questions itself",
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker", "git_read"]);
 });
 
+test("the worker tool takes no scope widening: list, message or stop only", () => {
+  const pi = fakePi();
+  lead(pi.api as any);
+  const worker = pi.tools.find((tool) => tool.name === "worker")!;
+  assert.deepEqual(Object.keys(worker.parameters.properties).sort(), ["action", "id", "message"]);
+});
+
 test("worker reports render as a card, and fall back to Pi's plain view without one", () => {
   const pi = fakePi();
   lead(pi.api as any);
@@ -157,12 +164,12 @@ test("worker prompts invoke Matt skills explicitly and results are validated", (
 
 test("the publish/CI instruction is added for a published kind with a base branch, and only then", () => {
   const publish = { baseBranch: "main", remoteBranch: "feature-1", title: "Add CSV export" };
-  const withPublish = workerPrompt("implement", "T", undefined, publish);
+  const withPublish = workerPrompt("implement", "T", publish);
   assert.match(withPublish, /git push -u origin HEAD:feature-1/);
   assert.match(withPublish, /gh pr create --draft --base main --head feature-1/);
   assert.match(withPublish, /gh pr checks feature-1 --watch/);
-  const quoted = workerPrompt("implement", "T", undefined, { ...publish, title: "Fix $(whoami) `id` it's" });
+  const quoted = workerPrompt("implement", "T", { ...publish, title: "Fix $(whoami) `id` it's" });
   assert.ok(quoted.includes(`--title 'Fix $(whoami) \`id\` it'\\''s'`), "single-quoted: no expansion in the worker's shell");
   assert.doesNotMatch(workerPrompt("implement", "T"), /## Publishing/, "no publish target: detached HEAD");
-  assert.doesNotMatch(workerPrompt("review", "T", undefined, publish), /## Publishing/, "review is never published");
+  assert.doesNotMatch(workerPrompt("review", "T", publish), /## Publishing/, "review is never published");
 });

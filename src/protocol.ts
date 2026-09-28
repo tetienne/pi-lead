@@ -15,10 +15,6 @@ export type WorkerTask = {
   worktreePath: string;
   /** Host path the worker writes its `WorkerResult` to (outside the worktree). */
   resultPath: string;
-  /** Set for an implement worker built on a scout's brief. */
-  allowedFiles?: string[];
-  /** The scout's own test files: must not be changed, only made to pass. */
-  protectedFiles?: string[];
   /** Steer the worker when it keeps repeating a failing command. Absent means on. */
   stuckDetection?: boolean;
   /**
@@ -37,10 +33,8 @@ export type WorkerResult = {
   seq: number;
   status: WorkerVerdict;
   summary: string;
-  /** Review findings, when the work was a review; for a scout, the brief for the implementer. */
+  /** Review findings, when the work was a review. */
   findings?: string;
-  /** Written by a scout's `finish`: exact repo-relative paths the implementer may change or create. */
-  allowedFiles?: string[];
   /**
    * Written by the worker extension, not by `finish`: the model stopped on a
    * provider error. `quota` is set when that error is an exhausted allowance.
@@ -65,7 +59,7 @@ export type Verification = { command: string; exitCode: number; outputTail: stri
 /** Work kinds whose worker changes code, and so should run its tests. */
 export const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debug"];
 
-/** Kinds that push, open a draft PR and watch its CI once they settle `done`: not prototype, review or scout. */
+/** Kinds that push, open a draft PR and watch its CI once they settle `done`: not prototype or review. */
 export const PUBLISHED_KINDS: readonly WorkKind[] = ["implement", "debug", "research"];
 
 export const WORKER_STATUSES = ["done", "partial", "blocked", "needs_human"] as const satisfies readonly WorkerVerdict[];
@@ -84,7 +78,6 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
     !WORKER_STATUSES.includes(result.status as WorkerVerdict) ||
     typeof result.summary !== "string" ||
     (result.findings !== undefined && typeof result.findings !== "string") ||
-    (result.allowedFiles !== undefined && (!Array.isArray(result.allowedFiles) || result.allowedFiles.some((f) => typeof f !== "string"))) ||
     (result.modelError !== undefined && typeof result.modelError !== "string") ||
     (result.uncommitted !== undefined && typeof result.uncommitted !== "boolean") ||
     (result.verification !== undefined &&
@@ -102,9 +95,6 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
   return result as WorkerResult;
 }
 
-/** A scout's brief for the implementer that builds on its branch. */
-export type WorkerBrief = { allowedFiles: string[]; protectedFiles: string[]; text: string };
-
 /** Where the worker pushes its ticket and opens its draft PR; the worker watches that PR's CI itself. */
 export type PublishTarget = { baseBranch: string; remoteBranch: string; title: string };
 
@@ -112,23 +102,9 @@ export type PublishTarget = { baseBranch: string; remoteBranch: string; title: s
 const shellQuote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
 
 /** First message of the worker session; explicit `/skill:` invocation. */
-export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief, publish?: PublishTarget): string {
+export function workerPrompt(kind: WorkKind, task: string, publish?: PublishTarget): string {
   const base = ((): string => {
     switch (kind) {
-      case "scout":
-        return [
-          `You prepare this ticket for a cheaper implementer; do not implement it: ${task}`,
-          "",
-          "Read the ticket and the code. Find existing helpers, types and patterns the change must reuse.",
-          "Write failing tests for the acceptance criteria at the public seams, copying the style of an existing test.",
-          "Run them and confirm they fail for the expected reason. Commit them.",
-          "If the ticket cannot be tested (docs, config), write no test.",
-          "Call `finish` with `allowedFiles`: exact repo-relative paths the implementer may change or create (source",
-          "files, plus the lockfile only if a dependency must change); do not list your own test files; no directories.",
-          "And `findings`: the brief (helpers to reuse with paths, the seam and interface decided, the test command",
-          "that runs your tests, anything the implementer must not do).",
-          "Use `needs_human` when the code cannot settle a decision.",
-        ].join("\n");
       case "implement":
         return `/skill:implement ${task}`;
       case "prototype":
@@ -149,20 +125,9 @@ export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief, 
         ].join("\n");
     }
   })();
-  const withBrief = !brief
-    ? base
-    : [
-        base,
-        "",
-        "## Scout brief",
-        `Allowed files (change or create only these): ${brief.allowedFiles.join(", ")}`,
-        `Protected test files (do not change; make them pass): ${brief.protectedFiles.join(", ")}`,
-        "",
-        brief.text,
-      ].join("\n");
-  if (!publish || !PUBLISHED_KINDS.includes(kind)) return withBrief;
+  if (!publish || !PUBLISHED_KINDS.includes(kind)) return base;
   return [
-    withBrief,
+    base,
     "",
     "## Publishing",
     `When the work is committed: push it with \`git push -u origin HEAD:${publish.remoteBranch}\`, open a draft PR against`,
@@ -196,7 +161,6 @@ opens your tab.
 - Messages starting with "[PI Lead]" come from the Lead (often relaying the
   user's answer). Continue the task with them and call \`finish\` again.
 - You run unattended: when a skill says to confirm something with the user
-  (a seam, an interface), use the scout brief when there is one, otherwise
-  decide from the code and say so in your finish summary. Use \`needs_human\`
-  only for what the code cannot answer.
+  (a seam, an interface), decide from the code and say so in your finish
+  summary. Use \`needs_human\` only for what the code cannot answer.
 `;

@@ -29,7 +29,6 @@ export type ReportDetails = {
   jevVerdict?: WorkerVerdict;
   review?: { severity: number; action: string };
   sensitive?: string[];
-  outOfScope?: string[];
   pr?: string;
   card?: ReportCard;
 };
@@ -154,9 +153,6 @@ export function renderCard(details: unknown, content: string, expanded: boolean,
   if (typeof report.pr === "string" && report.pr) lines.push(paint("dim", `  PR: ${safePreview(report.pr, 200)}`));
   if (Array.isArray(report.sensitive) && report.sensitive.length) {
     lines.push(paint("warning", `  ! review before merging: ${report.sensitive.map((pattern) => safePreview(pattern, 60)).join(", ")}`));
-  }
-  if (Array.isArray(report.outOfScope) && report.outOfScope.length) {
-    lines.push(paint("warning", `  ! outside the scout brief: ${report.outOfScope.map((path) => safePreview(path, 60)).join(", ")}`));
   }
 
   const block = untrustedBlock(content);

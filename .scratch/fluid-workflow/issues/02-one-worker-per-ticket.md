@@ -6,9 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] An `implement` delegation starts exactly one worker; no `scout` work kind, tier or phase remains (test at the delegator seam).
-- [ ] The worker extension no longer blocks write/edit on a brief, and `finish` no longer requires an allowed-files list.
-- [ ] The `worker` tool no longer accepts a scope widening; a report is never capped to `partial` for out-of-scope files or edited scout tests.
-- [ ] The report card and report text no longer show scout or scope lines.
-- [ ] Guidance, README and CONTEXT.md no longer describe scouting.
-- [ ] `npm test` and `npm run typecheck` pass.
+**Resolution:** DONE
+
+- [x] An `implement` delegation starts exactly one worker; no `scout` work kind, tier or phase remains (test at the delegator seam).
+- [x] The worker extension no longer blocks write/edit on a brief, and `finish` no longer requires an allowed-files list.
+- [x] The `worker` tool no longer accepts a scope widening; a report is never capped to `partial` for out-of-scope files or edited scout tests.
+- [x] The report card and report text no longer show scout or scope lines.
+- [x] Guidance, README and CONTEXT.md no longer describe scouting.
+- [x] `npm test` and `npm run typecheck` pass.

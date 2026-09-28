@@ -20,7 +20,6 @@ you ─► Lead (Pi, your tab)
         implement / prototype / diagnosing-bugs / code-review / research
                             → delegate tool
                                  Jev: ticket ready? how hard? → model + thinking level
-                                 implement only: a scout worker first (failing tests, allowed files)
                                  → Herdr worktree workspace (no focus), worker Pi in it
                                  worker Pi: runs on the host, /skill:implement …
                                  worker pushes, opens a draft PR, gets CI green, calls finish
@@ -45,12 +44,10 @@ you ─► Lead (Pi, your tab)
   `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` and `.gitmodules`. It is a hint
   to focus your review, not a security guarantee: ordinary source, tests and
   lockfiles run too once you use them, and it never blocks.
-- **Implement tickets are scouted first.** A cheap scout worker reads the
-  ticket and the code, writes failing tests for the acceptance criteria, and
-  hands off an `allowedFiles` list to the implementer, which builds on the
-  scout's branch. The implementer is refused if it edits outside that list or
-  changes the scout's own tests; the host caps a `done` report to `partial`
-  when the branch still ends up touching files outside the brief.
+- **One worker per ticket.** An `implement` ticket goes to a single worker
+  running Matt's `/implement` as written: test-first in vertical slices
+  through `/tdd`, then `/code-review`. There is no scout phase and no list of
+  files the worker may touch.
 - **A finished ticket becomes a draft PR, opened by the worker itself.** When
   an `implement`, `debug` or `research` worker is about to finish `done`, it
   pushes its branch, opens a draft PR against the branch the ticket started
