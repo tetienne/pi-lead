@@ -54,12 +54,11 @@ before reaching the user. Dead code from the sandbox era is deleted.
 20. As a Lead or worker, I want one short recipe for starting a sub-agent in a Herdr pane and reading its report back, so that every skill that asks for a sub-agent (code-review, grilling, wayfinder, improve-codebase-architecture, codebase-design) works the same way.
 21. As a user, I want the Lead to inspect worker branches and CI runs with ordinary git and gh through bash, so that there is no special read-only tool to learn.
 22. As a user, I want the Lead allowed to run a check itself (a test, a `gh run view`), so that a small question does not require messaging a worker.
-23. As a user, I want a worker waiting on my answer to wait until I answer or stop it, so that coming back from a meeting never finds my worker killed.
-24. As a user, I want debug and review work to start at the tier the README documents when Jev gives no difficulty, so that the docs and the code agree.
-25. As a maintainer, I want the dead sandbox-era code removed (egress judgment, Jev settings sent to workers, legacy Herdr fallbacks, symlink and budget hardening of the context snapshot, anti-evasion parts of the host check), so that the code says what PI Lead does today.
-26. As a maintainer, I want Jev calls that second-guess what the Lead reads in full (failure kind, review severity) removed, so that every delegation costs at most one Jev call before start and one after finish.
-27. As a maintainer, I want an ADR recording why the scout, the readiness gate and the "Lead never codes" rule were dropped, so that nobody reintroduces them without the context.
-28. As a maintainer, I want the README, CONTEXT.md and the Lead's guidance to match the new flow, so that the prompt never describes removed mechanisms.
+23. As a user, I want debug and review work to start at the tier the README documents when Jev gives no difficulty, so that the docs and the code agree.
+24. As a maintainer, I want the dead sandbox-era code removed (egress judgment, Jev settings sent to workers, legacy Herdr fallbacks, symlink and budget hardening of the context snapshot, anti-evasion parts of the host check), so that the code says what PI Lead does today.
+25. As a maintainer, I want Jev calls that second-guess what the Lead reads in full (failure kind, review severity) removed, so that every delegation costs at most one Jev call before start and one after finish.
+26. As a maintainer, I want an ADR recording why the scout, the readiness gate and the "Lead never codes" rule were dropped, so that nobody reintroduces them without the context.
+27. As a maintainer, I want the README, CONTEXT.md and the Lead's guidance to match the new flow, so that the prompt never describes removed mechanisms.
 
 ## Implementation Decisions
 
@@ -71,10 +70,9 @@ before reaching the user. Dead code from the sandbox era is deleted.
 - **Overlap scheduling.** Kept (serialising tickets that touch the same code avoids conflicting PRs, research-ecosystem.md). Unchanged in this spec.
 - **Mechanical partials go back to the worker once.** After `finish`, a report capped to `partial` only because CI failed or was pending, or verify failed, is sent back to the worker automatically, once, with the host's evidence, like review fixes today. The second such report, or any `needs_human`/`blocked`, reaches the user as now.
 - **PR head check.** The host PR check compares the PR's head commit with the worker branch head; a mismatch counts as pending.
-- **Workers are plain Pi.** Worker Pi starts without `--no-extensions` and without naming Herdr's extension; it names only the worker extension. The Lead extension stays inert in any Pi started by PI Lead (worker or sub-agent), detected from a marker PI Lead sets when launching it (an environment variable), so the user's global install of PI Lead never turns a worker into a Lead.
+- **Workers are plain Pi.** Worker Pi starts without `--no-extensions` and without naming Herdr's extension; it names only the worker extension. The Lead extension stays inert in any Pi started by PI Lead (worker or sub-agent), detected from a marker PI Lead sets when launching it (an environment variable). Pi has no flag to exclude one extension for a single run: `--no-extensions` drops them all, and package filters in settings are persistent and would also apply to the Lead. The marker is the only per-process switch, so the user's global install of PI Lead never turns a worker into a Lead.
 - **Sub-agents through Herdr.** The Lead's guidance and the worker rules carry one recipe: split a pane beside the caller without focus (`herdr pane split --current … --no-focus`), run a non-interactive Pi there with the PI Lead marker set, writing its answer to a report file, wait for its completion marker (`herdr pane wait-output`), read the report, close the pane. Skills that ask for sub-agents use it as written; if Herdr is unavailable, run the sub-agent steps one after the other in the same context and say so in the output.
 - **`git_read` removed.** The Lead uses git and gh through bash.
-- **Waiting timeout.** `waitingTimeoutMinutes` defaults to 0 (off); the setting stays for users who want it.
 - **Default tier.** With no Jev difficulty, debug and review start at `standard`, as documented.
 - **Dead code.** Remove the legacy Herdr metadata fallback and tab-rename switch-off (Herdr 0.9.1 is required), the stale "workers never receive the Herdr socket" comments, the context snapshot's symlink rejection and size budgets, and the host check's anti-evasion parts (symlinked parents, case folding, `package.json` scripts diff); the host check keeps its short pattern list as a review hint.
 - **ADR 0007** records: the Lead implements single-session work; one worker per ticket running `/implement` as written (no scout, no scope fence, no readiness gate); workers are plain Pi; sub-agents run in Herdr panes.
@@ -89,6 +87,7 @@ before reaching the user. Dead code from the sandbox era is deleted.
 
 ## Out of Scope
 
+- `waitingTimeoutMinutes`: unchanged.
 - Removing `web_search`: revisit once workers load the user's extensions and it is clear whether it is still needed.
 - Simplifying the Jev budget ledger, hard-coding rarely used Jev settings, and changing overlap scheduling.
 - Removing `verify` or the host check entirely.
