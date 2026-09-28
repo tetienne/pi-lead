@@ -8,7 +8,7 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { loadConfigWithNotices } from "./config.ts";
-import { createDelegator, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
+import { createDelegator, type DelegateIO, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
 import { createAskJev, createJudge, describeJevProblem, type JevDecision } from "./jev.ts";
@@ -83,6 +83,14 @@ export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, p
 ];
 
 const WORKER_ACTIONS = ["list", "message", "stop"] as const;
+
+/** What the session knows that a worker needs: the repository, the models it may use, the project's trust. */
+const sessionIO = (ctx: ExtensionContext): DelegateIO => ({
+  cwd: ctx.cwd,
+  lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+  available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
+  projectTrusted: ctx.isProjectTrusted(),
+});
 
 const paint = (theme: Theme): Paint => (color, text) => theme.fg(color, text);
 
@@ -173,8 +181,14 @@ export default function lead(pi: ExtensionAPI) {
         // A check must never keep the session from starting or skip the reconcile below.
       }
     }
-    // Remove worktrees a crashed or killed Lead left open; in the background, never blocking the session.
-    void current.reconcile().catch(() => undefined);
+    // Adopt this repository's workers a crashed or killed Lead left running, remove the worktrees
+    // of the others; in the background, never blocking the session.
+    void Promise.resolve()
+      .then(() => current.reconcile(sessionIO(ctx)))
+      .then(() => {
+        if (!closed) status();
+      })
+      .catch(() => undefined);
   });
 
   // Workers belong to the Lead session: when it ends (quit, /new, /resume,
@@ -237,12 +251,7 @@ export default function lead(pi: ExtensionAPI) {
       if (ctx.hasUI && delegating++ === 0) ctx.ui.setWorkingMessage("Sizing up the ticket and picking a model…");
       let started: StartResult;
       try {
-        started = await current.start(params, {
-          cwd: ctx.cwd,
-          lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-          available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
-          projectTrusted: ctx.isProjectTrusted(),
-        });
+        started = await current.start(params, sessionIO(ctx));
       } finally {
         if (ctx.hasUI && --delegating === 0) ctx.ui.setWorkingMessage();
       }

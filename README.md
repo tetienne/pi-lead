@@ -102,6 +102,15 @@ you ─► Lead (Pi, your tab)
   workers cannot run (not inside Herdr, or Herdr's Pi integration missing).
   Worker workspaces need Herdr 0.9.1 or later (`worktree create`,
   `notification show`, `--seq`).
+- **Workers outlive a crashed Lead.** Quitting the Lead (or `/new`,
+  `/reload`) stops its workers and removes their worktrees; their branches
+  stay. If the Lead's Pi crashes or is killed instead, its workers keep
+  running, and the next Lead you start in the same repository adopts every
+  one whose pane still runs its Pi: it shows in `worker list`, you can
+  message or stop it, and its result arrives as usual, including a `finish`
+  it made while no Lead was running. Workers whose Pi is gone are removed,
+  branch kept. A Lead never adopts the workers of another Lead that is still
+  running.
 - **Jev** answers small closed questions (difficulty, verdict, ticket
   overlap) and code maps each answer to an action. Without a key, documented
   defaults apply.

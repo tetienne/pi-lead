@@ -41,6 +41,7 @@ case "$1 $2" in
   "worktree create") echo '{"id":"cli:worktree:create","result":{"workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"w1:p3"}}}' ;;
   "workspace list") echo '{"result":{"workspaces":[{"workspace_id":"w1"},{"workspace_id":"w2"}]}}' ;;
   "agent prompt") echo 'agent_not_found' >&2; exit 1 ;;
+  "agent get") case "$3" in w1:p3) echo '{"result":{"agent":{"pane_id":"w1:p3"}}}' ;; *) echo 'agent_not_found' >&2; exit 1 ;; esac ;;
 esac
 `,
   );
@@ -102,6 +103,20 @@ test("a Herdr that rejects --seq gets no older form of the report: 0.9.1 is requ
     const calls = await argv();
     assert.equal(calls.length, 2, "one full report per call, no retry without --seq");
     assert.ok(calls.every((call) => call.includes("[--seq]")));
+  } finally {
+    process.env.PATH = previous;
+  }
+});
+
+test("a pane runs an agent only while Herdr resolves it with agent get", async () => {
+  const { dir, argv } = await fakeHerdrBinary();
+  const previous = process.env.PATH;
+  process.env.PATH = `${dir}:${previous}`;
+  try {
+    const herdr = createHerdrCli({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" })!;
+    assert.equal(await herdr.hasAgent("w1:p3"), true);
+    assert.equal(await herdr.hasAgent("w1:p4"), false, "no agent in the pane (Pi exited, or the pane is gone)");
+    assert.deepEqual(await argv(), ["[agent][get][w1:p3]", "[agent][get][w1:p4]"]);
   } finally {
     process.env.PATH = previous;
   }

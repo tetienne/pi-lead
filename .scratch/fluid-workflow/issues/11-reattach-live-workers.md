@@ -6,9 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] On start, a Lead adopts the workers of a previous Lead of the same repository whose pane still runs a Pi, instead of removing their worktrees (test).
-- [ ] Adopted workers are listed, can be messaged and stopped, and their `finish` result is delivered to the new Lead (test).
-- [ ] Workers whose pane or Pi is gone are removed as today, branch kept (test).
-- [ ] Two Leads alive at once in the same repository never adopt each other's workers (test).
-- [ ] README's lifecycle text no longer says there is no recovery.
-- [ ] `npm test` and `npm run typecheck` pass.
+**Resolution:** DONE
+
+- [x] On start, a Lead adopts the workers of a previous Lead of the same repository whose pane still runs a Pi, instead of removing their worktrees (test).
+- [x] Adopted workers are listed, can be messaged and stopped, and their `finish` result is delivered to the new Lead (test).
+- [x] Workers whose pane or Pi is gone are removed as today, branch kept (test).
+- [x] Two Leads alive at once in the same repository never adopt each other's workers (test).
+- [x] README's lifecycle text no longer says there is no recovery.
+- [x] `npm test` and `npm run typecheck` pass.

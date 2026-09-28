@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
@@ -67,7 +68,7 @@ function fakeHerdr(
   log: Log,
   replies: Reply[],
   seen: Seen = {},
-  options: { workspaces?: string[]; renameFailures?: number; closeFailures?: number; sharedTurns?: boolean } = {},
+  options: { workspaces?: string[]; renameFailures?: number; closeFailures?: number; sharedTurns?: boolean; noAgent?: string[] } = {},
 ): Herdr {
   let renameFailures = options.renameFailures ?? 0;
   let closeFailures = options.closeFailures ?? 0;
@@ -93,6 +94,10 @@ function fakeHerdr(
       log.push("list");
       if (!options.workspaces) throw new Error("herdr not responding");
       return options.workspaces;
+    },
+    async hasAgent(paneId) {
+      log.push(`agent? ${paneId}`);
+      return workers.has(paneId) && !options.noAgent?.includes(paneId);
     },
     async reportMetadata(paneId, metadata) {
       log.push(`meta ${paneId} state=${metadata.tokens.state}`);
@@ -153,6 +158,9 @@ async function setup(t: TestContext, options: {
   processAlive?: (pid: number) => boolean;
   stateRoot?: string;
   workerCommand?: WorkerCommand;
+  /** This Lead's own pid, as its task records carry it. */
+  pid?: number;
+  pollMs?: number;
 } = {}) {
   const log: Log = [];
   const outcomes: DelegateOutcome[] = [];
@@ -168,6 +176,7 @@ async function setup(t: TestContext, options: {
         : options.herdr ?? fakeHerdr(log, options.replies ?? [{ status: "done" }], options.seen, options.herdrOptions),
     workspace: options.workspace ?? fakeWorkspace(log),
     ...(options.processAlive ? { processAlive: options.processAlive } : {}),
+    ...(options.pid ? { pid: options.pid } : {}),
     workerCommand: options.workerCommand ?? (({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt]),
     stateRoot,
     onOutcome: (outcome) => {
@@ -175,7 +184,7 @@ async function setup(t: TestContext, options: {
       waiters.shift()?.(outcome);
     },
     onProgress: (text) => void progress.push(text),
-    pollMs: 2,
+    pollMs: options.pollMs ?? 2,
     heartbeatMs: 20,
   });
   // Workers left waiting on a question are watched until stopped.
@@ -811,6 +820,126 @@ test("reconcile keeps a dead Lead's directory until its worktree is confirmed re
 
   assert.equal(await delegator.reconcile(), 1);
   assert.ok(log.includes("remove dir"));
+});
+
+/** The task record of the only task dir, once it satisfies `condition`. */
+const recordWhen = async (stateRoot: string, condition: (record: Record<string, any>) => boolean) => {
+  for (let i = 0; i < 300; i++) {
+    const [dir] = await readdir(stateRoot);
+    const record = dir ? await readFile(join(stateRoot, dir, "tab.json"), "utf8").then(JSON.parse, () => undefined) : undefined;
+    if (record && condition(record)) return { dir: join(stateRoot, dir!), record };
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("record condition not reached");
+};
+
+/**
+ * A Lead (pid 111) whose worker runs, then "crashes": its watcher polls once a
+ * minute, so it never acts again during the test. Returns the shared Herdr log.
+ */
+async function crashedLead(t: TestContext, replies: Reply[], herdrOptions: Parameters<typeof fakeHerdr>[3] = {}) {
+  const log: Log = [];
+  const herdr = fakeHerdr(log, replies, {}, { workspaces: ["w1", "tab-1"], ...herdrOptions });
+  const crashed = await setup(t, { herdr, pid: 111, pollMs: 60_000 });
+  await crashed.delegator.start({ kind: "research", title: "Survive", task: "q" }, io);
+  await recordWhen(crashed.stateRoot, (record) => record.worker?.state === "running");
+  return { log, herdr, stateRoot: crashed.stateRoot };
+}
+
+test("a new Lead adopts a dead Lead's live worker: listed, messaged, and its finish delivered", async (t) => {
+  const { log, herdr, stateRoot } = await crashedLead(t, ["silent", { status: "done", summary: "finished after the restart" }]);
+  const lead = await setup(t, { herdr, stateRoot, pid: 333, processAlive: (pid) => pid !== 111 });
+  assert.equal(await lead.delegator.reconcile(io), 0, "nothing removed");
+  assert.ok(!log.some((line) => line.startsWith("close")), "the worktree stays open");
+  assert.ok(lead.progress.some((line) => line.includes('adopted "Survive"')));
+  const [adopted] = lead.delegator.list();
+  assert.equal(adopted?.title, "Survive");
+  assert.equal(adopted?.state, "running");
+  assert.equal(adopted?.tabOpen, true);
+  assert.match(adopted!.branch!, /^pi-lead\/survive-/);
+  // The record names its new owner, so a later restart knows whose it is.
+  assert.equal((await recordWhen(stateRoot, (record) => record.leadPid === 333)).record.worker.id, adopted!.id);
+
+  const result = lead.nextOutcome();
+  assert.match(await lead.delegator.message("Survive", "wrap it up"), /Sent to "Survive"/);
+  assert.ok(log.includes("send pane-1: [PI Lead] wrap it up"));
+  const outcome = await result;
+  assert.equal(outcome.status, "done");
+  assert.match(outcome.text, /finished after the restart/);
+  assert.equal(lead.delegator.list()[0]!.state, "done");
+  assert.ok(log.includes("close tab-1"));
+});
+
+test("a finish that lands while no Lead is alive reaches the Lead that adopts the worker", async (t) => {
+  const { herdr, stateRoot } = await crashedLead(t, [{ status: "needs_human", summary: "Which colour?", delayMs: 30 }]);
+  const { dir } = await recordWhen(stateRoot, () => true);
+  await until(() => existsSync(join(dir, "result.json")));
+  const lead = await setup(t, { herdr, stateRoot, pid: 333, processAlive: (pid) => pid !== 111 });
+  const question = lead.nextOutcome();
+  await lead.delegator.reconcile(io);
+  const outcome = await question;
+  assert.equal(outcome.status, "needs_human");
+  assert.match(outcome.text, /Which colour\?/);
+  assert.equal(lead.delegator.list()[0]!.state, "waiting");
+});
+
+test("an adopted worker can be stopped, and a third Lead adopts it from the second", async (t) => {
+  const { log, herdr, stateRoot } = await crashedLead(t, ["silent"]);
+  const second = await setup(t, { herdr, stateRoot, pid: 333, processAlive: (pid) => pid !== 111, pollMs: 60_000 });
+  await second.delegator.reconcile(io);
+  await recordWhen(stateRoot, (record) => record.leadPid === 333);
+  // The second Lead dies too.
+  const third = await setup(t, { herdr, stateRoot, pid: 444, processAlive: (pid) => pid === 444 });
+  await third.delegator.reconcile(io);
+  assert.equal(third.delegator.list()[0]?.title, "Survive");
+  await recordWhen(stateRoot, (record) => record.leadPid === 444);
+
+  const stopped = third.nextOutcome();
+  assert.match(await third.delegator.stop("Survive"), /Stopping "Survive"/);
+  assert.equal((await stopped).status, "stopped");
+  assert.ok(log.includes("close tab-1"));
+});
+
+test("a worker whose Pi is gone is removed as today, never adopted", async (t) => {
+  for (const gone of ["no agent", "exited"] as const) {
+    const { log, herdr, stateRoot } = await crashedLead(t, ["silent"], gone === "no agent" ? { noAgent: ["pane-1"] } : {});
+    const { dir } = await recordWhen(stateRoot, () => true);
+    if (gone === "exited") await writeFile(join(dir, "exit"), "0\n");
+    const removed: string[] = [];
+    const lead = await setup(t, {
+      herdr,
+      stateRoot,
+      pid: 333,
+      processAlive: (pid) => pid !== 111,
+      workspace: { ...fakeWorkspace([]), remove: async (path) => void removed.push(path) },
+    });
+    assert.equal(await lead.delegator.reconcile(io), 1, gone);
+    assert.deepEqual(lead.delegator.list(), [], gone);
+    assert.ok(log.includes("close tab-1"), gone);
+    assert.deepEqual(removed, [dir], `${gone}: the task dir goes, the branch stays`);
+  }
+});
+
+test("a Lead never adopts the workers of a live Lead, nor of another repository", async (t) => {
+  const { log, herdr, stateRoot } = await crashedLead(t, ["silent"]);
+  // The first Lead is alive: its worker is its own.
+  const alive = await setup(t, { herdr, stateRoot, pid: 333, processAlive: () => true });
+  assert.equal(await alive.delegator.reconcile(io), 0);
+  assert.deepEqual(alive.delegator.list(), []);
+  // Dead, but another repository's worker, still running: left for a Lead of that repository.
+  const elsewhere = await setup(t, { herdr, stateRoot, pid: 333, processAlive: (pid) => pid !== 111 });
+  assert.equal(await elsewhere.delegator.reconcile({ ...io, cwd: "/other" }), 0);
+  assert.deepEqual(elsewhere.delegator.list(), []);
+  assert.ok(!log.some((line) => line.startsWith("close")));
+  assert.equal((await recordWhen(stateRoot, () => true)).record.leadPid, 111);
+});
+
+test("two Leads restarting at once never both adopt the same worker", async (t) => {
+  const { herdr, stateRoot } = await crashedLead(t, ["silent"]);
+  const a = await setup(t, { herdr, stateRoot, pid: 333, processAlive: (pid) => pid !== 111 });
+  const b = await setup(t, { herdr, stateRoot, pid: 444, processAlive: (pid) => pid !== 111 });
+  await Promise.all([a.delegator.reconcile(io), b.delegator.reconcile(io)]);
+  assert.equal(a.delegator.list().length + b.delegator.list().length, 1);
 });
 
 test("worker panes get Herdr metadata on every state and an agent name, best-effort", async (t) => {

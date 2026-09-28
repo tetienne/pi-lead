@@ -18,6 +18,11 @@ export type Herdr = {
   /** Ids of the workspaces that currently exist. */
   listWorkspaces(): Promise<string[]>;
   /**
+   * Whether Herdr still detects a live agent in a pane (`herdr agent get <pane>`,
+   * which only resolves a pane currently hosting one). False on any error.
+   */
+  hasAgent(paneId: string): Promise<boolean>;
+  /**
    * Display-only pane metadata (title, sidebar name, tokens, working label).
    * Never lifecycle state: that stays with Herdr's Pi integration.
    */
@@ -92,6 +97,12 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     },
     async listWorkspaces() {
       return collectStrings(await herdr(["workspace", "list"]), "workspace_id");
+    },
+    async hasAgent(paneId) {
+      return herdr(["agent", "get", paneId]).then(
+        () => true,
+        () => false,
+      );
     },
     async reportMetadata(paneId, { title, displayAgent, tokens, workingLabel, idleLabel, blockedLabel, seq }) {
       // argv, never a shell: titles and branches are user/model text.

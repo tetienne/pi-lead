@@ -125,12 +125,16 @@ export type DelegateDeps = {
   heartbeatMs?: number;
   /** Whether the Lead process that wrote a task record still runs (tests fake it). */
   processAlive?(pid: number): boolean;
+  /** This Lead's pid, which its task records carry (tests fake it). */
+  pid?: number;
   now?(): number;
 };
 
 /**
  * `tab.json` in each task dir, written by the Lead that owns it. A later Lead
- * uses it to remove the worktrees of a Lead that crashed or was killed.
+ * of the same repository uses it to adopt the workers of a Lead that crashed
+ * or was killed while their Pi still runs, and removes the worktrees of the
+ * others.
  */
 type TabRecord = {
   version: 1;
@@ -140,9 +144,25 @@ type TabRecord = {
   paneId?: string;
   /** A failed worker whose task dir is kept for inspection (keepFailedWorkers). */
   failed?: boolean;
+  /** Everything a later Lead needs to watch the worker as its own; set once its pane runs. */
+  worker?: AdoptableWorker;
+};
+
+/** The watcher's view of a worker, as a later Lead rebuilds it. */
+type AdoptableWorker = Pick<
+  Worker,
+  | "id" | "title" | "kind" | "state" | "verdict" | "branch" | "route" | "params" | "difficulty" | "repoRoot" | "base"
+  | "originBase" | "baseBranch" | "remoteBranch" | "handledSeq" | "attempts" | "delegatedAt" | "runningSince" | "resumed"
+  | "reroutes" | "sentBack"
+> & {
+  /** The repository's main checkout: only a Lead of that repository adopts the worker. */
+  repo: string;
 };
 
 const RECORD = "tab.json";
+
+/** States whose Pi a later Lead can keep watching. */
+const ADOPTABLE: readonly WorkerState[] = ["starting", "running", "waiting"];
 
 /** Model changes a single task may go through on quota errors. */
 const MAX_REROUTES = 3;
@@ -172,6 +192,8 @@ type Worker = WorkerInfo & {
   taskDir?: string;
   worktreePath?: string;
   repoRoot?: string;
+  /** The repository's main checkout, which keys adoption by a later Lead. */
+  repo?: string;
   base?: string;
   /** The ticket's original base commit, set once at first launch. */
   originBase?: string;
@@ -182,6 +204,8 @@ type Worker = WorkerInfo & {
   resultPath?: string;
   exitPath?: string;
   lastSeq: number;
+  /** The last finish fully handled (reported, or sent back): a Lead that adopts the worker settles any later one. */
+  handledSeq: number;
   attempts: number;
   createdAt?: string;
   /** When the task was delegated, and when the worker last started running (a relayed answer, a reroute): the card times this run. */
@@ -191,6 +215,8 @@ type Worker = WorkerInfo & {
   tabLabel?: string;
   /** The worker's pending worktree renames, in order. */
   renaming?: Promise<void>;
+  /** The worker's pending task record writes, in order. */
+  recording?: Promise<void>;
   /** Herdr agent name: set once, tried at most twice per tab. */
   named: boolean;
   renameTries: number;
@@ -313,6 +339,7 @@ export function createDelegator(deps: DelegateDeps) {
     available: io.available.filter((model) => !isExhausted(model.provider)),
   });
   const processAlive = deps.processAlive ?? isProcessAlive;
+  const pid = deps.pid ?? process.pid;
 
   /** Herdr presentation is never needed for correctness: fire and forget, swallow every error. */
   const bestEffort = (call: () => Promise<unknown> | undefined) => {
@@ -385,6 +412,8 @@ export function createDelegator(deps: DelegateDeps) {
     // Only a finish says why a worker waits; any other state starts from none.
     if (state !== "waiting" && state !== "done" && state !== "failed") worker.verdict = undefined;
     describe(worker);
+    // A later Lead that adopts the worker picks up from this state.
+    void writeRecord(worker);
     // A worker that stopped and needs the user may sit in a background tab: say so outside the Lead too.
     const notice = attentionNotice(worker);
     if (notice) bestEffort(() => deps.herdr?.notify(notice.title, notice.sound));
@@ -402,18 +431,37 @@ export function createDelegator(deps: DelegateDeps) {
     );
   };
 
-  /** Best-effort as well: without a record a crashed Lead's tab is only left open, never wrongly closed. */
-  const writeRecord = async (worker: Worker) => {
-    if (!worker.taskDir) return;
-    const record: TabRecord = {
-      version: 1,
-      leadPid: process.pid,
-      createdAt: worker.createdAt ?? new Date().toISOString(),
-      ...(worker.workspaceId ? { workspaceId: worker.workspaceId } : {}),
-      ...(worker.paneId ? { paneId: worker.paneId } : {}),
-      ...(worker.state === "failed" ? { failed: true } : {}),
+  const adoptable = (worker: Worker): AdoptableWorker | undefined => {
+    if (!worker.paneId || !worker.repo) return undefined;
+    const { id, title, kind, state, verdict, branch, route, params, difficulty, repoRoot, repo, base, originBase, baseBranch, remoteBranch } = worker;
+    const { handledSeq, attempts, delegatedAt, runningSince, resumed, reroutes, sentBack } = worker;
+    return {
+      id, title, kind, state, verdict, branch, route, params, difficulty, repoRoot, repo, base, originBase, baseBranch, remoteBranch,
+      handledSeq, attempts, delegatedAt, runningSince, resumed, reroutes, sentBack,
     };
-    await writeFile(join(worker.taskDir, RECORD), JSON.stringify(record, null, 2)).catch(() => undefined);
+  };
+
+  /**
+   * Best-effort as well: without a record a crashed Lead's tab is only left
+   * open, never wrongly closed. Writes run one after another per worker, each
+   * with the worker as it is then, so a late one never brings back an older state.
+   */
+  const writeRecord = (worker: Worker) => {
+    worker.recording = (worker.recording ?? Promise.resolve()).then(async () => {
+      if (!worker.taskDir) return;
+      const snapshot = adoptable(worker);
+      const record: TabRecord = {
+        version: 1,
+        leadPid: pid,
+        createdAt: worker.createdAt ?? new Date().toISOString(),
+        ...(worker.workspaceId ? { workspaceId: worker.workspaceId } : {}),
+        ...(worker.paneId ? { paneId: worker.paneId } : {}),
+        ...(worker.state === "failed" ? { failed: true } : {}),
+        ...(snapshot ? { worker: snapshot } : {}),
+      };
+      await writeFile(join(worker.taskDir, RECORD), JSON.stringify(record, null, 2)).catch(() => undefined);
+    });
+    return worker.recording;
   };
 
   const readRecord = async (dir: string): Promise<TabRecord | undefined> => {
@@ -530,6 +578,8 @@ export function createDelegator(deps: DelegateDeps) {
     worker.workspaceId = undefined;
     worker.paneId = undefined;
     if (!worker.taskDir) return;
+    // A record write still in flight must not land in the directory while it is removed.
+    await worker.recording;
     if (keepDir) await writeRecord(worker); // no worktree left to remove
     else await deps.workspace.remove(worker.taskDir).catch(() => undefined);
   };
@@ -538,6 +588,7 @@ export function createDelegator(deps: DelegateDeps) {
     const { params, io } = worker;
     worker.attempts += 1;
     worker.lastSeq = 0;
+    worker.handledSeq = 0;
     worker.named = false;
     worker.renameTries = 0;
     worker.createdAt = new Date().toISOString();
@@ -566,9 +617,10 @@ export function createDelegator(deps: DelegateDeps) {
     // pushing onto this same remote branch instead of opening a second PR.
     if (PUBLISHED_KINDS.includes(worker.kind)) worker.remoteBranch ??= worker.branch;
     worker.tabLabel = tabLabel(worker);
+    // Herdr's `worktree create` needs the main checkout: it rejects a linked worktree as its `cwd`.
+    worker.repo = await deps.workspace.mainCheckout(worker.repoRoot);
     ({ workspaceId: worker.workspaceId, paneId: worker.paneId } = await deps.herdr!.createWorktree({
-      // Herdr's `worktree create` needs the main checkout: it rejects a linked worktree as its `cwd`.
-      cwd: await deps.workspace.mainCheckout(worker.repoRoot),
+      cwd: worker.repo,
       branch: worker.branch,
       base: worker.base,
       path: worker.worktreePath,
@@ -885,6 +937,9 @@ export function createDelegator(deps: DelegateDeps) {
         worker.lastSeq = result.seq;
         if (result.quota && (await reroute(worker, { ...result, quota: result.quota }))) continue;
         await settle(worker, result);
+        // Only now: a Lead that dies mid-settle leaves this finish for the one that adopts the worker.
+        worker.handledSeq = result.seq;
+        void writeRecord(worker);
       } while (worker.state === "waiting" || worker.state === "running");
     } catch (error) {
       await fail(worker, error);
@@ -945,6 +1000,53 @@ export function createDelegator(deps: DelegateDeps) {
     return { error: matches.length ? `"${ref}" matches several workers; use its id` : `No worker "${ref}".` };
   };
 
+  /** A dead Lead's worker whose Pi still runs: run.sh has not recorded its exit, and Herdr still sees the agent. */
+  const piRuns = async (dir: string, record: TabRecord) => {
+    if (!record.paneId || record.failed || !record.worker || !ADOPTABLE.includes(record.worker.state)) return false;
+    if ((await readIfPresent(join(dir, "exit")).catch(() => "unreadable"))?.trim()) return false;
+    return (await deps.herdr?.hasAgent(record.paneId).catch(() => false)) ?? false;
+  };
+
+  /** One claim per dead owner: only one of the Leads starting at once adopts its worker. */
+  const claim = (dir: string, deadPid: number) =>
+    writeFile(join(dir, `adopted-from-${deadPid}`), String(pid), { flag: "wx" }).then(
+      () => true,
+      () => false,
+    );
+
+  /** Rebuild the worker from its record and watch it like any other; the record then names this Lead. */
+  const adopt = (dir: string, record: TabRecord, live: AdoptableWorker, io: DelegateIO) => {
+    if (workers.has(live.id)) return;
+    let resolveDone!: () => void;
+    const done = new Promise<void>((resolve) => (resolveDone = resolve));
+    const worker: Worker = {
+      ...live,
+      lastSeq: live.handledSeq,
+      // A worker whose Lead died mid-launch already runs its Pi.
+      state: live.state === "starting" ? "running" : live.state,
+      tabOpen: true,
+      io,
+      controller: new AbortController(),
+      done,
+      resolveDone,
+      taskDir: dir,
+      worktreePath: join(dir, "worktree"),
+      resultPath: join(dir, "result.json"),
+      exitPath: join(dir, "exit"),
+      workspaceId: record.workspaceId,
+      paneId: record.paneId,
+      createdAt: record.createdAt,
+      // The earlier Lead named it already.
+      named: true,
+      renameTries: 0,
+    };
+    workers.set(worker.id, worker);
+    void writeRecord(worker);
+    describe(worker);
+    progress(`adopted "${worker.title}" from an earlier Lead (${worker.state})`);
+    void watch(worker).catch(() => undefined);
+  };
+
   return {
     list: (): WorkerInfo[] => [...workers.values()].map(info),
 
@@ -979,6 +1081,7 @@ export function createDelegator(deps: DelegateDeps) {
         done,
         resolveDone,
         lastSeq: 0,
+        handledSeq: 0,
         attempts: 0,
         delegatedAt: now(),
         named: false,
@@ -1038,12 +1141,15 @@ export function createDelegator(deps: DelegateDeps) {
     },
 
     /**
-     * On Lead start: remove the worktrees that earlier Lead processes, now
-     * dead (crash, kill), left open, and remove their task dirs. Records of
-     * live Leads (other sessions, or this process) are left alone. Returns
-     * how many worktrees were removed.
+     * On Lead start, for the task records of earlier Lead processes now dead
+     * (crash, kill): a worker of this Lead's repository (`io`) whose pane still
+     * runs its Pi is adopted, watched from then on exactly like one this Lead
+     * started; a live Pi of another repository is left for a Lead of that
+     * repository; every other worktree is removed with its task dir (the
+     * branch is kept). Records of live Leads (other sessions, or this
+     * process) are left alone. Returns how many worktrees were removed.
      */
-    async reconcile(): Promise<number> {
+    async reconcile(io?: DelegateIO): Promise<number> {
       let names: string[];
       try {
         names = await readdir(deps.stateRoot);
@@ -1054,7 +1160,7 @@ export function createDelegator(deps: DelegateDeps) {
       for (const name of names) {
         const dir = join(deps.stateRoot, name);
         const record = await readRecord(dir);
-        if (record && record.leadPid !== process.pid && !processAlive(record.leadPid)) orphans.push({ dir, record });
+        if (record && record.leadPid !== pid && !processAlive(record.leadPid)) orphans.push({ dir, record });
       }
       const herdr = deps.herdr;
       // Nothing can be removed outside Herdr: keep the records for a Lead inside it.
@@ -1062,8 +1168,19 @@ export function createDelegator(deps: DelegateDeps) {
       const workspaces = await herdr.listWorkspaces().catch(() => undefined);
       // If Herdr does not answer, or not even for the Lead's own workspace, try again on the next start.
       if (!workspaces || !workspaces.includes(herdr.workspace)) return 0;
+      const repo = io
+        ? await deps.workspace.repoRoot(io.cwd).then((root) => deps.workspace.mainCheckout(root)).catch(() => undefined)
+        : undefined;
       let closed = 0;
       for (const { dir, record } of orphans) {
+        const live = record.worker;
+        if (io && live && record.workspaceId && workspaces.includes(record.workspaceId) && (await piRuns(dir, record))) {
+          // Another repository's worker: its own Lead may still adopt it.
+          if (live.repo !== repo) continue;
+          // Lost the claim: another Lead started at the same moment and adopts it.
+          if (await claim(dir, record.leadPid)) adopt(dir, record, live, io);
+          continue;
+        }
         if (record.workspaceId && workspaces.includes(record.workspaceId)) {
           try {
             await herdr.removeWorktree(record.workspaceId);
