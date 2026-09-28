@@ -128,8 +128,8 @@ export function workerPrompt(kind: WorkKind, task: string, publish?: PublishTarg
 /**
  * How the Lead and its workers run the sub-agents Matt's skills ask for:
  * one non-interactive Pi per sub-agent in a Herdr pane beside the caller.
- * The quotes split in the completion marker keep the typed command line from
- * matching `wait-output` before the sub-agent has finished.
+ * `wait-output` matches line by line, and the typed command line never starts
+ * with the marker: only the `echo` output does.
  */
 export const SUB_AGENT_RECIPE = `## Sub-agents
 
@@ -144,13 +144,13 @@ you:
    say so in your output.
 2. Write the sub-agent's complete brief to \`<dir>/prompt.md\` in a fresh
    \`mktemp -d\` directory: it sees nothing of your context.
-3. \`herdr pane split --current --direction right --cwd "$PWD" --no-focus\`
+3. \`herdr pane split --current --direction right --cwd "$PWD" --env ${ROLE_ENV}=sub-agent --no-focus\`
    (\`down\` if your pane is narrow), and read the new pane's id from
    \`.result.pane.pane_id\` in the JSON it prints.
-4. \`herdr pane run <pane-id> "${ROLE_ENV}=sub-agent pi --print --no-session @<dir>/prompt.md > <dir>/report.md 2>&1; echo 'sub-agent-''finished'"\`,
+4. \`herdr pane run <pane-id> "pi --print --no-session @<dir>/prompt.md > <dir>/report.md 2>&1; echo sub-agent-finished"\`,
    with \`<dir>\` written out. Start every sub-agent the step asks for before
    waiting on any.
-5. \`herdr pane wait-output <pane-id> --match sub-agent-finished --timeout 1800000\`.
+5. \`herdr pane wait-output <pane-id> --source recent-unwrapped --regex '^sub-agent-finished' --timeout 1800000\`.
    On a timeout, look with \`herdr pane read <pane-id> --source recent-unwrapped --lines 120\`
    before deciding.
 6. Read \`<dir>/report.md\` (the sub-agent's final answer, or its error),

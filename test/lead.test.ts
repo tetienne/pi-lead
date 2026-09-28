@@ -193,9 +193,10 @@ test("the guidance starts skill sub-agents as marked, non-interactive Pis in Her
   await handler!({ systemPromptOptions: { sections } });
   const systemPrompt = sections.pi_lead!;
   assert.ok(systemPrompt.includes(SUB_AGENT_RECIPE));
-  assert.match(SUB_AGENT_RECIPE, /herdr pane split --current --direction right --cwd "\$PWD" --no-focus/);
-  assert.match(SUB_AGENT_RECIPE, /herdr pane run <pane-id> "PI_LEAD_ROLE=sub-agent pi --print --no-session @/);
-  assert.match(SUB_AGENT_RECIPE, /herdr pane wait-output <pane-id> --match/);
+  assert.match(SUB_AGENT_RECIPE, /herdr pane split --current --direction right --cwd "\$PWD" --env PI_LEAD_ROLE=sub-agent --no-focus/);
+  assert.match(SUB_AGENT_RECIPE, /herdr pane run <pane-id> "pi --print --no-session @<dir>\/prompt\.md > <dir>\/report\.md 2>&1; echo sub-agent-finished"/);
+  // Herdr matches each line of the unwrapped output: the typed command line, which holds the marker too, never starts with it.
+  assert.match(SUB_AGENT_RECIPE, /herdr pane wait-output <pane-id> --source recent-unwrapped --regex '\^sub-agent-finished'/);
   assert.match(SUB_AGENT_RECIPE, /herdr pane close <pane-id>/);
   assert.match(SUB_AGENT_RECIPE, /Herdr is unavailable: do\s+the sub-agents' steps yourself, one after the other/);
   assert.match(SUB_AGENT_RECIPE, /say so in your output/);
