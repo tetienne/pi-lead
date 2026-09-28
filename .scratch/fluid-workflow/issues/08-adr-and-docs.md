@@ -10,7 +10,7 @@ The ADRs are cleaned up in the same pass: every ADR states what is true after th
 
 - [ ] ADRs 0001–0005 are rewritten to the current truth in short form: 0001 (Lead routes, `delegate`/`worker`, Jev's remaining judgments), 0002 (unchanged unless wording is stale), 0003 (workers are plain Pi with the user's extensions, Lead inert under the marker, no waiting timeout, workspace lifecycle in one or two sentences), 0004 (verify: drop wording about the removed parts), 0005 (unchanged unless stale).
 - [ ] ADR 0006 is broadened to "no fences around host workers" (Lead guard, scope fence and host-check anti-evasion), or kept and cross-referenced; no two ADRs contradict each other.
-- [ ] `docs/adr/0007-*.md` exists with the decisions and their reasons (sandbox gone, Matt's `/tdd` vertical slices, review capacity, mattpocock/skills#561).
+- [ ] `docs/adr/0007-*.md` exists with the decisions and their reasons (sandbox gone, Matt's `/tdd` vertical slices, review capacity, mattpocock/skills#561); and its limit: these choices assume a developer at their own machine with a human in the loop. Running PI Lead headless or in CI would need a sandbox and scoped credentials again (see claude.com/blog/the-ai-native-sdlc-playbook).
 - [ ] README's "How it works", tools list, design record (0006 and 0007) and config reference match the code.
 - [ ] The `.scratch/fluid-workflow/` directory is deleted in the last commit (its decisions live in the ADRs and README), as #40 did for `.scratch/pi-lead/`.
 - [ ] CONTEXT.md glossary has no term for a removed mechanism.
