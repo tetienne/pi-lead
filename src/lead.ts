@@ -112,11 +112,11 @@ export default function lead(pi: ExtensionAPI) {
   /** `delegate` calls in their start phase, which share Pi's working message. */
   let delegating = 0;
 
+  /** The footer counts live workers, in the warning colour while one waits on the user. */
   const status = () => {
-    const parts: string[] = [];
+    if (!ui) return;
     const counts = workerCounts(delegator?.list() ?? []);
-    if (counts) parts.push(hasUI && ui && counts.needsYou ? ui.theme.fg("warning", counts.text) : counts.text);
-    ui?.setStatus("pi-lead", parts.length ? parts.join(" · ") : undefined);
+    ui.setStatus("pi-lead", counts && (hasUI && counts.needsYou ? ui.theme.fg("warning", counts.text) : counts.text));
   };
 
   const setup = async (ctx: ExtensionContext) => {
