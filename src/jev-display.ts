@@ -1,19 +1,16 @@
-import { JEV_KINDS, type JevDecision, type JevUsage } from "./jev.ts";
+import type { JevDecision } from "./jev.ts";
 
 /**
  * How Jev's work shows in the terminal. Pure formatting, so the Lead only
  * wires these strings to Pi's UI:
  *
  * - `◆` Jev decided and its answer applied;
- * - `◇` Jev was unsure, failing or over budget, and a default applied;
+ * - `◇` Jev was unsure or failing, and a default applied;
  * - `▲` Jev overrode the worker (a more pessimistic verdict).
  */
 
 /** Custom entry type of the Lead's transcript lines; never sent to the model. */
 export const JEV_ENTRY = "pi-lead-jev";
-
-/** Decisions `/jev` lists. */
-export const RECENT_DECISIONS = 20;
 
 function glyph(decision: Pick<JevDecision, "applied">): string {
   return decision.applied === "fallback" ? "◇" : decision.applied === "overridden" ? "▲" : "◆";
@@ -61,35 +58,3 @@ function fit(line: string, width: number): string {
 
 /** The transcript entry's line, at most `width` columns, before theming. */
 export const renderDecision = (decision: JevDecision, width: number) => fit(decisionLine(decision), width);
-
-export type StatusLevel = "dim" | "warning" | "error";
-
-/** The Lead's status segment: `◆ 14 · $0.004/1.00`, warning from 80% of the budget, error once spent. */
-export function jevStatus(usage: Pick<JevUsage, "calls" | "usd">, budgetUsd: number): { text: string; level: StatusLevel } {
-  const ratio = budgetUsd > 0 ? usage.usd / budgetUsd : 1;
-  return {
-    text: `◆ ${usage.calls} · $${fixed(usage.usd, 3)}/${fixed(budgetUsd)}`,
-    level: ratio >= 1 ? "error" : ratio >= 0.8 ? "warning" : "dim",
-  };
-}
-
-const clock = (at: number) => {
-  const date = new Date(at);
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-};
-
-/** What `/jev` prints. */
-export function jevReport(usage: JevUsage, budgetUsd: number, recent: readonly JevDecision[]): string {
-  const left = Math.max(0, budgetUsd - usage.usd);
-  const lines = [
-    `Jev today (every Lead session): ${usage.calls} calls · $${fixed(usage.usd, 4)} of $${fixed(budgetUsd)} · $${fixed(left, 4)} left`,
-  ];
-  for (const kind of JEV_KINDS) {
-    const entry = usage.kinds[kind];
-    if (entry?.calls) lines.push(`  ${kind.padEnd(8)} ${String(entry.calls).padStart(4)} · $${fixed(entry.usd, 4)}`);
-  }
-  const shown = recent.slice(-RECENT_DECISIONS);
-  lines.push("", shown.length ? `Last ${shown.length} decisions this session:` : "No Jev decisions in this session yet.");
-  for (const decision of shown) lines.push(`  ${clock(decision.at)} ${decisionLine(decision)}`);
-  return lines.join("\n");
-}

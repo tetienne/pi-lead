@@ -16,7 +16,7 @@ import {
   type DelegateOutcome,
 } from "../src/delegate.ts";
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
-import { createJudge, createLedger, type Judge, type WorkerVerdict } from "../src/jev.ts";
+import { createJudge, type Judge, type WorkerVerdict } from "../src/jev.ts";
 import type { WorkerResult, WorkerTask } from "../src/protocol.ts";
 import type { Workspace } from "../src/workspace.ts";
 
@@ -466,10 +466,9 @@ test("a delegated ticket always starts: Jev is asked for the difficulty only", a
   const judge = createJudge({
     ask: async (_state, questions) => {
       calls.push(questions);
-      return { answers: { difficulty: { score: 3.4, confidence: 0.9 } }, inputTokens: 100 };
+      return { answers: { difficulty: { score: 3.4, confidence: 0.9 } } };
     },
     config: DEFAULT_CONFIG.jev,
-    ledger: createLedger(join(await mkdtemp(join(tmpdir(), "jev-")), "usage.json")),
   });
   const { delegator, nextOutcome } = await setup(t, { judge: { ...judge, verdict: async () => undefined } });
   const pending = nextOutcome();

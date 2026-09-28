@@ -24,9 +24,6 @@ export type LeadConfig = {
     /** `openrouter` routes through OpenRouter's System One endpoint. */
     via: "typesafe" | "openrouter";
     model: string;
-    /** Conservative price used to charge the local daily budget. */
-    inputUsdPerMillion: number;
-    dailyBudgetUsd: number;
     /** Below this confidence a judgment is treated as "don't know". */
     minConfidence: number;
   };
@@ -58,8 +55,6 @@ export const DEFAULT_CONFIG: LeadConfig = {
     apiKeyEnv: "PI_LEAD_JEV_API_KEY",
     via: "openrouter",
     model: "jev-1.13",
-    inputUsdPerMillion: 0.05,
-    dailyBudgetUsd: 1,
     minConfidence: 0.7,
   },
   keepFailedWorkers: true,
@@ -76,6 +71,17 @@ type PartialConfig = {
   verifyTimeoutMinutes?: number;
 };
 
+const JEV_KEYS = ["apiKeyEnv", "via", "model", "minConfidence"] as const satisfies readonly (keyof LeadConfig["jev"])[];
+
+/** Only today's keys: an old `dailyBudgetUsd` or `inputUsdPerMillion` is dropped without a notice. */
+function mergeJev(base: LeadConfig["jev"], override: Partial<LeadConfig["jev"]> | undefined): LeadConfig["jev"] {
+  const jev = { ...base };
+  for (const key of JEV_KEYS) {
+    if (override?.[key] !== undefined) (jev as Record<string, unknown>)[key] = override[key];
+  }
+  return jev;
+}
+
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
   const tiers = { ...base.tiers };
   for (const tier of Object.keys(tiers) as Tier[]) {
@@ -83,7 +89,7 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
   }
   return {
     tiers,
-    jev: { ...base.jev, ...override.jev },
+    jev: mergeJev(base.jev, override.jev),
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
     stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
     ...(typeof override.verify === "string" && override.verify.trim()

@@ -11,8 +11,8 @@ import { loadConfigWithNotices } from "./config.ts";
 import { createDelegator, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
-import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
-import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision } from "./jev-display.ts";
+import { createAskJev, createJudge, describeJevProblem, type JevDecision } from "./jev.ts";
+import { isDecision, JEV_ENTRY, renderDecision } from "./jev-display.ts";
 import { ROLE_ENV } from "./protocol.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
@@ -97,12 +97,6 @@ export default function lead(pi: ExtensionAPI) {
   let ui: ExtensionContext["ui"] | undefined;
   let closed = false;
   let hasUI = false;
-  /** Set only when Jev is configured: the status segment and `/jev` read the shared ledger. */
-  let jev: { ledger: ReturnType<typeof createLedger>; budgetUsd: number } | undefined;
-  let jevUsage: JevUsage | undefined;
-  let usageTimer: ReturnType<typeof setInterval> | undefined;
-  /** This session's last decisions, for `/jev`. */
-  const recent: JevDecision[] = [];
 
   /** `delegate` calls in their start phase, which share Pi's working message. */
   let delegating = 0;
@@ -111,18 +105,7 @@ export default function lead(pi: ExtensionAPI) {
     const parts: string[] = [];
     const counts = workerCounts(delegator?.list() ?? []);
     if (counts) parts.push(hasUI && ui && counts.needsYou ? ui.theme.fg("warning", counts.text) : counts.text);
-    if (hasUI && ui && jev && jevUsage) {
-      const segment = jevStatus(jevUsage, jev.budgetUsd);
-      parts.push(ui.theme.fg(segment.level, segment.text));
-    }
     ui?.setStatus("pi-lead", parts.length ? parts.join(" · ") : undefined);
-  };
-
-  /** Other Lead sessions charge the same ledger from their own processes, so it is re-read rather than counted here. */
-  const refreshUsage = async () => {
-    if (!jev || closed) return;
-    jevUsage = await jev.ledger.usage().catch(() => jevUsage);
-    if (!closed) status();
   };
 
   const setup = async (ctx: ExtensionContext) => {
@@ -132,27 +115,15 @@ export default function lead(pi: ExtensionAPI) {
     const { config, ignored } = await loadConfigWithNotices(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     // A setting dropped by the global/project rules would otherwise vanish without a trace.
     if (ctx.hasUI) for (const notice of ignored) ctx.ui.notify(notice, "warning");
-    const ask = createAskJev(config.jev);
-    const ledger = createLedger(join(agentDir, "pi-lead", "jev-usage.json"));
-    jev = ask ? { ledger, budgetUsd: config.jev.dailyBudgetUsd } : undefined;
-    jevUsage = undefined;
-    if (usageTimer) clearInterval(usageTimer);
-    usageTimer = jev ? setInterval(() => void refreshUsage(), 30_000) : undefined;
-    usageTimer?.unref();
-    void refreshUsage();
     const judge = createJudge({
-      ask,
+      ask: createAskJev(config.jev),
       config: config.jev,
-      ledger,
       // Otherwise a wrong key or model id silently turns every judgment into a default.
-      onProblem: (problem) => ui?.notify(describeJevProblem(problem), "warning"),
+      onProblem: (message) => ui?.notify(describeJevProblem(message), "warning"),
       onDecision(decision) {
         if (closed) return;
-        recent.push(decision);
-        if (recent.length > RECENT_DECISIONS) recent.shift();
         // A custom entry, not a message: the transcript shows it, the model never sees it.
         pi.appendEntry(JEV_ENTRY, decision);
-        void refreshUsage();
       },
     });
     delegator = createDelegator({
@@ -190,7 +161,6 @@ export default function lead(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     closed = false;
-    recent.length = 0;
     const current = await setup(ctx);
     if (ctx.hasUI) {
       try {
@@ -210,8 +180,6 @@ export default function lead(pi: ExtensionAPI) {
   // /reload), they are stopped and cleaned up before the session goes away.
   pi.on("session_shutdown", async () => {
     closed = true;
-    if (usageTimer) clearInterval(usageTimer);
-    usageTimer = undefined;
     await delegator?.shutdown();
   });
 
@@ -241,19 +209,6 @@ export default function lead(pi: ExtensionAPI) {
     render: (width: number) => [theme.fg("dim", renderProgress(entry.data?.text, width))],
     invalidate: () => undefined,
   }));
-
-  pi.registerCommand("jev", {
-    description: "Jev's calls and spend today, and this session's last decisions",
-    handler: async (_args, ctx) => {
-      if (!jev) {
-        ctx.ui.notify("Jev is not configured: set its key (PI_LEAD_JEV_API_KEY by default) to let Jev judge.", "info");
-        return;
-      }
-      jevUsage = await jev.ledger.usage();
-      status();
-      ctx.ui.notify(jevReport(jevUsage, jev.budgetUsd, recent), "info");
-    },
-  });
 
   pi.on("before_agent_start", async (event) => ({ systemPrompt: `${event.systemPrompt}\n${leadGuidance(SKILLS_DIR)}` }));
 

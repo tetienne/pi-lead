@@ -46,7 +46,7 @@ test("the Lead never intercepts user input: the model answers questions itself",
   const pi = fakePi();
   lead(pi.api as any);
   assert.ok(!pi.handlers.has("input"), "no input handler");
-  assert.deepEqual(pi.commands, ["jev"]);
+  assert.deepEqual(pi.commands, []);
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker"]);
 });
 
@@ -60,16 +60,16 @@ test("in a Pi that PI Lead started, the Lead extension registers nothing", (t) =
     lead(api as any);
   }
   assert.deepEqual(pi.tools, [], "no delegate or worker");
-  assert.deepEqual(pi.commands, [], "no /jev");
+  assert.deepEqual(pi.commands, []);
   assert.deepEqual([...pi.handlers.keys()], [], "no guidance, skills or session handlers");
   assert.deepEqual(renderers, []);
 });
 
-test("without the marker the Lead registers its tools, command and handlers", () => {
+test("without the marker the Lead registers its tools and handlers, and no /jev command", () => {
   const pi = fakePi();
   lead(pi.api as any);
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker"]);
-  assert.deepEqual(pi.commands, ["jev"]);
+  assert.deepEqual(pi.commands, [], "Jev's decisions are transcript lines; there is no spend to report");
   assert.deepEqual([...pi.handlers.keys()].sort(), ["before_agent_start", "resources_discover", "session_shutdown", "session_start"]);
 });
 
@@ -101,7 +101,7 @@ test("worker reports render as a card, and fall back to Pi's plain view without 
   assert.equal(render({ content: "old", details: { status: "done" } }, { expanded: false, outputPad: 1 }, theme), undefined);
 });
 
-test("Jev decisions render as dim transcript lines, and /jev explains when Jev is off", async () => {
+test("Jev decisions render as dim transcript lines, old ones included", () => {
   const pi = fakePi();
   lead(pi.api as any);
   const render = pi.renderers.get("pi-lead-jev");
@@ -110,11 +110,9 @@ test("Jev decisions render as dim transcript lines, and /jev explains when Jev i
   assert.deepEqual(render(entry, { expanded: false }, theme).render(80), ["<dim>◇ jev · overlap unsure → waits</dim>"]);
   const legacy = { data: { ...entry.data, threshold: "overlaps at p ≥ 0.5", usd: 0.00005, ms: 412 } };
   assert.deepEqual(render(legacy, { expanded: true }, theme).render(80), ["<dim>◇ jev · overlap unsure → waits</dim>"], "an entry from an older version still renders, as one line");
+  const overBudget = { data: { kind: "tier", outcome: "over budget → standard", applied: "fallback", at: 0 } };
+  assert.deepEqual(render(overBudget, { expanded: false }, theme).render(80), ["<dim>◇ jev · tier over budget → standard</dim>"], "a budget fallback from an older version still renders as stored");
   assert.equal(render({ data: { junk: true } }, { expanded: false }, theme), undefined);
-
-  const notes: string[] = [];
-  await pi.commandHandlers.get("jev").handler("", { ui: { notify: (text: string) => notes.push(text) } });
-  assert.match(notes[0]!, /^Jev is not configured/);
 });
 
 test("the workflow guidance is appended to the system prompt", async () => {

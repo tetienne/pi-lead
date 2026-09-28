@@ -1,8 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-
 import { choice, noul, score, TypeSafeClient, type Fetch } from "@typesafe-ai/sdk";
 
 import type { LeadConfig, Tier } from "./config.ts";
@@ -11,7 +6,7 @@ import type { Verification } from "./protocol.ts";
 /**
  * Jev answers closed-set questions; this module maps each answer to a
  * deterministic action. Every judgment returns `undefined` when Jev is not
- * configured, over budget, failing or unsure, and callers then fall back to a
+ * configured, failing or unsure, and callers then fall back to a
  * documented default or ask the human.
  */
 
@@ -21,15 +16,14 @@ export type TierJudgment = { tier: Tier; difficulty: number };
 
 /**
  * What a Jev call was about. Older versions also judged `egress`, `review`
- * severity and `failure` kind: ledger entries of those kinds are no longer
- * listed, but their spend still counts towards the day's total.
+ * severity and `failure` kind; their stored decisions still render.
  */
 export const JEV_KINDS = ["tier", "overlap", "verdict"] as const;
 export type JevKind = (typeof JEV_KINDS)[number];
 
 /**
  * One judgment, for display only. `jev`: Jev's answer was applied; `fallback`:
- * Jev was unsure, failing or over budget and a default applied; `overridden`:
+ * Jev was unsure or failing and a default applied; `overridden`:
  * Jev's answer replaced the worker's (a more pessimistic verdict). Every text
  * field is built here from closed labels.
  */
@@ -71,7 +65,7 @@ export type AskJev = (
   state: unknown,
   questions: Record<string, unknown>,
   signal?: AbortSignal,
-) => Promise<{ answers: Record<string, unknown>; inputTokens: number }>;
+) => Promise<{ answers: Record<string, unknown> }>;
 
 // ---- deterministic mappings (pure, tested) --------------------------------
 
@@ -141,67 +135,6 @@ export function acceptanceCriteria(ticket: string): string[] {
   return items.slice(0, MAX_CRITERIA).map((item) => clip(item, 500));
 }
 
-// ---- budget ---------------------------------------------------------------
-
-export type KindUsage = { calls: number; usd: number };
-/** One day of Jev use, across every Lead session. */
-export type JevUsage = { day: string; usd: number; calls: number; kinds: Partial<Record<JevKind, KindUsage>> };
-
-const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0);
-
-/** Tolerant of the older `{ day, usd }` file and of anything malformed. */
-export function parseUsage(raw: unknown, day: string): JevUsage {
-  const ledger = (raw ?? {}) as { day?: unknown; usd?: unknown; calls?: unknown; kinds?: unknown };
-  if (ledger.day !== day || !Number.isFinite(ledger.usd)) return { day, usd: 0, calls: 0, kinds: {} };
-  const kinds: JevUsage["kinds"] = {};
-  const stored = typeof ledger.kinds === "object" && ledger.kinds !== null ? (ledger.kinds as Record<string, unknown>) : {};
-  for (const kind of JEV_KINDS) {
-    const entry = stored[kind] as { calls?: unknown; usd?: unknown } | undefined;
-    if (entry && typeof entry === "object") kinds[kind] = { calls: count(entry.calls), usd: count(entry.usd) };
-  }
-  return { day, usd: ledger.usd as number, calls: count(ledger.calls), kinds };
-}
-
-/** File-backed so every Lead session shares one daily budget. */
-export function createLedger(path = join(homedir(), ".pi", "agent", "pi-lead", "jev-usage.json")) {
-  const today = () => new Date().toISOString().slice(0, 10);
-  const read = async (): Promise<JevUsage> => {
-    try {
-      return parseUsage(JSON.parse(await readFile(path, "utf8")), today());
-    } catch {
-      return { day: today(), usd: 0, calls: 0, kinds: {} };
-    }
-  };
-  const write = async (usd: number, kind?: JevKind) => {
-    const ledger = await read();
-    ledger.usd += usd;
-    if (kind) {
-      ledger.calls += 1;
-      const entry = ledger.kinds[kind] ?? { calls: 0, usd: 0 };
-      ledger.kinds[kind] = { calls: entry.calls + 1, usd: entry.usd + usd };
-    }
-    await mkdir(dirname(path), { recursive: true });
-    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify(ledger));
-    await rename(temporary, path);
-  };
-  let queue: Promise<void> = Promise.resolve();
-  return {
-    spent: async () => (await read()).usd,
-    usage: read,
-    charge(usd: number, kind?: JevKind): Promise<void> {
-      // Parallel judgments charge one at a time within a process, so they
-      // neither lose each other's update nor share a temporary file; other
-      // processes can still race.
-      const next = queue.then(() => write(usd, kind));
-      queue = next.catch(() => undefined);
-      return next;
-    },
-  };
-}
-
-export type Ledgerish = Pick<ReturnType<typeof createLedger>, "spent" | "charge">;
-
 // ---- answer validation ----------------------------------------------------
 
 function isProbability(value: unknown): value is number {
@@ -235,36 +168,29 @@ function tierOf(answer: unknown, kind: WorkKind, minConfidence: number): TierJud
 
 // ---- judge ----------------------------------------------------------------
 
-export type JevProblem = { kind: "error" | "budget"; message: string };
-
 /** One line for the user; `message` is already clipped and free of the key. */
-export function describeJevProblem(problem: JevProblem): string {
-  return problem.kind === "budget"
-    ? `${problem.message}; PI Lead falls back to its defaults until tomorrow.`
-    : `Jev is configured but failing (${problem.message}); PI Lead falls back to its defaults.`;
+export function describeJevProblem(message: string): string {
+  return `Jev is configured but failing (${message}); PI Lead falls back to its defaults.`;
 }
 
-type Call = { answers?: Record<string, unknown>; failure?: JevProblem["kind"] };
+type Call = { answers?: Record<string, unknown>; failed?: true };
 type DecisionInput = Omit<JevDecision, "at">;
-
-const FALLBACK_REASON: Record<JevProblem["kind"] | "unsure", string> = { unsure: "unsure", budget: "over budget", error: "failing" };
 
 export function createJudge(options: {
   ask?: AskJev;
   config: LeadConfig["jev"];
-  ledger: Ledgerish;
-  /** Called at most once per kind per judge: the first failure, the first time the budget is spent. */
-  onProblem?: (problem: JevProblem) => void;
+  /** Called at most once per judge, on the first failure. */
+  onProblem?: (message: string) => void;
   /** Called once per judgment Jev was asked for (not for cached answers, nor when Jev is not configured). */
   onDecision?: (decision: JevDecision) => void;
 }): Judge {
-  const { ask, config, ledger, onProblem, onDecision } = options;
-  const problemsSeen = new Set<JevProblem["kind"]>();
-  const report = (kind: JevProblem["kind"], message: string) => {
-    if (problemsSeen.has(kind)) return;
-    problemsSeen.add(kind);
+  const { ask, config, onProblem, onDecision } = options;
+  let reported = false;
+  const report = (message: string) => {
+    if (reported) return;
+    reported = true;
     try {
-      onProblem?.({ kind, message });
+      onProblem?.(message);
     } catch {
       // A broken notifier must not turn a fallback into a crash.
     }
@@ -273,7 +199,7 @@ export function createJudge(options: {
   /** For a fallback, `outcome` names the default that applies; the reason is prefixed here. */
   const emit = (call: Call | undefined, decision: DecisionInput) => {
     if (!call || !onDecision) return;
-    const outcome = decision.applied === "fallback" ? `${FALLBACK_REASON[call.failure ?? "unsure"]} → ${decision.outcome}` : decision.outcome;
+    const outcome = decision.applied === "fallback" ? `${call.failed ? "failing" : "unsure"} → ${decision.outcome}` : decision.outcome;
     try {
       onDecision({ ...decision, outcome, at: Date.now() });
     } catch {
@@ -281,20 +207,14 @@ export function createJudge(options: {
     }
   };
 
-  const run = async (kind: JevKind, state: unknown, questions: Record<string, unknown>): Promise<Call | undefined> => {
+  const run = async (state: unknown, questions: Record<string, unknown>): Promise<Call | undefined> => {
     if (!ask) return undefined;
     try {
-      if ((await ledger.spent()) >= config.dailyBudgetUsd) {
-        report("budget", `Jev's daily budget ($${config.dailyBudgetUsd}) is spent`);
-        return { failure: "budget" };
-      }
-      const result = await ask(state, questions, AbortSignal.timeout(15_000));
-      await ledger.charge((result.inputTokens / 1_000_000) * config.inputUsdPerMillion, kind);
-      return { answers: result.answers };
+      return { answers: (await ask(state, questions, AbortSignal.timeout(15_000))).answers };
     } catch (error) {
       const text = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim() || "unknown error";
-      report("error", text.length > 200 ? `${text.slice(0, 200)}…` : text);
-      return { failure: "error" };
+      report(text.length > 200 ? `${text.slice(0, 200)}…` : text);
+      return { failed: true };
     }
   };
 
@@ -315,7 +235,7 @@ export function createJudge(options: {
     available: ask !== undefined,
 
     async modelTier({ task, kind }) {
-      const call = await run("tier", { kind, task: clip(task) }, { difficulty: score(DIFFICULTY_QUESTION, DIFFICULTY_RUBRIC) });
+      const call = await run({ kind, task: clip(task) }, { difficulty: score(DIFFICULTY_QUESTION, DIFFICULTY_RUBRIC) });
       const judged = tierOf(call?.answers?.difficulty, kind, config.minConfidence);
       emit(call, tierDecision(call?.answers?.difficulty, judged));
       return judged;
@@ -339,7 +259,6 @@ export function createJudge(options: {
         });
       });
       const call = await run(
-        "verdict",
         {
           ticket: clip(task, 6_000),
           workerSaid: reported,
@@ -381,7 +300,6 @@ export function createJudge(options: {
 
     async overlap(a, b) {
       const call = await run(
-        "overlap",
         { first: clip(a, 5_000), second: clip(b, 5_000) },
         { overlap: noul("Would doing these two tickets in parallel likely edit the same files or the same behaviour?") },
       );
@@ -422,6 +340,6 @@ export function createAskJev(
         // Errors reach the user's screen: never let one carry the key.
         throw new Error((error instanceof Error ? error.message : String(error)).split(apiKey).join("[redacted]"));
       });
-    return { answers: result.answers as Record<string, unknown>, inputTokens: result.usage.input_tokens };
+    return { answers: result.answers as Record<string, unknown> };
   };
 }

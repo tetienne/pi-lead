@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
 import { noul } from "@typesafe-ai/sdk";
@@ -12,21 +9,16 @@ import {
   band,
   createAskJev,
   createJudge,
-  createLedger,
   describeJevProblem,
-  parseUsage,
   tierForDifficulty,
   type AskJev,
   type JevDecision,
-  type JevProblem,
 } from "../src/jev.ts";
-
-const ledgerIn = async () => createLedger(join(await mkdtemp(join(tmpdir(), "jev-")), "usage.json"));
 
 function fakeAsk(answers: Record<string, unknown>, calls: unknown[] = []): AskJev {
   return async (state, questions) => {
     calls.push({ state, questions });
-    return { answers, inputTokens: 1_000 };
+    return { answers };
   };
 }
 
@@ -46,18 +38,16 @@ test("probability bands", () => {
 
 test("without a key Jev is unavailable and every judgment falls back", async () => {
   assert.equal(createAskJev(DEFAULT_CONFIG.jev, {}), undefined);
-  const judge = createJudge({ config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
+  const judge = createJudge({ config: DEFAULT_CONFIG.jev });
   assert.equal(judge.available, false);
   assert.equal(await judge.modelTier({ task: "x", kind: "implement" }), undefined);
   assert.equal(await judge.overlap("a", "b"), undefined);
 });
 
 test("model tier uses the difficulty score only when confident", async () => {
-  const ledger = await ledgerIn();
   const confident = createJudge({
     ask: fakeAsk({ difficulty: { type: "score", score: 3.2, confidence: 0.9 } }),
     config: DEFAULT_CONFIG.jev,
-    ledger,
   });
   assert.deepEqual(await confident.modelTier({ task: "rewrite the scheduler", kind: "implement" }), {
     tier: "deep",
@@ -66,7 +56,6 @@ test("model tier uses the difficulty score only when confident", async () => {
   const unsure = createJudge({
     ask: fakeAsk({ difficulty: { type: "score", score: 3.2, confidence: 0.3 } }),
     config: DEFAULT_CONFIG.jev,
-    ledger,
   });
   assert.equal(await unsure.modelTier({ task: "x", kind: "implement" }), undefined);
 });
@@ -75,7 +64,6 @@ test("malformed answers are rejected", async () => {
   const judge = createJudge({
     ask: fakeAsk({ difficulty: { score: "high", confidence: 2 }, verdict: { choice: "shipit", confidence: 1 } }),
     config: DEFAULT_CONFIG.jev,
-    ledger: await ledgerIn(),
   });
   assert.equal(await judge.modelTier({ task: "x", kind: "implement" }), undefined);
   assert.equal(await judge.verdict({ task: "x", reported: "done", summary: "", diffStat: "", commits: "", changedFiles: [] }), undefined);
@@ -126,7 +114,6 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
   const met = createJudge({
     ask: fakeAsk({ verdict: { choice: "done", confidence: 0.9 }, criterion1: { noul: 0.9 }, criterion2: { noul: 0.5 } }, calls),
     config: DEFAULT_CONFIG.jev,
-    ledger: await ledgerIn(),
   });
   assert.equal(await met.verdict(evidence), "done", "an unsure criterion does not downgrade");
   assert.deepEqual(Object.keys(calls[0]!.questions), ["verdict", "criterion1", "criterion2"], "one call for all questions");
@@ -135,12 +122,10 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
   assert.equal(calls[0]!.state.changedFiles, "src/a.ts");
   assert.deepEqual({ ...calls[0]!.state.verification, note: undefined }, { command: "npm test", exitCode: 1, outputTail: "1 failing", note: undefined });
 
-  const ledger = await ledgerIn();
   const unmet = (verdict: string | undefined) =>
     createJudge({
       ask: fakeAsk({ ...(verdict ? { verdict: { choice: verdict, confidence: 0.9 } } : {}), criterion1: { noul: 0.9 }, criterion2: { noul: 0.05 } }),
       config: DEFAULT_CONFIG.jev,
-      ledger,
     });
   assert.equal(await unmet("done").verdict(evidence), "partial");
   assert.equal(await unmet(undefined).verdict(evidence), "partial");
@@ -148,77 +133,63 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
 
   // No checklist: today's single question, and no verify command is stated as such.
   const plain: typeof calls = [];
-  const single = createJudge({ ask: fakeAsk({ verdict: { choice: "done", confidence: 0.9 }, criterion1: { noul: 0 } }, plain), config: DEFAULT_CONFIG.jev, ledger });
+  const single = createJudge({ ask: fakeAsk({ verdict: { choice: "done", confidence: 0.9 }, criterion1: { noul: 0 } }, plain), config: DEFAULT_CONFIG.jev });
   assert.equal(await single.verdict({ ...evidence, task: "Add CSV export. AC: test passes.", verification: undefined }), "done");
   assert.deepEqual(Object.keys(plain[0]!.questions), ["verdict"]);
   assert.match(plain[0]!.state.verification, /^none: no run of the project's verify command/);
 });
 
-test("the daily budget stops calls once spent, and failures fall back", async () => {
-  const ledger = await ledgerIn();
-  await ledger.charge(1);
+test("Jev is never refused for spend: every judgment is asked, and failures fall back", async () => {
   const calls: unknown[] = [];
-  const judge = createJudge({ ask: fakeAsk({ overlap: { noul: 1 } }, calls), config: DEFAULT_CONFIG.jev, ledger });
-  assert.equal(await judge.overlap("a", "b"), undefined);
-  assert.equal(calls.length, 0);
+  const judge = createJudge({ ask: fakeAsk({ overlap: { noul: 1 } }, calls), config: DEFAULT_CONFIG.jev });
+  for (let index = 0; index < 50; index++) assert.equal(await judge.overlap("a", "b"), true);
+  assert.equal(calls.length, 50);
 
   const failing = createJudge({
     ask: async () => {
       throw new Error("503");
     },
     config: DEFAULT_CONFIG.jev,
-    ledger: await ledgerIn(),
   });
   assert.equal(await failing.modelTier({ task: "t", kind: "implement" }), undefined);
 });
 
 test("a failing Jev is reported once, clipped, and still falls back", async () => {
-  const problems: JevProblem[] = [];
+  const problems: string[] = [];
   const judge = createJudge({
     ask: async () => {
       throw new Error(`404 model not found:\n${"x".repeat(500)}`);
     },
     config: DEFAULT_CONFIG.jev,
-    ledger: await ledgerIn(),
     onProblem: (problem) => problems.push(problem),
   });
   assert.equal(await judge.overlap("a", "b"), undefined);
   assert.equal(await judge.modelTier({ task: "t", kind: "implement" }), undefined);
   assert.equal(problems.length, 1);
-  assert.equal(problems[0]!.kind, "error");
-  assert.ok(problems[0]!.message.startsWith("404 model not found: xxx"));
-  assert.ok(problems[0]!.message.length <= 201);
+  assert.ok(problems[0]!.startsWith("404 model not found: xxx"));
+  assert.ok(problems[0]!.length <= 201);
   const line = describeJevProblem(problems[0]!);
   assert.match(line, /^Jev is configured but failing \(404 model not found: x+…\); PI Lead falls back to its defaults\.$/);
 });
 
-test("a spent budget is reported once, separately from errors", async () => {
-  const ledger = await ledgerIn();
-  const problems: JevProblem[] = [];
+test("a failure is reported once, even after Jev recovers and fails again", async () => {
+  const problems: string[] = [];
   let fail = true;
   const judge = createJudge({
     ask: async () => {
       if (fail) throw new Error("503");
-      return { answers: { overlap: { noul: 0.9 } }, inputTokens: 1_000 };
+      return { answers: { overlap: { noul: 0.9 } } };
     },
     config: DEFAULT_CONFIG.jev,
-    ledger,
-    onProblem: (problem) => problems.push(problem),
+    onProblem: (message) => problems.push(message),
   });
   await judge.overlap("a", "b");
   fail = false;
   assert.equal(await judge.overlap("a", "b"), true);
-  await ledger.charge(DEFAULT_CONFIG.jev.dailyBudgetUsd);
+  fail = true;
   await judge.overlap("a", "b");
-  await judge.overlap("a", "b");
-  assert.deepEqual(
-    problems.map((problem) => problem.kind),
-    ["error", "budget"],
-  );
-  assert.equal(
-    describeJevProblem(problems[1]!),
-    `Jev's daily budget ($${DEFAULT_CONFIG.jev.dailyBudgetUsd}) is spent; PI Lead falls back to its defaults until tomorrow.`,
-  );
+  assert.deepEqual(problems, ["503"]);
+  assert.doesNotMatch(describeJevProblem(problems[0]!), /budget/);
 });
 
 test("a throwing notifier does not break the fallback", async () => {
@@ -227,7 +198,6 @@ test("a throwing notifier does not break the fallback", async () => {
       throw new Error("boom");
     },
     config: DEFAULT_CONFIG.jev,
-    ledger: await ledgerIn(),
     onProblem: () => {
       throw new Error("ui gone");
     },
@@ -249,13 +219,6 @@ test("real client errors never carry the API key", async () => {
   });
 });
 
-test("calls are charged to the shared ledger", async () => {
-  const ledger = await ledgerIn();
-  const judge = createJudge({ ask: fakeAsk({ overlap: { noul: 0.9 } }), config: DEFAULT_CONFIG.jev, ledger });
-  assert.equal(await judge.overlap("a", "b"), true);
-  assert.ok((await ledger.spent()) > 0);
-});
-
 test("the real client targets OpenRouter's System One route", async () => {
   const requests: string[] = [];
   const ask = createAskJev(DEFAULT_CONFIG.jev, { PI_LEAD_JEV_API_KEY: "test-key" }, async (input) => {
@@ -267,73 +230,12 @@ test("the real client targets OpenRouter's System One route", async () => {
   assert.ok(ask);
   const result = await ask("state", { a: { type: "noul", instructions: "?" } });
   assert.deepEqual(requests, ["https://openrouter.ai/api/v1/systemone"]);
-  assert.equal(result.inputTokens, 12);
-});
-
-test("the ledger reads the older { day, usd } file and counts calls per kind", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "jev-"));
-  const path = join(dir, "usage.json");
-  const today = new Date().toISOString().slice(0, 10);
-  await writeFile(path, JSON.stringify({ day: today, usd: 0.25 }));
-  const ledger = createLedger(path);
-  assert.deepEqual(await ledger.usage(), { day: today, usd: 0.25, calls: 0, kinds: {} });
-  await ledger.charge(0.001, "overlap");
-  await ledger.charge(0.001, "overlap");
-  await ledger.charge(0.002, "verdict");
-  await ledger.charge(0.5);
-  const usage = await ledger.usage();
-  assert.equal(usage.calls, 3, "a charge without a kind adds to the spend only");
-  assert.ok(Math.abs(usage.usd - 0.754) < 1e-9);
-  assert.equal(usage.kinds.overlap?.calls, 2);
-  assert.ok(Math.abs(usage.kinds.overlap!.usd - 0.002) < 1e-9);
-  assert.deepEqual(usage.kinds.verdict, { calls: 1, usd: 0.002 });
-  assert.equal(await ledger.spent(), usage.usd);
-  assert.deepEqual(Object.keys(JSON.parse(await readFile(path, "utf8"))).sort(), ["calls", "day", "kinds", "usd"]);
-
-  assert.deepEqual(parseUsage({ day: "1999-01-01", usd: 3, calls: 9 }, today), { day: today, usd: 0, calls: 0, kinds: {} }, "yesterday resets");
-  assert.deepEqual(parseUsage({ day: today, usd: 1, calls: -2, kinds: { tier: { calls: "x" }, bogus: { calls: 1 } } }, today), {
-    day: today,
-    usd: 1,
-    calls: 0,
-    kinds: { tier: { calls: 0, usd: 0 } },
-  });
-  assert.deepEqual(
-    parseUsage(
-      {
-        day: today,
-        usd: 0.5,
-        calls: 14,
-        kinds: { egress: { calls: 11, usd: 0.003 }, review: { calls: 1, usd: 0.001 }, failure: { calls: 1, usd: 0.001 }, tier: { calls: 1, usd: 0.001 } },
-      },
-      today,
-    ),
-    { day: today, usd: 0.5, calls: 14, kinds: { tier: { calls: 1, usd: 0.001 } } },
-    "egress, review and failure entries from older versions are no longer kinds, their spend still counts",
-  );
-});
-
-test("parallel charges in one process all land", async () => {
-  const ledger = await ledgerIn();
-  await Promise.all(Array.from({ length: 20 }, () => ledger.charge(0.001, "overlap")));
-  const usage = await ledger.usage();
-  assert.equal(usage.calls, 20);
-  assert.equal(usage.kinds.overlap?.calls, 20);
-});
-
-test("the judge charges each call to its kind", async () => {
-  const ledger = await ledgerIn();
-  const judge = createJudge({ ask: fakeAsk({ overlap: { noul: 0.9 }, difficulty: { score: 2, confidence: 0.9 } }), config: DEFAULT_CONFIG.jev, ledger });
-  await judge.overlap("a", "b");
-  await judge.modelTier({ task: "t", kind: "implement" });
-  const usage = await ledger.usage();
-  assert.equal(usage.calls, 2);
-  assert.equal(usage.kinds.overlap?.calls, 1);
-  assert.equal(usage.kinds.tier?.calls, 1);
+  assert.deepEqual(result, { answers: { a: { type: "noul", noul: 0.7 } } }, "no token count: nothing is charged");
 });
 
 const judgeWith = async (answers: Record<string, unknown>) => {
   const decisions: JevDecision[] = [];
-  const judge = createJudge({ ask: fakeAsk(answers), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn(), onDecision: (d) => decisions.push(d) });
+  const judge = createJudge({ ask: fakeAsk(answers), config: DEFAULT_CONFIG.jev, onDecision: (d) => decisions.push(d) });
   return { judge, decisions };
 };
 const shape = ({ at, ...rest }: JevDecision) => {
@@ -391,35 +293,31 @@ test("each judgment emits one decision: applied or fallback", async () => {
   }
 });
 
-test("a failing, over-budget or unconfigured Jev: fallbacks name the reason, or nothing is emitted", async () => {
+test("a failing or unconfigured Jev: fallbacks name the reason, or nothing is emitted", async () => {
   const decisions: JevDecision[] = [];
   const failing = createJudge({
     ask: async () => {
       throw new Error("503");
     },
     config: DEFAULT_CONFIG.jev,
-    ledger: await ledgerIn(),
     onDecision: (d) => decisions.push(d),
   });
   await failing.overlap("a", "b");
-  const spent = await ledgerIn();
-  await spent.charge(5);
-  const broke = createJudge({ ask: fakeAsk({}), config: DEFAULT_CONFIG.jev, ledger: spent, onDecision: (d) => decisions.push(d) });
-  await broke.modelTier({ task: "t", kind: "implement" });
-  const none = createJudge({ config: DEFAULT_CONFIG.jev, ledger: await ledgerIn(), onDecision: (d) => decisions.push(d) });
+  const unsure = createJudge({ ask: fakeAsk({}), config: DEFAULT_CONFIG.jev, onDecision: (d) => decisions.push(d) });
+  await unsure.modelTier({ task: "t", kind: "implement" });
+  const none = createJudge({ config: DEFAULT_CONFIG.jev, onDecision: (d) => decisions.push(d) });
   await none.overlap("a", "b");
   assert.deepEqual(
     decisions.map((d) => [d.kind, d.applied, d.outcome]),
     [
       ["overlap", "fallback", "failing → waits"],
-      ["tier", "fallback", "over budget → standard"],
+      ["tier", "fallback", "unsure → standard"],
     ],
   );
 
   const throwing = createJudge({
     ask: fakeAsk({ overlap: { noul: 0.9 } }),
     config: DEFAULT_CONFIG.jev,
-    ledger: await ledgerIn(),
     onDecision: () => {
       throw new Error("ui gone");
     },

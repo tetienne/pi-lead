@@ -113,8 +113,9 @@ Design record: [ADR 0001](docs/adr/0001-lead-is-a-tool-driven-conversation.md),
   for worker status badges and reliable Lead → worker messages.
 - Optional: a TypeSafe or OpenRouter key for Jev in `PI_LEAD_JEV_API_KEY`
   (exported in the shell Herdr starts panes with, so workers get it too).
-  If the key is set but Jev fails (bad key, wrong model, network) or its daily
-  budget is spent, PI Lead warns you once and falls back to its defaults.
+  If the key is set but Jev fails (bad key, wrong model, network), PI Lead
+  warns you once and falls back to its defaults. PI Lead does not track or
+  cap what Jev costs; your TypeSafe or OpenRouter account does.
 
 ## Install
 
@@ -156,7 +157,7 @@ A global file, for example:
     "deep":     { "model": "openai-codex/gpt-6-astra", "thinking": "xhigh",
                   "fallbacks": [{ "model": "opencode-go/deepseek-v4-pro", "thinking": "max" }] }
   },
-  "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
+  "jev": { "via": "openrouter" },
   "keepFailedWorkers": true,
   "stuckDetection": true,
   "verifyTimeoutMinutes": 15
@@ -216,10 +217,8 @@ similar) points at the dishonest ones. Review both before merging.
 
 ### Seeing Jev
 
-With a Jev key set, the Lead's status line carries `◆ 14 · $0.004/1.00`: Jev
-calls today across every Lead session, and spend against
-`dailyBudgetUsd` (dim, then warning from 80%, error once spent). Each judgment
-the Lead makes gets one dim line in the transcript, which the model never sees:
+With a Jev key set, each judgment the Lead makes gets one dim line in the
+transcript, which the model never sees:
 
 ```
 ◆ jev · tier standard (difficulty 2.1/4, conf 0.82)
@@ -227,9 +226,9 @@ the Lead makes gets one dim line in the transcript, which the model never sees:
 ▲ jev · verdict done → partial (criterion 2 not met)
 ```
 
-`◆` Jev decided and its answer applied, `◇` Jev was unsure, failing or over
-budget and the default applied, `▲` Jev overrode the worker. `/jev` lists
-today's calls and spend by kind and this session's last 20 decisions.
+`◆` Jev decided and its answer applied, `◇` Jev was unsure or failing and the
+default applied, `▲` Jev overrode the worker. Lines stored by older versions
+still render as they were written.
 
 ## Develop
 

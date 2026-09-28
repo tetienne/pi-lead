@@ -37,6 +37,14 @@ test("an old maxWorkers, leadGuard or waitingTimeoutMinutes key in a user file i
   assert.equal((config as { waitingTimeoutMinutes?: number }).waitingTimeoutMinutes, undefined);
 });
 
+test("old Jev budget keys in a user file are ignored, no error and no notice", async () => {
+  const { agentDir, cwd } = await dirs({ jev: { dailyBudgetUsd: 0.5, inputUsdPerMillion: 2, model: "jev-2" } }, { jev: { dailyBudgetUsd: 3 } });
+  const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
+  assert.deepEqual(ignored, []);
+  assert.equal(config.jev.model, "jev-2");
+  assert.deepEqual(Object.keys(config.jev).sort(), ["apiKeyEnv", "minConfidence", "model", "via"]);
+});
+
 test("verify in the global config is dropped with a notice naming the file", async () => {
   const { agentDir, cwd } = await dirs({ verify: "make secret-target" });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
