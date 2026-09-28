@@ -10,7 +10,7 @@ import { classifyChecks, gitWorkspace, readChecks } from "../src/workspace.ts";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
 
-test("classifyChecks: fail/cancel win over pending; pass only when every bucket is pass or skipping", () => {
+test("classifyChecks: fail/cancel win over pending; pass once every check is pass or skipping", () => {
   assert.deepEqual(
     classifyChecks([{ name: "a", bucket: "pass", link: "" }, { name: "b", bucket: "skipping", link: "" }]),
     { state: "pass", failed: [] },
@@ -29,7 +29,7 @@ test("classifyChecks: fail/cancel win over pending; pass only when every bucket 
   );
 });
 
-test("readChecks: JSON even on a non-zero exit; only gh's own message means no checks; any other failure is error", () => {
+test("readChecks: JSON whatever the exit status; only gh's own message means no checks; any other failure is error", () => {
   const failing = JSON.stringify([{ name: "ci", bucket: "fail", link: "https://x" }]);
   assert.deepEqual(readChecks({ stdout: failing, error: new Error("exit 1") }), { state: "fail", failed: [{ name: "ci", link: "https://x" }] });
   assert.deepEqual(readChecks({ stdout: "[]" }), { state: "none", failed: [] });

@@ -9,17 +9,15 @@ const execFileAsync = promisify(execFile);
 export type CheckBucket = { name: string; bucket: string; link: string };
 
 /**
- * Classify a PR's checks: `fail` and `cancel` buckets both count as failed
- * (checked first, since a fail-fast watch can still leave others pending);
- * otherwise any `pending` bucket means the run isn't settled yet; `pass` only
- * once every bucket is `pass` or `skipping`.
+ * Classify a PR's checks. gh sorts every check into one of five buckets:
+ * `pass`, `skipping`, `pending`, `fail` and `cancel`. `fail` and `cancel` both
+ * count as failed (checked first, since a fail-fast watch can still leave
+ * others pending); otherwise any `pending` means the run isn't settled yet.
  */
 export function classifyChecks(checks: CheckBucket[]): { state: "pass" | "pending" | "fail"; failed: { name: string; link: string }[] } {
   const failed = checks.filter((check) => check.bucket === "fail" || check.bucket === "cancel").map(({ name, link }) => ({ name, link }));
   if (failed.length) return { state: "fail", failed };
-  if (checks.some((check) => check.bucket === "pending")) return { state: "pending", failed: [] };
-  const settled = checks.filter((check) => check.bucket !== "pass" && check.bucket !== "skipping");
-  return settled.length ? { state: "fail", failed: settled.map(({ name, link }) => ({ name, link })) } : { state: "pass", failed: [] };
+  return { state: checks.some((check) => check.bucket === "pending") ? "pending" : "pass", failed: [] };
 }
 
 /** gh's merge methods, in the order its own `gh pr merge` prompt offers them. */
@@ -104,7 +102,7 @@ const ghError = (run: GhRun) => run.stderr?.trim().split("\n")[0] || (run.error 
 
 /** One `gh pr checks --json` run. A gh failure is `error`, never "no checks", so it cannot leave a ticket `done`. */
 export function readChecks(run: GhRun): { state: "pass" | "fail" | "pending" | "none" | "error"; failed: { name: string; link: string }[]; error?: string } {
-  // `gh pr checks` exits non-zero when a check fails or is pending, but still prints its JSON on stdout.
+  // With --json, gh prints the checks and exits 0 whatever their state; with no checks at all it fails with its own message.
   if (run.stdout?.trim()) {
     try {
       const checks = JSON.parse(run.stdout) as CheckBucket[];
@@ -193,7 +191,7 @@ export const gitWorkspace: Workspace = {
   async updateBranch({ repoRoot, pr }) {
     const run = await ghIn(repoRoot, ["pr", "update-branch", pr]);
     if (!run.error) return { state: "updated" };
-    return /due to conflicts|merge conflict/i.test(run.stderr ?? "") ? { state: "conflict" } : { state: "error", error: ghError(run) };
+    return /due to conflicts/i.test(run.stderr ?? "") ? { state: "conflict" } : { state: "error", error: ghError(run) };
   },
 
   async watchChecks({ repoRoot, pr }) {
