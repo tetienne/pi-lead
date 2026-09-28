@@ -10,7 +10,6 @@ import { plainTitle } from "../worker-display.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createStuckDetector } from "./stuck.ts";
 import { runVerification, shouldVerify } from "./verify.ts";
-import { registerWebSearch } from "./web-search.ts";
 
 /** The braces send `git add`'s stderr to stdout too, so a failure reaches the model. */
 export const COMMIT_LEFTOVERS =
@@ -76,8 +75,6 @@ export default function worker(pi: ExtensionAPI) {
       stuck.progress();
     }
   });
-
-  registerWebSearch(pi);
 
   /** Commit anything left in the tree, so the branch fetched back holds every change. */
   const commitLeftovers = async (status?: WorkerResult["status"]) => {

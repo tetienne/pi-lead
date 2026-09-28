@@ -67,7 +67,7 @@ test("a worker result may carry a verification, which must be well formed", () =
   }
 });
 
-test("the worker only adds finish and web_search; stock file/shell tools come from Pi itself", async () => {
+test("the worker only adds finish; stock file/shell tools and web tools come from Pi and the user's extensions", async () => {
   const tools: string[] = [];
   const handlers = new Map<string, (event: any, ctx?: any) => any>();
   const flags = new Map<string, unknown>();
@@ -82,7 +82,7 @@ test("the worker only adds finish and web_search; stock file/shell tools come fr
   } as any);
 
   assert.ok(flags.has("pi-lead-task"));
-  assert.deepEqual(tools.sort(), ["finish", "web_search"]);
+  assert.deepEqual(tools, ["finish"]);
 
   const { systemPrompt } = await handlers.get("before_agent_start")!({
     systemPrompt: `BASE\nCurrent working directory: ${process.cwd()}`,

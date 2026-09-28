@@ -77,9 +77,7 @@ you ─► Lead (Pi, your tab)
   `AGENTS.md`, plus the repository's own skills and prompts when you trust the
   project; PI Lead adds only its worker extension. Every Pi that PI Lead
   starts runs with `PI_LEAD_ROLE` set, and PI Lead's Lead extension stays
-  inert there, so a worker never becomes a second Lead. It can search the web with
-  `web_search` through your ChatGPT subscription (see
-  [Web access for workers](#web-access-for-workers)). When the project names a
+  inert there, so a worker never becomes a second Lead. When the project names a
   `verify` command, PI Lead runs it itself when code work finishes (see
   [Verify](#verify)).
 - **Seeing workers.** Each worker workspace's label starts with its state:
@@ -185,56 +183,8 @@ stopped automatically, and Jev is not involved.
 
 ### Web access for workers
 
-A worker has the same network access as the user running the Lead, so it can
-already reach npm, PyPI, GitHub, Context7 and the like directly, and it loads
-your own global extensions, so web tools installed in your Pi (pi-web-access,
-context-mode, an MCP server…) work there too. Extensions of the project itself
-(`.pi/extensions`, project packages) do not load in a worker.
-
-**`web_search` (built in).** Every worker has a `web_search` tool when you are
-logged in to Pi with a ChatGPT subscription (`/login` → OpenAI Codex). It sends
-one request with OpenAI's hosted web search through Pi's own Codex transport:
-the search runs at OpenAI, and the request carries the worker's own context.
-It uses the worker's model when that is an `openai-codex` model, otherwise any
-`openai-codex` model you are logged in to; it never falls back to another
-provider (an OpenAI API key, OpenCode Go, a gateway), and a Codex provider
-pointed at a host other than `chatgpt.com` is refused. Without a Codex login
-the tool is hidden. The answer comes back wrapped in
-`<web-search-results untrusted>` with its source URLs, and each search counts
-against your ChatGPT usage.
-
-**Context7 (up-to-date library docs).** [Context7](https://context7.com)'s API
-is plain HTTPS GET, reachable from a worker without any extra configuration.
-Tell workers about it in the consuming project's `AGENTS.md` (workers
-read the same `AGENTS.md` as the Lead):
-
-```markdown
-## Library documentation
-
-Before using a third-party API, check its current docs with Context7:
-
-    # find the library ID
-    CTX7_TELEMETRY_DISABLED=1 npx -y ctx7 library nextjs "middleware"
-    # fetch the docs for a topic
-    CTX7_TELEMETRY_DISABLED=1 npx -y ctx7 docs /vercel/next.js "middleware authentication"
-
-Without Node, the same with curl (JSON):
-
-    curl -s "https://context7.com/api/v2/libs/search?libraryName=prisma&query=relations"
-    curl -s "https://context7.com/api/v2/context?libraryId=/prisma/prisma&query=one-to-many%20relations"
-```
-
-`CTX7_TELEMETRY_DISABLED` stops the CLI's usage event. Queries are anonymous
-and rate-limited.
-
-Then ask the Lead in plain language:
-
-- "Research how Prisma 7 handles one-to-many relations and write it up" → a
-  `research` worker reads the docs through Context7 and cites them.
-- "Add rate limiting to the API with the current Hono middleware" → the
-  `implement` worker checks Hono's docs before writing code.
-- "Find out why `pnpm install` fails with ERR_PNPM_BAD_PM_VERSION since
-  yesterday" → a `debug` worker uses `web_search` for recent reports.
+Workers use your own Pi extensions (a web search extension, for example),
+which they load like the Lead.
 
 ### Verify
 
