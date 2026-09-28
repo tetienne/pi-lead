@@ -292,6 +292,11 @@ export default function worker(pi: ExtensionAPI, runReviewer: RunReviewer = spaw
 
   pi.on("session_start", async (_event, ctx) => {
     const current = await loadTask();
+    // Pi installs a trusted project's packages into the worktree and leaves their `.gitignore` visible to git.
+    await runShell(
+      `f=$(git rev-parse --git-path info/exclude) && { grep -qx '/.pi/npm/' "$f" 2>/dev/null || printf '/.pi/npm/\\n/.pi/git/\\n' >> "$f"; }`,
+      current.worktreePath,
+    );
     // The task file is only readable once flags are parsed, so the tool is registered here.
     if (REVIEWED_KINDS.includes(current.kind) && !reviewRegistered) {
       reviewRegistered = true;

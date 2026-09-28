@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -171,7 +171,7 @@ async function reviewedWorker(kind = "implement", runs: Array<{ exitCode: number
     return { tools, call };
   };
   const { tools, call } = await boot();
-  return { tools, calls, call, boot, commit, worktree, resultPath, base };
+  return { tools, calls, call, boot, commit, git, worktree, resultPath, base };
 }
 
 test("the review tool runs a read-only one-shot reviewer from the ticket's base, three calls at most", async () => {
@@ -193,6 +193,15 @@ test("the review tool runs a read-only one-shot reviewer from the ticket's base,
   await call("review", {});
   await assert.rejects(() => call("review", {}), /All 3 review calls are used\. Call `finish` with status `blocked`/);
   assert.equal(calls.length, 3, "the fourth call never reaches the reviewer");
+});
+
+test("a trusted project's package dirs stay out of the worker's git status", async () => {
+  const { boot, git, worktree } = await reviewedWorker();
+  await boot();
+  await mkdir(join(worktree, ".pi", "npm"), { recursive: true });
+  await writeFile(join(worktree, ".pi", "npm", ".gitignore"), "*\n!.gitignore\n");
+  assert.equal(await git(["status", "--porcelain"], worktree), "");
+  assert.equal((await readFile(join(worktree, ".git", "info", "exclude"), "utf8")).match(/\/\.pi\/npm\//g)?.length, 1);
 });
 
 test("finish done needs a review of the current, clean HEAD; partial never waits for one", async () => {
