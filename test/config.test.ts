@@ -18,11 +18,11 @@ async function dirs(global?: object, project?: object) {
 }
 
 test("settings in their right place produce no notice", async () => {
-  const { agentDir, cwd } = await dirs({ keepFailedWorkers: false }, { verify: "npm test" });
+  const { agentDir, cwd } = await dirs({ keepFailedWorkers: false }, { stuckDetection: false });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
   assert.deepEqual(ignored, []);
   assert.equal(config.keepFailedWorkers, false);
-  assert.equal(config.verify, "npm test");
+  assert.equal(config.stuckDetection, false);
 
   const none = await dirs();
   assert.deepEqual((await loadConfigWithNotices(none.cwd, { projectTrusted: false, agentDir: none.agentDir })).ignored, []);
@@ -45,46 +45,24 @@ test("old Jev budget keys in a user file are ignored, no error and no notice", a
   assert.deepEqual(Object.keys(config.jev).sort(), ["apiKeyEnv", "minConfidence", "model", "via"]);
 });
 
-test("verify in the global config is dropped with a notice naming the file", async () => {
-  const { agentDir, cwd } = await dirs({ verify: "make secret-target" });
+test("old verify and verifyTimeoutMinutes keys in either file are ignored, no error and no notice", async () => {
+  const { agentDir, cwd } = await dirs({ verify: "make check", verifyTimeoutMinutes: 5 }, { verify: "npm test", verifyTimeoutMinutes: 9 });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
-  assert.equal(config.verify, undefined);
-  assert.equal(ignored.length, 1);
-  assert.equal(
-    ignored[0],
-    `PI Lead: \`verify\` in ${join(agentDir, "pi-lead.json")} is ignored; set it in the project's .pi/pi-lead.json.`,
-  );
-  assert.doesNotMatch(ignored[0]!, /secret-target/, "never the value");
+  assert.deepEqual(ignored, []);
+  assert.equal((config as { verify?: string }).verify, undefined);
+  assert.equal((config as { verifyTimeoutMinutes?: number }).verifyTimeoutMinutes, undefined);
 });
 
 test("a project file of an untrusted project is ignored with a notice on how to trust it", async () => {
-  const { agentDir, cwd } = await dirs(undefined, { verify: "npm test" });
+  const { agentDir, cwd } = await dirs(undefined, { keepFailedWorkers: false });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: false, agentDir });
-  assert.equal(config.verify, undefined);
+  assert.equal(config.keepFailedWorkers, true);
   assert.equal(ignored.length, 1);
   assert.match(ignored[0]!, /^PI Lead: \.pi\/pi-lead\.json is ignored because this project is not trusted in Pi \(.*\/trust.*--approve.*\)\.$/);
-  assert.doesNotMatch(ignored[0]!, /npm test/);
 });
 
 test("a config file that is not an object still loads without a notice", async () => {
   const { agentDir, cwd } = await dirs();
   await writeFile(join(agentDir, "pi-lead.json"), "5");
   assert.deepEqual((await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir })).ignored, []);
-});
-
-test("a notice shows a path under the home directory with ~", async () => {
-  const home = await mkdtemp(join(tmpdir(), "pi-lead-config-home-"));
-  const agentDir = join(home, ".pi", "agent");
-  await mkdir(agentDir, { recursive: true });
-  await writeFile(join(agentDir, "pi-lead.json"), JSON.stringify({ verify: "npm test" }));
-  const previous = process.env.HOME;
-  process.env.HOME = home;
-  try {
-    const { cwd } = await dirs();
-    const { ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
-    assert.deepEqual(ignored, ["PI Lead: `verify` in ~/.pi/agent/pi-lead.json is ignored; set it in the project's .pi/pi-lead.json."]);
-  } finally {
-    if (previous === undefined) delete process.env.HOME;
-    else process.env.HOME = previous;
-  }
 });

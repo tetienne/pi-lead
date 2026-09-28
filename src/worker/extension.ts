@@ -9,7 +9,6 @@ import { quotaError } from "../quota.ts";
 import { plainTitle } from "../worker-display.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createStuckDetector } from "./stuck.ts";
-import { runVerification, shouldVerify } from "./verify.ts";
 
 /** The braces send `git add`'s stderr to stdout too, so a failure reaches the model. */
 export const COMMIT_LEFTOVERS =
@@ -104,28 +103,13 @@ export default function worker(pi: ExtensionAPI) {
       summary: Type.String({ description: "What changed, how it was verified, what is left" }),
       findings: Type.Optional(Type.String({ description: "Full review findings, for review tasks" })),
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
+    async execute(_id, params) {
       const current = await loadTask();
       // A failed commit (hook, identity) must not lose work: report it to the
       // model instead of finishing.
       const commit = await commitLeftovers(params.status);
       if (commit.exitCode !== 0) {
         throw new Error(`Could not commit the remaining changes; fix this, commit, then call finish again:\n${commit.stdout.slice(-2_000)}`);
-      }
-      // The project's own check, chosen by the trusted config and run here
-      // rather than by the model: the Lead's evidence that the work holds.
-      let verification: WorkerResult["verification"];
-      if (shouldVerify(current, params.status)) {
-        ctx?.ui.setStatus("pi-lead", `Verifying: ${current.verify}`);
-        verification = await runVerification({
-          command: current.verify,
-          cwd: current.worktreePath,
-          ...(current.verifyTimeoutMinutes ? { timeoutMinutes: current.verifyTimeoutMinutes } : {}),
-          ...(signal ? { signal } : {}),
-        });
-        ctx?.ui.setStatus("pi-lead", `${current.kind} · ${current.branch}`);
-        // Stopped by the user: nothing is reported, `finish` can be called again.
-        if (signal?.aborted) throw new Error("aborted");
       }
       const result: WorkerResult = {
         version: 1,
@@ -134,7 +118,6 @@ export default function worker(pi: ExtensionAPI) {
         status: params.status,
         summary: params.summary,
         ...(params.findings ? { findings: params.findings } : {}),
-        ...(verification ? { verification } : {}),
       };
       await writeResult(result);
       return {

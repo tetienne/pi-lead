@@ -6,7 +6,6 @@ import { test } from "node:test";
 
 import { parseWorkerResult, SUB_AGENT_RECIPE } from "../src/protocol.ts";
 import worker, { COMMIT_LEFTOVERS } from "../src/worker/extension.ts";
-import { runVerification, shouldVerify, VERIFY_OUTPUT_TAIL } from "../src/worker/verify.ts";
 
 /** A worker's `tool_result` event, as narrowed by `isBashToolResult`/`isWriteToolResult`. */
 const toolResult = (toolName: string, input: Record<string, unknown>, isError: boolean) => ({
@@ -47,24 +46,6 @@ test("stuck detection is fed by Pi's own tool_result event for bash, and cleared
   await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
   await handlers.get("tool_result")!(toolResult("bash", { command: "npm test" }, true), ctx);
   assert.equal(messages.length, 0, "a file change resets the streak");
-});
-
-test("a worker result may carry a verification, which must be well formed", () => {
-  const base = { version: 1, id: "t", seq: 1, status: "done", summary: "s" };
-  const verification = { command: "npm test", exitCode: 1, outputTail: "1 failing", ms: 1_200 };
-  assert.equal(parseWorkerResult(base, "t").verification, undefined);
-  assert.deepEqual(parseWorkerResult({ ...base, verification }, "t").verification, verification);
-  for (const bad of [
-    "npm test",
-    { ...verification, exitCode: "1" },
-    { ...verification, exitCode: 1.5 },
-    { ...verification, outputTail: undefined },
-    { ...verification, command: 1 },
-    { ...verification, ms: -1 },
-    { ...verification, ms: Number.NaN },
-  ]) {
-    assert.throws(() => parseWorkerResult({ ...base, verification: bad }, "t"), /malformed/, JSON.stringify(bad));
-  }
 });
 
 test("the worker only adds finish; stock file/shell tools and web tools come from Pi and the user's extensions", async () => {
@@ -134,54 +115,7 @@ test("a run that ends on a provider error reports it to the Lead instead of idli
   assert.equal(second.modelError, "401 unauthorized");
 });
 
-test("finish runs the verify command only for code work that claims progress, when the project names one", () => {
-  const verify = "npm test";
-  for (const kind of ["implement", "prototype", "debug"] as const) {
-    assert.equal(shouldVerify({ kind, verify }, "done"), true, kind);
-    assert.equal(shouldVerify({ kind, verify }, "partial"), true, kind);
-  }
-  for (const status of ["blocked", "needs_human"] as const) assert.equal(shouldVerify({ kind: "implement", verify }, status), false, status);
-  for (const kind of ["review", "research"] as const) assert.equal(shouldVerify({ kind, verify }, "done"), false, kind);
-  assert.equal(shouldVerify({ kind: "implement" }, "done"), false, "no verify configured");
-  assert.equal(shouldVerify({ kind: "implement", verify: "  " }, "done"), false);
-});
-
-test("the verify run executes in the given cwd on the host and keeps the exit code and an output tail", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-verify-"));
-  await writeFile(join(dir, "marker"), "");
-  let clock = 1_000;
-  const result = await runVerification({
-    command: `test -f marker || exit 9; node -e "process.stdout.write('y'.repeat(3000) + '\\n1 failing')"; exit 3`,
-    cwd: dir,
-    now: () => (clock += 500),
-  });
-  assert.equal(result.command.startsWith("test -f marker"), true);
-  assert.equal(result.exitCode, 3, "ran in the given cwd, where marker exists");
-  assert.equal(result.ms, 500);
-  assert.equal(result.outputTail.length, VERIFY_OUTPUT_TAIL);
-  assert.ok(result.outputTail.endsWith("\n1 failing"));
-  assert.doesNotThrow(() => parseWorkerResult({ version: 1, id: "t", seq: 1, status: "done", summary: "s", verification: result }, "t"));
-});
-
-test("a verify run that errors or times out has exit code -1 and never throws", async () => {
-  const failed = await runVerification({ command: "true", cwd: "/no/such/directory-pi-lead-test" });
-  assert.equal(failed.exitCode, -1);
-  assert.match(failed.outputTail, /could not run:/);
-
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-verify-"));
-  const timedOut = await runVerification({ command: "sleep 5", cwd: dir, timeoutMinutes: 0.0005 });
-  assert.equal(timedOut.exitCode, -1);
-  assert.match(timedOut.outputTail, /\[PI Lead: stopped after 0\.0005 minutes\]$/);
-
-  const stop = new AbortController();
-  const stopping = runVerification({ command: "sleep 5", cwd: dir, signal: stop.signal });
-  stop.abort();
-  const stoppedByUser = await stopping;
-  assert.equal(stoppedByUser.exitCode, -1);
-  assert.match(stoppedByUser.outputTail, /\[PI Lead: aborted\]$/);
-});
-
-test("finish done needs no allowed-files list and reports the findings", async () => {
+test("finish done needs no allowed-files list, reports the findings and runs no verify command", async () => {
   const { execFile } = await import("node:child_process");
   const run = (args: string[], cwd: string) => new Promise<void>((resolve, reject) => execFile("git", args, { cwd }, (error) => (error ? reject(error) : resolve())));
   const worktree = await mkdtemp(join(tmpdir(), "pi-lead-worker-git-"));
@@ -193,7 +127,9 @@ test("finish done needs no allowed-files list and reports the findings", async (
   const stateDir = await mkdtemp(join(tmpdir(), "pi-lead-worker-state-"));
   const taskPath = join(stateDir, "task.json");
   const resultPath = join(stateDir, "result.json");
-  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: worktree }));
+  // A task written by an older Lead may still name a verify command: it is not run.
+  const task = { version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: worktree, verify: "touch verify-ran" };
+  await writeFile(taskPath, JSON.stringify(task));
   const tools = new Map<string, any>();
   worker({
     registerFlag: () => undefined,
@@ -211,6 +147,8 @@ test("finish done needs no allowed-files list and reports the findings", async (
   const result = parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t");
   assert.equal(result.status, "done");
   assert.equal(result.findings, "notes");
+  assert.equal((result as { verification?: unknown }).verification, undefined);
+  await assert.rejects(readFile(join(worktree, "verify-ran"), "utf8"), "no verify command ran in the worktree");
 });
 
 test("finish with a non-done status commits leftovers despite a failing pre-commit hook; done still runs it", async () => {

@@ -34,15 +34,6 @@ export type LeadConfig = {
    * between (see worker/stuck.ts), once per prompt.
    */
   stuckDetection: boolean;
-  /**
-   * Shell command run in the worker's worktree when code work finishes
-   * `done` or `partial`; a non-zero exit makes the result at most `partial`.
-   * Read only from a trusted project's `.pi/pi-lead.json`: it is per
-   * project, and the global config cannot set it.
-   */
-  verify?: string;
-  /** The `verify` run is stopped after this long and counts as failed. */
-  verifyTimeoutMinutes: number;
 };
 
 export const DEFAULT_CONFIG: LeadConfig = {
@@ -59,7 +50,6 @@ export const DEFAULT_CONFIG: LeadConfig = {
   },
   keepFailedWorkers: true,
   stuckDetection: true,
-  verifyTimeoutMinutes: 15,
 };
 
 type PartialConfig = {
@@ -67,8 +57,6 @@ type PartialConfig = {
   jev?: Partial<LeadConfig["jev"]>;
   keepFailedWorkers?: boolean;
   stuckDetection?: boolean;
-  verify?: string;
-  verifyTimeoutMinutes?: number;
 };
 
 const JEV_KEYS = ["apiKeyEnv", "via", "model", "minConfidence"] as const satisfies readonly (keyof LeadConfig["jev"])[];
@@ -82,6 +70,7 @@ function mergeJev(base: LeadConfig["jev"], override: Partial<LeadConfig["jev"]> 
   return jev;
 }
 
+/** Only today's keys: an old `verify` or `verifyTimeoutMinutes` is dropped without a notice. */
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
   const tiers = { ...base.tiers };
   for (const tier of Object.keys(tiers) as Tier[]) {
@@ -92,15 +81,6 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     jev: mergeJev(base.jev, override.jev),
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
     stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
-    ...(typeof override.verify === "string" && override.verify.trim()
-      ? { verify: override.verify.trim() }
-      : base.verify !== undefined
-        ? { verify: base.verify }
-        : {}),
-    verifyTimeoutMinutes:
-      typeof override.verifyTimeoutMinutes === "number" && override.verifyTimeoutMinutes > 0
-        ? override.verifyTimeoutMinutes
-        : base.verifyTimeoutMinutes,
   };
 }
 
@@ -113,16 +93,6 @@ async function readJson(path: string): Promise<PartialConfig | undefined> {
   }
 }
 
-/** A path for a notice: `~` for the home directory, nothing else shortened. */
-function displayPath(path: string): string {
-  const home = homedir();
-  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
-}
-
-function has(value: PartialConfig, key: keyof PartialConfig): boolean {
-  return typeof value === "object" && value !== null && key in value;
-}
-
 async function exists(path: string): Promise<boolean> {
   return access(path).then(
     () => true,
@@ -133,10 +103,7 @@ async function exists(path: string): Promise<boolean> {
 /**
  * Global `<agent dir>/pi-lead.json` (`~/.pi/agent` unless PI_CODING_AGENT_DIR
  * moves it), then project `.pi/pi-lead.json`. The project file is read only
- * for trusted projects. `verify` is a command for one project, so only the
- * project file sets it
- * (it runs on the host in the worker's own worktree, never in the user's
- * checkout).
+ * for trusted projects.
  *
  * `ignored` has one line per setting dropped by these rules, so the Lead can
  * say so instead of silently ignoring it. It names keys and paths only.
@@ -150,13 +117,7 @@ export async function loadConfigWithNotices(
   const globalPath = join(options.agentDir ?? join(homedir(), ".pi", "agent"), "pi-lead.json");
   const projectPath = join(cwd, ".pi", "pi-lead.json");
   const global = await readJson(globalPath);
-  if (global) {
-    if (has(global, "verify")) {
-      ignored.push(`PI Lead: \`verify\` in ${displayPath(globalPath)} is ignored; set it in the project's .pi/pi-lead.json.`);
-      delete global.verify;
-    }
-    config = mergeConfig(config, global);
-  }
+  if (global) config = mergeConfig(config, global);
   if (options.projectTrusted) {
     const project = await readJson(projectPath);
     if (project) {

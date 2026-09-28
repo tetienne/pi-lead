@@ -119,8 +119,8 @@ export type CardParts = { head: string; said?: string; tail?: string };
 /**
  * The card, or undefined for a report without one (another version, a
  * stop): Pi then shows the plain text. Collapsed, it shows host facts and
- * every untrusted line (summary, commits, diff stat, findings, verify
- * output); expanded, the full report exactly as the model reads it.
+ * every untrusted line (summary, commits, diff stat, findings); expanded,
+ * the full report exactly as the model reads it.
  */
 export function renderCard(details: unknown, content: string, expanded: boolean, paint: Paint): CardParts | undefined {
   const report = details as ReportDetails | undefined;
@@ -142,7 +142,6 @@ export function renderCard(details: unknown, content: string, expanded: boolean,
     ...(card.diff ? [safePreview(card.diff, 120)] : []),
   ];
   if (work.length) lines.push(`  ${work.join(" · ")}`);
-  if (card.verify) lines.push(paint(card.verified ? "success" : "warning", `  ${safePreview(card.verify, 200)}`));
   if (card.ci) lines.push(paint(card.ci === "passed" || card.ci === "none" ? "success" : "warning", `  CI: ${safePreview(card.ci, 60)}`));
   if (card.branch) lines.push(paint("dim", `  branch ${safePreview(card.branch, 120)}`));
   if (typeof report.pr === "string" && report.pr) lines.push(paint("dim", `  PR: ${safePreview(report.pr, 200)}`));

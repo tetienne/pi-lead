@@ -108,7 +108,6 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
     diffStat: " src/a.ts | 3 ++-",
     commits: "abc feat: export",
     changedFiles: ["src/a.ts"],
-    verification: { command: "npm test", exitCode: 1, outputTail: "1 failing" },
   };
   const calls: Array<{ state: any; questions: Record<string, any> }> = [];
   const met = createJudge({
@@ -120,7 +119,7 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
   assert.match(JSON.stringify(calls[0]!.questions.criterion2), /Has tests/);
   assert.equal(calls[0]!.state.commits, "abc feat: export");
   assert.equal(calls[0]!.state.changedFiles, "src/a.ts");
-  assert.deepEqual({ ...calls[0]!.state.verification, note: undefined }, { command: "npm test", exitCode: 1, outputTail: "1 failing", note: undefined });
+  assert.equal("verification" in calls[0]!.state, false, "the host runs no verify command to show");
 
   const unmet = (verdict: string | undefined) =>
     createJudge({
@@ -131,12 +130,11 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
   assert.equal(await unmet(undefined).verdict(evidence), "partial");
   assert.equal(await unmet("needs_human").verdict(evidence), "needs_human");
 
-  // No checklist: today's single question, and no verify command is stated as such.
+  // No checklist: today's single question.
   const plain: typeof calls = [];
   const single = createJudge({ ask: fakeAsk({ verdict: { choice: "done", confidence: 0.9 }, criterion1: { noul: 0 } }, plain), config: DEFAULT_CONFIG.jev });
-  assert.equal(await single.verdict({ ...evidence, task: "Add CSV export. AC: test passes.", verification: undefined }), "done");
+  assert.equal(await single.verdict({ ...evidence, task: "Add CSV export. AC: test passes." }), "done");
   assert.deepEqual(Object.keys(plain[0]!.questions), ["verdict"]);
-  assert.match(plain[0]!.state.verification, /^none: no run of the project's verify command/);
 });
 
 test("Jev is never refused for spend: every judgment is asked, and failures fall back", async () => {

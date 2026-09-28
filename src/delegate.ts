@@ -6,7 +6,7 @@ import type { LeadConfig, Tier } from "./config.ts";
 import type { Herdr } from "./herdr.ts";
 import { DEFAULT_TIER, VERDICT_ORDER, type Judge, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
@@ -63,8 +63,6 @@ export type DelegateOutcome = {
     quota?: QuotaError;
     /** Sensitive path patterns the branch touches; a review hint only, never a status change. */
     sensitive?: string[];
-    /** The project's `verify` run; a non-zero exit made `done` at most `partial`. */
-    verification?: { exitCode: number; ms: number };
     /** The worker's own draft PR for a finished ticket. */
     pr?: string;
     /** What the Lead's transcript shows as a card (the model reads `text`). */
@@ -88,11 +86,7 @@ export type ReportCard = {
   commits: number;
   /** git's `N files changed, X insertions(+), Y deletions(-)`. */
   diff?: string;
-  /** The verify line of the report (host text, the command from the config). */
-  verify?: string;
-  /** The verify run passed (exit 0). */
-  verified?: boolean;
-  /** CI status of the draft PR (`none`, `passed`, `failed (N checks)`, `pending`, `not checked (…)`). */
+  /** CI status of the draft PR's head (`none`, `passed`, `failed (N checks)`, `pending`, `not checked (…)`). */
   ci?: string;
   /**
    * The error that ended a failed worker (untrusted). A finished worker's own
@@ -204,7 +198,7 @@ type Worker = WorkerInfo & {
   /** Continues the branch of an attempt that ran out of quota. */
   resumed: boolean;
   reroutes: number;
-  /** A CI or verify partial already went back to the worker: the next one reaches the Lead. */
+  /** A CI partial already went back to the worker: the next one reaches the Lead. */
   sentBack: boolean;
 };
 
@@ -261,21 +255,6 @@ const sleep = (ms: number, signal?: AbortSignal) =>
   });
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-/**
- * Host-generated report line for code work: the command comes from the
- * trusted config and the exit code is a number, so it sits outside the
- * untrusted block; the command's output stays inside it.
- */
-export function verificationLine(verify: string | undefined, verification: Pick<Verification, "exitCode" | "ms"> | undefined): string {
-  if (!verify) return "Unverified: no `verify` command configured for this project.";
-  if (!verification) return `Unverified: the worker's result carries no run of \`${verify}\`.`;
-  if (verification.exitCode === -1) return `Verify: \`${verify}\` did not complete (timed out or could not run).`;
-  const seconds = `${Math.round(verification.ms / 1000)}s`;
-  return verification.exitCode === 0
-    ? `Verify: \`${verify}\` passed (exit 0, ${seconds}).`
-    : `Verify: \`${verify}\` failed (exit ${verification.exitCode}, ${seconds}).`;
-}
 
 /**
  * Delegation is asynchronous: `start` returns as soon as the worker is queued,
@@ -614,7 +593,6 @@ export function createDelegator(deps: DelegateDeps) {
       worktreePath: worker.worktreePath,
       resultPath: worker.resultPath,
       stuckDetection: deps.config.stuckDetection,
-      ...(deps.config.verify ? { verify: deps.config.verify, verifyTimeoutMinutes: deps.config.verifyTimeoutMinutes } : {}),
     };
     const taskPath = join(worker.taskDir, "task.json");
     await writeFile(taskPath, JSON.stringify(task, null, 2));
@@ -672,28 +650,24 @@ export function createDelegator(deps: DelegateDeps) {
   });
 
   const settle = async (worker: Worker, result: WorkerResult) => {
-    // Only a run of this Lead's own command counts; the command shown comes from the config, not the result file.
-    const verify = deps.config.verify;
-    const verification = verify && result.verification?.command === verify ? result.verification : undefined;
     const claimsProgress = WRITES_CODE.includes(worker.kind) && (result.status === "done" || result.status === "partial");
     const collected = await deps.workspace.collect({
       repoRoot: worker.repoRoot!,
       branch: worker.branch!,
       base: worker.base!,
     });
-    const verifyFailed = verification !== undefined && verification.exitCode !== 0;
 
     // The worker itself pushed, opened the PR and watched CI before calling finish; the host makes
     // one non-watching check of it. A detached HEAD (no baseBranch) means the worker was never asked to publish.
     let pr: Awaited<ReturnType<typeof deps.workspace.prChecks>> | undefined;
-    if (result.status === "done" && !verifyFailed && PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined) {
+    if (result.status === "done" && PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined) {
       pr = await deps.workspace.prChecks({ repoRoot: worker.repoRoot!, branch: worker.remoteBranch! });
       // Checks run on the PR's head: green on an older commit is not green on the branch.
       if (pr.url !== undefined && pr.state !== "error" && pr.head !== collected.head) pr = { ...pr, state: "pending", failed: [] };
     }
-    // Verify passed (or none is configured) and CI is green on the head (or runs no checks): the
-    // host has proven the work, and no model may downgrade it.
-    const proven = pr?.url !== undefined && (pr.state === "pass" || pr.state === "none") && (!verify || verification?.exitCode === 0);
+    // A PR is open and CI is green on its head (or the repository runs no checks): the host has
+    // proven the work, and no model may downgrade it.
+    const proven = pr?.url !== undefined && (pr.state === "pass" || pr.state === "none");
     const jevVerdict = proven
       ? undefined
       : await deps.judge.verdict({
@@ -703,12 +677,11 @@ export function createDelegator(deps: DelegateDeps) {
           diffStat: collected.diffStat,
           commits: collected.commits,
           changedFiles: collected.changedFiles,
-          ...(verification ? { verification: { command: verification.command, exitCode: verification.exitCode, outputTail: verification.outputTail } } : {}),
         });
-    // Trust the more pessimistic of the worker and Jev; a failed verify run makes `done` at most `partial` (ADR 0002).
+    // Trust the more pessimistic of the worker and Jev.
     const judged =
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
-    let status = judged === "done" && verifyFailed ? "partial" : judged;
+    let status = judged;
     const sensitive = sensitivePatterns(collected.changedFiles);
 
     // Only a `done` report is capped by its PR and CI.
@@ -716,10 +689,11 @@ export function createDelegator(deps: DelegateDeps) {
     if (status !== "done") pr = undefined;
     if (pr) {
       if (pr.state === "error") {
-        status = "partial"; // gh could not be read: CI unverified
+        status = "partial"; // gh could not be read: CI not checked
         ci = `not checked (${pr.error})`;
       } else if (!pr.url) {
         status = "partial"; // done reported, but no PR is open on that branch
+        ci = "not checked (no PR)";
       } else if (pr.state === "pass") {
         ci = "passed";
       } else if (pr.state === "none") {
@@ -728,26 +702,28 @@ export function createDelegator(deps: DelegateDeps) {
         status = "partial"; // still failing or pending: cap the report
         ci = pr.state === "fail" ? `failed (${pr.failed.length} check${pr.failed.length === 1 ? "" : "s"})` : "pending";
       }
+    } else if (claimsProgress) {
+      // Code work the host checked nothing of: say so rather than stay silent.
+      ci = PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined ? "not checked (not done)" : "not checked (no PR)";
     }
 
     // Capped only by the host's own evidence (the worker and Jev said done): the worker gets that
     // evidence and fixes it itself, once, before the Lead hears about it.
     const ciRed = pr?.url !== undefined && (pr.state === "fail" || pr.state === "pending") ? pr : undefined;
-    if (judged === "done" && status === "partial" && (verifyFailed || ciRed) && !worker.sentBack) {
-      const evidence = verifyFailed
-        ? [verificationLine(verify, verification), ...(verification?.outputTail ? ["Output (tail):", verification.outputTail] : [])]
-        : ciRed!.state === "fail"
-          ? [`CI is not green on ${ciRed!.url}. Failed checks:`, ...ciRed!.failed.map((check) => `${check.name} (${check.link})`)]
-          : ciRed!.head === collected.head
-            ? [`CI is not green on ${ciRed!.url}: its checks are still pending.`]
-            : [`CI is not green on ${ciRed!.url}: the PR head is ${ciRed!.head ?? "unknown"}, not your branch head ${collected.head}; push your branch.`];
+    if (judged === "done" && status === "partial" && ciRed && !worker.sentBack) {
+      const evidence =
+        ciRed.state === "fail"
+          ? [`CI is not green on ${ciRed.url}. Failed checks:`, ...ciRed.failed.map((check) => `${check.name} (${check.link})`)]
+          : ciRed.head === collected.head
+            ? [`CI is not green on ${ciRed.url}: its checks are still pending.`]
+            : [`CI is not green on ${ciRed.url}: the PR head is ${ciRed.head ?? "unknown"}, not your branch head ${collected.head}; push your branch.`];
       const unsent = await relay(
         worker,
         ["The host capped your finish to partial:", ...evidence, "Fix it, commit (push and wait for CI again if you published), then call `finish` again."].join("\n"),
       );
       if (unsent === undefined) {
         worker.sentBack = true;
-        progress(`"${worker.title}": ${verifyFailed ? "verify failed" : ciRed!.state === "fail" ? "CI failed" : "CI pending"}; sent back to the worker`);
+        progress(`"${worker.title}": ${ciRed.state === "fail" ? "CI failed" : "CI pending"}; sent back to the worker`);
         return;
       }
     }
@@ -791,11 +767,9 @@ export function createDelegator(deps: DelegateDeps) {
       text: [
         ...header(worker),
         `Status: ${status}` +
-          (jevVerdict && jevVerdict !== result.status ? ` (worker said ${result.status}, Jev said ${jevVerdict})` : "") +
-          (verifyFailed && judged === "done" ? " (verify failed)" : ""),
+          (jevVerdict && jevVerdict !== result.status ? ` (worker said ${result.status}, Jev said ${jevVerdict})` : ""),
         // Host-written; check names and links (repo-controlled) stay inside the untrusted block below.
         ...(ci ? [`CI: ${ci}`] : []),
-        ...(claimsProgress ? [verificationLine(verify, verification)] : []),
         ...(pr?.url ? [`PR: ${pr.url}`] : []),
         `Branch: ${worker.branch}`,
         `Head: ${collected.head}`,
@@ -808,7 +782,6 @@ export function createDelegator(deps: DelegateDeps) {
         ...(collected.commits ? ["", "Commits:", unmarked(collected.commits)] : []),
         ...(collected.diffStat ? ["", "Diff stat:", unmarked(collected.diffStat)] : []),
         ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
-        ...(verification?.outputTail ? ["", "Verify output (tail):", unmarked(verification.outputTail)] : []),
         ...(pr?.failed.length ? ["", "CI checks failed:", unmarked(pr.failed.map((check) => `${check.name} (${check.link})`).join("\n"))] : []),
         "</worker-report>",
         // Host-generated from the fixed pattern list, so it sits outside the block; worker-chosen file names stay inside.
@@ -825,14 +798,12 @@ export function createDelegator(deps: DelegateDeps) {
         ...(jevVerdict ? { jevVerdict } : {}),
         ...(result.quota ? { quota: result.quota } : {}),
         ...(sensitive.length ? { sensitive } : {}),
-        ...(verification ? { verification: { exitCode: verification.exitCode, ms: verification.ms } } : {}),
         ...(pr?.url ? { pr: pr.url } : {}),
         card: {
           ...cardBase(worker),
           ...(worker.branch ? { branch: worker.branch } : {}),
           commits: collected.commits ? collected.commits.trim().split("\n").length : 0,
           ...(collected.diffStat.trim() ? { diff: collected.diffStat.trim().split("\n").at(-1)!.trim() } : {}),
-          ...(claimsProgress ? { verify: verificationLine(verify, verification), verified: verification?.exitCode === 0 } : {}),
           ...(ci ? { ci } : {}),
           next,
         },

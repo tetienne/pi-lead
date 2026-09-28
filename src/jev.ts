@@ -1,7 +1,6 @@
 import { choice, noul, score, TypeSafeClient, type Fetch } from "@typesafe-ai/sdk";
 
 import type { LeadConfig, Tier } from "./config.ts";
-import type { Verification } from "./protocol.ts";
 
 /**
  * Jev answers closed-set questions; this module maps each answer to a
@@ -51,11 +50,6 @@ export type Judge = {
     commits: string;
     /** Changed paths since `base` (`Workspace.collect`), collected on the host. */
     changedFiles: string[];
-    /**
-     * The project's `verify` command, run by host-side code after the last
-     * commit; the worker controls the repository, so its output is worker text.
-     */
-    verification?: Pick<Verification, "command" | "exitCode" | "outputTail">;
   }): Promise<WorkerVerdict | undefined>;
   overlap(a: string, b: string): Promise<boolean | undefined>;
 };
@@ -241,11 +235,11 @@ export function createJudge(options: {
       return judged;
     },
 
-    async verdict({ task, reported, summary, diffStat, commits, changedFiles, verification }) {
+    async verdict({ task, reported, summary, diffStat, commits, changedFiles }) {
       const labels = ["done", "partial", "blocked", "needs_human"] as const;
       const criteria = acceptanceCriteria(task);
       const questions: Record<string, unknown> = {
-        verdict: choice("Given the ticket, the worker's report and the evidence (commits, changed files, verification run), what is the real state of the work?", {
+        verdict: choice("Given the ticket, the worker's report and the evidence (commits, changed files), what is the real state of the work?", {
           done: "The ticket's acceptance criteria are met and verified.",
           partial: "Useful progress, but some acceptance criteria are not met or not verified.",
           blocked: "The worker could not proceed because of a technical obstacle.",
@@ -266,15 +260,6 @@ export function createJudge(options: {
           commits: clip(commits, 3_000),
           changedFiles: clip(changedFiles.join("\n"), 3_000),
           diffStat: clip(diffStat, 3_000),
-          // The command and exit code are the host's; the output was produced by the worker.
-          verification: verification
-            ? {
-                command: clip(verification.command, 500),
-                exitCode: verification.exitCode,
-                outputTail: clip(verification.outputTail, 2_000),
-                note: "the project's verify command, run by PI Lead in the worker's worktree after its last commit; -1 means it did not complete",
-              }
-            : "none: no run of the project's verify command for this result",
         },
         questions,
       );

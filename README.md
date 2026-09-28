@@ -23,7 +23,7 @@ you ─► Lead (Pi, your tab)
                                  → Herdr worktree workspace (no focus), worker Pi in it
                                  worker Pi: runs on the host, /skill:implement …
                                  worker pushes, opens a draft PR, gets CI green, calls finish
-                                 Jev checks the verdict (unless verify and CI proved it), worktree removed (branch kept)
+                                 Jev checks the verdict (unless the PR's CI proved it), worktree removed (branch kept)
                                  (delegate returns at once; the result comes back as a message)
         worker tool         → list workers, relay an answer to one waiting on you, stop one
 ```
@@ -63,9 +63,12 @@ you ─► Lead (Pi, your tab)
   still failing or pending, caps the report to `partial` instead of `done`.
   Checks count only on the worker's branch head: a PR whose head is another
   commit counts as pending. A report capped only because CI failed or is
-  pending, or because `verify` failed, goes back to the same worker once,
-  automatically, with the host's evidence; you hear about it only if the next
-  report is still not `done`.
+  pending goes back to the same worker once, automatically, with the host's
+  evidence; you hear about it only if the next report is still not `done`.
+  When a PR is open and CI passed on its head (or the repository runs no
+  checks), the host has proven the work and Jev's verdict is not asked; other
+  work (a prototype, which opens no PR) is judged by the worker's status and
+  Jev's verdict, the more pessimistic of the two.
 - A **worker** is an interactive Pi session in its own Herdr worktree
   workspace (`herdr worktree create`), running directly on the host on its own
   branch; its
@@ -77,9 +80,7 @@ you ─► Lead (Pi, your tab)
   `AGENTS.md`, plus the repository's own skills and prompts when you trust the
   project; PI Lead adds only its worker extension. Every Pi that PI Lead
   starts runs with `PI_LEAD_ROLE` set, and PI Lead's Lead extension stays
-  inert there, so a worker never becomes a second Lead. When the project names a
-  `verify` command, PI Lead runs it itself when code work finishes (see
-  [Verify](#verify)).
+  inert there, so a worker never becomes a second Lead.
 - **Seeing workers.** Each worker workspace's label starts with its state:
   `○` queued or starting, `●` running, `?` waiting for your answer, `~` partly
   done, `✗` blocked or failed, `✓` done, `-` stopped (e.g. `? Add CSV export`).
@@ -90,7 +91,7 @@ you ─► Lead (Pi, your tab)
   while one waits on you), and events such as "started on…" or "waits for
   overlapping…" appear as dim transcript lines that the model never sees.
   Each result shows in the Lead as a card: verdict, time, model, commits and
-  diff, the verify line, the branch, review hints and next steps, with every
+  diff, what CI the host checked, the branch, review hints and next steps, with every
   line the worker wrote behind a `│` gutter, marked untrusted. Expand it to
   read the full report the model received. The Lead warns at start only when
   workers cannot run (not inside Herdr, or Herdr's Pi integration missing).
@@ -129,10 +130,9 @@ pi install -l git:github.com/tetienne/pi-lead@v0.7.0
 
 Two files, both optional:
 
-- `~/.pi/agent/pi-lead.json` (global): every key except `verify`.
-- `.pi/pi-lead.json` in the project: overrides the global file, key by key,
-  and is the only place for `verify`. It is read only when Pi trusts the
-  project.
+- `~/.pi/agent/pi-lead.json` (global).
+- `.pi/pi-lead.json` in the project: overrides the global file, key by key.
+  It is read only when Pi trusts the project.
 
 Pi trusts a project on its own when nothing in it needs trust: its `.pi` holds
 only `pi-lead.json` and there is no `.agents/skills` in it or a parent folder.
@@ -140,10 +140,9 @@ Otherwise (`.pi/settings.json`, `.pi/extensions`, `.pi/skills`, prompts,
 `.agents/skills` and similar) Pi asks at startup, unless a saved decision or
 `defaultProjectTrust` decides, and print and RPC modes never ask. To trust it
 later, run `/trust` and restart Pi, or start Pi with `--approve` for one run
-(see Pi's `docs/security.md`). A
-setting that is ignored (`verify` in the global file, or the whole project
-file of an untrusted project) is reported
-with a warning when the session starts.
+(see Pi's `docs/security.md`). The
+project file of an untrusted project is ignored, with a warning when the
+session starts.
 
 A global file, for example:
 
@@ -159,8 +158,7 @@ A global file, for example:
   },
   "jev": { "via": "openrouter" },
   "keepFailedWorkers": true,
-  "stuckDetection": true,
-  "verifyTimeoutMinutes": 15
+  "stuckDetection": true
 }
 ```
 
@@ -187,33 +185,11 @@ stopped automatically, and Jev is not involved.
 Workers use your own Pi extensions (a web search extension, for example),
 which they load like the Lead.
 
-### Verify
+### Verification
 
-A trusted project names the command that proves its work in
-`.pi/pi-lead.json` (only there: the global config and untrusted projects
-cannot set it, and PI Lead warns when either tries):
-
-```json
-{ "verify": "npm run typecheck && npm test" }
-```
-
-When an implement, prototype or debug worker calls `finish` with `done` or
-`partial`, PI Lead's worker extension (host-side code, not the model) commits
-what is left, then runs `verify` in the worker's worktree, with the bash tool's
-shell and environment, for at most `verifyTimeoutMinutes`. A
-non-zero exit (or a timeout) makes the result at most `partial`, whatever the
-worker or Jev says; the first such result goes back to the worker once with
-the command, exit code and output tail before it reaches you. The report
-states the command and exit code; the output's tail sits in the untrusted
-worker block and goes to Jev's verdict. When `verify` passed (or none is
-configured) and CI passed on the PR's head (or the repository runs no
-checks), the host has proven the work and Jev's verdict is not asked. Without
-`verify`, the report says the work is unverified.
-
-The worker controls the repository, so it can change what `verify` runs (a
-`package.json` script, a test file): `verify` catches honest mistakes, and the
-sensitive-path review hint (a changed `package.json`, CI, `.pi` and
-similar) points at the dishonest ones. Review both before merging.
+Your project verifies its own work: its git hooks (prek, for example) run
+when the worker commits, and its CI runs on the worker's draft PR, which PI
+Lead checks.
 
 ### Seeing Jev
 

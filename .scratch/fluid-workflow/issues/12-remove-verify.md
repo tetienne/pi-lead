@@ -6,10 +6,12 @@
 
 **Status:** ready-for-agent
 
-- [ ] No `verify` run happens after `finish`; the worker verify module and its tests are removed.
-- [ ] `verify` and `verifyTimeoutMinutes` are gone from the config; old keys in either config file are ignored without a notice (test).
-- [ ] Reports carry no Verify line; the "unverified" wording is replaced by what the host did check (CI on the PR head, or none).
-- [ ] The verify-failed send-back is gone; the CI send-back stays (test).
-- [ ] `finish` still commits with the project's hooks enabled for `done` (existing test kept).
-- [ ] README's Verify section is replaced by one sentence on hooks and CI.
-- [ ] `npm test` and `npm run typecheck` pass.
+- [x] No `verify` run happens after `finish`; the worker verify module and its tests are removed.
+- [x] `verify` and `verifyTimeoutMinutes` are gone from the config; old keys in either config file are ignored without a notice (test).
+- [x] Reports carry no Verify line; the "unverified" wording is replaced by what the host did check (CI on the PR head, or none).
+- [x] The verify-failed send-back is gone; the CI send-back stays (test).
+- [x] `finish` still commits with the project's hooks enabled for `done` (existing test kept).
+- [x] README's Verify section is replaced by one sentence on hooks and CI.
+- [x] `npm test` and `npm run typecheck` pass.
+
+**Resolution:** DONE
