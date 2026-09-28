@@ -17,13 +17,14 @@ import type { Verification } from "./protocol.ts";
 
 export type WorkKind = "implement" | "prototype" | "debug" | "review" | "research";
 export type WorkerVerdict = "done" | "partial" | "blocked" | "needs_human";
-export type FailureKind = "transient" | "environment" | "task_bug" | "needs_info";
-export type ReviewAction = "none" | "fix";
 export type TierJudgment = { tier: Tier; difficulty: number };
-export type ReadinessJudgment = { ready: boolean; missing: string[] };
 
-/** What a Jev call was about; `tier` covers both `modelTier` and `intake`. */
-export const JEV_KINDS = ["tier", "overlap", "verdict", "review", "failure"] as const;
+/**
+ * What a Jev call was about. Older versions also judged `egress`, `review`
+ * severity and `failure` kind: ledger entries of those kinds are no longer
+ * listed, but their spend still counts towards the day's total.
+ */
+export const JEV_KINDS = ["tier", "overlap", "verdict"] as const;
 export type JevKind = (typeof JEV_KINDS)[number];
 
 /**
@@ -47,14 +48,6 @@ export type JevDecision = {
 export type Judge = {
   readonly available: boolean;
   modelTier(input: { task: string; kind: WorkKind }): Promise<TierJudgment | undefined>;
-  /**
-   * Readiness (when asked) and difficulty in one Jev call. Each part is parsed
-   * on its own: a malformed readiness answer leaves the tier intact, and vice versa.
-   */
-  intake(input: { task: string; kind: WorkKind; checkReadiness: boolean }): Promise<{
-    readiness?: ReadinessJudgment;
-    tier?: TierJudgment;
-  }>;
   verdict(input: {
     task: string;
     reported: WorkerVerdict;
@@ -70,8 +63,6 @@ export type Judge = {
      */
     verification?: Pick<Verification, "command" | "exitCode" | "outputTail">;
   }): Promise<WorkerVerdict | undefined>;
-  reviewSeverity(findings: string): Promise<{ severity: number; action: ReviewAction } | undefined>;
-  failureKind(input: { task: string; log: string }): Promise<FailureKind | undefined>;
   overlap(a: string, b: string): Promise<boolean | undefined>;
 };
 
@@ -107,18 +98,6 @@ export function tierForDifficulty(difficulty: number, kind: WorkKind): Tier {
   const tier: Tier = difficulty < 1.5 ? "fast" : difficulty < 2.8 ? "standard" : "deep";
   const order: Tier[] = ["fast", "standard", "deep"];
   return order[Math.max(order.indexOf(floor), order.indexOf(tier))]!;
-}
-
-export const SEVERITY_RUBRIC = [
-  "No findings, or only praise.",
-  "Nits only: naming, formatting, comments.",
-  "Minor issues: small bugs or gaps with an obvious local fix.",
-  "Major issues: incorrect behaviour, missing tests for key paths, or spec mismatch.",
-  "Critical issues: security, data loss, or the change does not do what was asked.",
-] as const;
-
-export function actionForSeverity(severity: number): ReviewAction {
-  return severity < 0.5 ? "none" : "fix";
 }
 
 /** Map a yes-probability to a three-way decision with an uncertainty band. */
@@ -247,24 +226,7 @@ function scoreOf(answer: unknown, levels: number, minConfidence: number): number
   return value;
 }
 
-const READINESS_CHECKS = {
-  acceptance: "Does the ticket state acceptance criteria that a test or command can verify?",
-  bounded: "Is the scope one thin, bounded slice rather than several features or an open-ended goal?",
-  decided: "Are all product and design decisions needed to start already made in the ticket?",
-} as const;
-
 const DIFFICULTY_QUESTION = "How hard is this engineering task for a coding agent?";
-
-function readinessOf(answers: Record<string, unknown> | undefined): ReadinessJudgment | undefined {
-  if (!answers) return undefined;
-  const missing: string[] = [];
-  for (const key of Object.keys(READINESS_CHECKS) as (keyof typeof READINESS_CHECKS)[]) {
-    const probability = noulOf(answers[key]);
-    if (probability === undefined) return undefined;
-    if (band(probability, 0.35, 0.65) === "no") missing.push(key);
-  }
-  return { ready: missing.length === 0, missing };
-}
 
 function tierOf(answer: unknown, kind: WorkKind, minConfidence: number): TierJudgment | undefined {
   const difficulty = scoreOf(answer, DIFFICULTY_RUBRIC.length, minConfidence);
@@ -341,16 +303,13 @@ export function createJudge(options: {
     return isProbability(value) ? { confidence: value } : {};
   };
 
-  const tierDecision = (answer: unknown, kind: WorkKind, judged: TierJudgment | undefined, extra?: string): DecisionInput => {
-    const detail = [extra, judged ? `difficulty ${judged.difficulty.toFixed(1)}/4` : undefined].filter(Boolean).join(", ");
-    return {
-      kind: "tier",
-      outcome: judged ? judged.tier : DEFAULT_TIER,
-      applied: judged ? "jev" : "fallback",
-      ...confidence(answer),
-      ...(detail ? { detail } : {}),
-    };
-  };
+  const tierDecision = (answer: unknown, judged: TierJudgment | undefined): DecisionInput => ({
+    kind: "tier",
+    outcome: judged ? judged.tier : DEFAULT_TIER,
+    applied: judged ? "jev" : "fallback",
+    ...confidence(answer),
+    ...(judged ? { detail: `difficulty ${judged.difficulty.toFixed(1)}/4` } : {}),
+  });
 
   return {
     available: ask !== undefined,
@@ -358,30 +317,8 @@ export function createJudge(options: {
     async modelTier({ task, kind }) {
       const call = await run("tier", { kind, task: clip(task) }, { difficulty: score(DIFFICULTY_QUESTION, DIFFICULTY_RUBRIC) });
       const judged = tierOf(call?.answers?.difficulty, kind, config.minConfidence);
-      emit(call, tierDecision(call?.answers?.difficulty, kind, judged));
+      emit(call, tierDecision(call?.answers?.difficulty, judged));
       return judged;
-    },
-
-    async intake({ task, kind, checkReadiness }) {
-      const call = await run(
-        "tier",
-        { kind, ticket: clip(task) },
-        {
-          ...(checkReadiness
-            ? Object.fromEntries(Object.entries(READINESS_CHECKS).map(([key, question]) => [key, noul(question)]))
-            : {}),
-          difficulty: score(DIFFICULTY_QUESTION, DIFFICULTY_RUBRIC),
-        },
-      );
-      const answers = call?.answers;
-      const readiness = checkReadiness ? readinessOf(answers) : undefined;
-      const tier = tierOf(answers?.difficulty, kind, config.minConfidence);
-      if (readiness && !readiness.ready) {
-        emit(call, { kind: "tier", outcome: "not ready", applied: "jev", detail: `missing ${readiness.missing.join(", ")}` });
-      } else {
-        emit(call, tierDecision(answers?.difficulty, kind, tier, !checkReadiness ? undefined : readiness ? "ready" : "readiness unsure"));
-      }
-      return { ...(readiness ? { readiness } : {}), ...(tier ? { tier } : {}) };
     },
 
     async verdict({ task, reported, summary, diffStat, commits, changedFiles, verification }) {
@@ -440,47 +377,6 @@ export function createJudge(options: {
         emit(call, { ...common, outcome: final, applied: "jev", ...(detail ? { detail } : {}) });
       }
       return final;
-    },
-
-    async reviewSeverity(findings) {
-      const call = await run(
-        "review",
-        { findings: clip(findings) },
-        { severity: score("How severe are the most serious findings in this code review?", SEVERITY_RUBRIC) },
-      );
-      const severity = scoreOf(call?.answers?.severity, SEVERITY_RUBRIC.length, config.minConfidence);
-      const common = { kind: "review" as const, ...confidence(call?.answers?.severity) };
-      if (severity === undefined) {
-        emit(call, { ...common, outcome: "no severity", applied: "fallback" });
-        return undefined;
-      }
-      const action = actionForSeverity(severity);
-      emit(call, { ...common, outcome: action, applied: "jev", detail: `severity ${severity.toFixed(1)}/4` });
-      return { severity, action };
-    },
-
-    async failureKind({ task, log }) {
-      const labels = ["transient", "environment", "task_bug", "needs_info"] as const;
-      const call = await run(
-        "failure",
-        { ticket: clip(task, 4_000), failure: clip(log, 8_000) },
-        {
-          kind: choice("Why did this coding worker fail?", {
-            transient: "A flaky network, rate limit, timeout or crash unrelated to the task; retrying may work.",
-            environment: "Missing tool, dependency or permission in the worker's environment.",
-            task_bug: "The code or tests are genuinely wrong and need diagnosis.",
-            needs_info: "The ticket is unclear or a human decision is missing.",
-          }),
-        },
-      );
-      const kind = choiceOf(call?.answers?.kind, labels, config.minConfidence);
-      emit(call, {
-        kind: "failure",
-        outcome: kind ?? "not transient",
-        applied: kind ? "jev" : "fallback",
-        ...confidence(call?.answers?.kind),
-      });
-      return kind;
     },
 
     async overlap(a, b) {

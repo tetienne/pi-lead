@@ -23,10 +23,7 @@ import type { Workspace } from "../src/workspace.ts";
 const noJudge: Judge = {
   available: false,
   modelTier: async () => undefined,
-  intake: async () => ({}),
   verdict: async () => undefined,
-  reviewSeverity: async () => undefined,
-  failureKind: async () => undefined,
   overlap: async () => undefined,
 };
 
@@ -335,7 +332,7 @@ test("a transient rename failure keeps the glyphs and is retried on the next sta
 
 test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
-    judge: { available: true, intake: async () => ({ tier: { tier: "deep", difficulty: 3.4 } }), verdict: async () => "partial" },
+    judge: { available: true, modelTier: async () => ({ tier: "deep", difficulty: 3.4 }), verdict: async () => "partial" },
   });
   const pending = nextOutcome();
   const started = await delegator.start({ kind: "implement", title: "Hard", task: "t" }, io);
@@ -463,92 +460,37 @@ test("the verify line is host text built from the config and a number", () => {
   assert.equal(verificationLine("npm test", { exitCode: 2, ms: 61_400 }), "Verify: `npm test` failed (exit 2, 61s).");
 });
 
-test("a ticket Jev judges not ready is not delegated unless the user confirmed it", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, { judge: { intake: async () => ({ readiness: { ready: false, missing: ["acceptance"] } }) } });
-  const refused = await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer" }, io);
-  assert.equal(refused.status, "not_ready");
-  assert.match(refused.text, /no verifiable acceptance criteria/);
-  assert.match(refused.text, /gives no reason/);
-  assert.equal(log.length, 0);
-  const pending = nextOutcome();
-  assert.equal((await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer", confirmedReady: true }, io)).status, "started");
-  assert.equal((await pending).status, "done");
-});
-
-test("the implement path asks Jev readiness and difficulty in one call", async (t) => {
+test("a delegated ticket always starts: Jev is asked for the difficulty only", async (t) => {
   const calls: Array<Record<string, unknown>> = [];
   const judge = createJudge({
     ask: async (_state, questions) => {
       calls.push(questions);
-      return {
-        answers: {
-          acceptance: { noul: 0.9 },
-          bounded: { noul: 0.9 },
-          decided: { noul: 0.9 },
-          difficulty: { score: 3.4, confidence: 0.9 },
-        },
-        inputTokens: 100,
-      };
+      return { answers: { difficulty: { score: 3.4, confidence: 0.9 } }, inputTokens: 100 };
     },
     config: DEFAULT_CONFIG.jev,
     ledger: createLedger(join(await mkdtemp(join(tmpdir(), "jev-")), "usage.json")),
   });
   const { delegator, nextOutcome } = await setup(t, { judge: { ...judge, verdict: async () => undefined } });
   const pending = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Hard", task: "t" }, io);
+  const started = await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer" }, io);
+  assert.equal(started.status, "started");
   assert.match(started.text, /tier deep, Jev difficulty 3\.4\/4/);
   assert.equal(calls.length, 1);
-  assert.deepEqual(Object.keys(calls[0]!).sort(), ["acceptance", "bounded", "decided", "difficulty"]);
-  await pending;
+  assert.deepEqual(Object.keys(calls[0]!), ["difficulty"], "no readiness question");
+  assert.equal((await pending).status, "done");
 });
 
-test("confirmed tickets and other kinds skip readiness but Jev still picks the tier", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, {
-    judge: {
-      intake: async () => ({ readiness: { ready: false, missing: ["acceptance"] } }),
-      modelTier: async () => ({ tier: "deep", difficulty: 3.4 }),
-    },
-  });
-  for (const params of [
-    { kind: "implement", title: "Confirmed", task: "t", confirmedReady: true },
-    { kind: "debug", title: "Flaky", task: "t" },
-  ] as const) {
+test("reviews start from the reviewed branch and their findings always go to an implement task", async (t) => {
+  for (const findings of ["SQL injection in search", "Rename foo to bar"]) {
+    const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", findings }] });
     const pending = nextOutcome();
-    const started = await delegator.start(params, io);
-    assert.equal(started.status, "started");
-    assert.match(started.text, /tier deep, Jev difficulty 3\.4\/4/);
-    await pending;
+    await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
+    const outcome = await pending;
+    assert.ok(log.some((line) => line.endsWith("from feature/login")));
+    assert.ok(outcome.text.includes(findings));
+    assert.match(outcome.text, /Review found issues: delegate an implement task .* without asking the user first/);
+    assert.equal("review" in outcome.details, false, "no Jev severity");
   }
-});
-
-test("reviews start from the reviewed branch and report Jev's severity", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, {
-    replies: [{ status: "done", findings: "SQL injection in search" }],
-    judge: { reviewSeverity: async () => ({ severity: 3.8, action: "fix" }) },
-  });
-  const pending = nextOutcome();
-  await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
-  const outcome = await pending;
-  assert.ok(log.some((line) => line.endsWith("from feature/login")));
-  assert.match(outcome.text, /SQL injection/);
-  assert.match(outcome.text, /Review found issues: delegate an implement task .* without asking the user first/);
-});
-
-test("review findings are fixed even when Jev cannot score them", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, { replies: [{ status: "done", findings: "Rename foo to bar" }] });
-  const pending = nextOutcome();
-  await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
-  assert.match((await pending).text, /Review found issues: delegate an implement task/);
-});
-
-test("a praise-only review asks for no fix", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, {
-    replies: [{ status: "done", findings: "Looks good" }],
-    judge: { reviewSeverity: async () => ({ severity: 0.2, action: "none" }) },
-  });
-  const pending = nextOutcome();
-  await delegator.start({ kind: "review", title: "Review login", task: "Review against main", startFrom: "feature/login" }, io);
-  assert.doesNotMatch((await pending).text, /Review found issues/);
 });
 
 test("an unfinished review defers to the user instead of auto-fixing", async (t) => {
@@ -659,6 +601,39 @@ test("a worker whose tab vanished before Pi ran is reported as failed", async (t
   const outcome = await pending;
   assert.equal(outcome.status, "failed");
   assert.match(outcome.text, /worker tab closed before Pi finished/);
+});
+
+test("a failed launch is retried exactly once, without asking Jev", async (t) => {
+  for (const failures of [1, 2]) {
+    const log: Log = [];
+    const herdr = fakeHerdr(log, [{ status: "done" }]);
+    let left = failures;
+    const createWorktree: Herdr["createWorktree"] = async (input) => {
+      if (left-- > 0) {
+        log.push(`create failed ${input.branch}`);
+        throw new Error("worktree create: index.lock exists");
+      }
+      return herdr.createWorktree(input);
+    };
+    const judged: string[] = [];
+    const judge: Partial<Judge> = { available: true, verdict: async () => void judged.push("verdict") };
+    const { delegator, nextOutcome, progress } = await setup(t, { herdr: { ...herdr, createWorktree }, judge });
+    const pending = nextOutcome();
+    assert.equal((await delegator.start({ kind: "debug", title: "x", task: "y" }, io)).status, "started");
+    const outcome = await pending;
+    const attempts = log.filter((line) => line.startsWith("create")).length;
+    assert.equal(attempts, 2, `${failures} failure(s): one launch and one retry`);
+    assert.ok(progress.some((line) => /failed to start; retrying once/.test(line)));
+    if (failures === 1) {
+      assert.equal(outcome.status, "done");
+      assert.deepEqual(judged, ["verdict"]);
+    } else {
+      assert.equal(outcome.status, "failed");
+      assert.match(outcome.text, /index\.lock exists/);
+      assert.doesNotMatch(outcome.text, /failure kind/i);
+      assert.deepEqual(judged, [], "Jev is not asked about a failure");
+    }
+  }
 });
 
 test("a workspace listing without the Lead's own workspace never fails a worker", async (t) => {
@@ -1103,7 +1078,7 @@ test("an implement delegation starts exactly one worker, on the implement route,
 });
 
 test("a trivial implement ticket runs on the fast tier: no scout floor", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, { judge: { available: true, intake: async () => ({ tier: { tier: "fast", difficulty: 0.4 } }) } });
+  const { delegator, nextOutcome } = await setup(t, { judge: { available: true, modelTier: async () => ({ tier: "fast", difficulty: 0.4 }) } });
   const pending = nextOutcome();
   const started = await delegator.start({ kind: "implement", title: "Typo", task: "t" }, io);
   assert.match(started.text, /tier fast/);

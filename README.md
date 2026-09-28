@@ -8,7 +8,7 @@ workspaces on a model chosen by [Jev](https://docs.typesafe.ai).
 
 No commands. Ask "how does the session store work?" and you get an answer.
 Say "let's add CSV export" and the Lead reads Matt's own router, `ask-matt`,
-grills you, writes a spec and tickets, then delegates each ready ticket.
+grills you, writes a spec and tickets, then delegates each ticket.
 
 ## How it works
 
@@ -19,7 +19,7 @@ you ─► Lead (Pi, your tab)
                               triage, wayfinder… (in the conversation)
         implement / prototype / diagnosing-bugs / code-review / research
                             → delegate tool
-                                 Jev: ticket ready? how hard? → model + thinking level
+                                 Jev: how hard? → model + thinking level
                                  → Herdr worktree workspace (no focus), worker Pi in it
                                  worker Pi: runs on the host, /skill:implement …
                                  worker pushes, opens a draft PR, gets CI green, calls finish
@@ -87,9 +87,9 @@ you ─► Lead (Pi, your tab)
   workers cannot run (not inside Herdr, or Herdr's Pi integration missing).
   Worker workspaces need Herdr 0.9.1 or later (`worktree create`,
   `notification show`, `--seq`).
-- **Jev** answers small closed questions (difficulty, readiness, verdict,
-  review severity, failure kind, ticket overlap) and code maps each answer
-  to an action. Without a key, documented defaults apply.
+- **Jev** answers small closed questions (difficulty, verdict, ticket
+  overlap) and code maps each answer to an action. Without a key, documented
+  defaults apply.
 
 Design record: [ADR 0001](docs/adr/0001-lead-is-a-tool-driven-conversation.md),
 [ADR 0002](docs/adr/0002-bound-jev-judgments-with-policy.md),

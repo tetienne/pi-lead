@@ -54,6 +54,13 @@ test("the worker tool takes no scope widening: list, message or stop only", () =
   assert.deepEqual(Object.keys(worker.parameters.properties).sort(), ["action", "id", "message"]);
 });
 
+test("delegate has no readiness override", () => {
+  const pi = fakePi();
+  lead(pi.api as any);
+  const delegate = pi.tools.find((tool) => tool.name === "delegate")!;
+  assert.deepEqual(Object.keys(delegate.parameters.properties).sort(), ["kind", "startFrom", "task", "title"]);
+});
+
 test("worker reports render as a card, and fall back to Pi's plain view without one", () => {
   const pi = fakePi();
   lead(pi.api as any);

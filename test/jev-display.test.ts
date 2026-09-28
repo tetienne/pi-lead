@@ -63,6 +63,7 @@ test("/jev prints today's totals by kind, the budget left and the session's last
 
 test("only well-formed stored entries are rendered", () => {
   assert.ok(isDecision(decision({})));
+  assert.ok(isDecision({ kind: "failure", outcome: "transient", applied: "jev", at: 0 }), "a kind this version no longer asks about");
   assert.ok(!isDecision(undefined));
   assert.ok(!isDecision({ kind: "tier", outcome: 3, applied: "jev" }));
   assert.ok(!isDecision({ kind: "tier", outcome: "x", applied: "maybe" }));

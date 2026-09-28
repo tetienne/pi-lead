@@ -267,7 +267,7 @@ export default function lead(pi: ExtensionAPI) {
     promptSnippet: "delegate: start implement/prototype/debug/review/research work in a background worker",
     promptGuidelines: [
       "Pass the complete ticket or request in `task`; the worker does not see this conversation.",
-      "Only use kind implement for a ready ticket; shape vague ideas with the user first.",
+      "Use kind implement for a ticket, not a vague idea; shape ideas with the user first.",
       "delegate does not wait: keep talking with the user; worker results arrive as messages.",
     ],
     parameters: Type.Object({
@@ -275,13 +275,10 @@ export default function lead(pi: ExtensionAPI) {
       title: Type.String({ description: "Short title, used for the tab and branch name" }),
       task: Type.String({ description: "Self-contained ticket, symptom, review scope or research question" }),
       startFrom: Type.Optional(Type.String({ description: "Local branch to start from (the branch to review)" })),
-      confirmedReady: Type.Optional(
-        Type.Boolean({ description: "The user explicitly confirmed the ticket is ready although Jev doubted it" }),
-      ),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
-      // Jev's intake and difficulty call can take a few seconds: say what the wait is.
+      // Jev's difficulty call can take a few seconds: say what the wait is.
       // One shared slot: the last of parallel delegations restores Pi's default.
       if (ctx.hasUI && delegating++ === 0) ctx.ui.setWorkingMessage("Sizing up the ticket and picking a model…");
       let started: StartResult;

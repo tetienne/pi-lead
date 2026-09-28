@@ -27,7 +27,6 @@ export type ReportDetails = {
   status?: unknown;
   reported?: WorkerVerdict;
   jevVerdict?: WorkerVerdict;
-  review?: { severity: number; action: string };
   sensitive?: string[];
   pr?: string;
   card?: ReportCard;
@@ -145,10 +144,6 @@ export function renderCard(details: unknown, content: string, expanded: boolean,
   if (work.length) lines.push(`  ${work.join(" · ")}`);
   if (card.verify) lines.push(paint(card.verified ? "success" : "warning", `  ${safePreview(card.verify, 200)}`));
   if (card.ci) lines.push(paint(card.ci === "passed" || card.ci === "none" ? "success" : "warning", `  CI: ${safePreview(card.ci, 60)}`));
-  const review = report.review;
-  if (review && typeof review.severity === "number" && typeof review.action === "string") {
-    lines.push(`  Jev review severity ${review.severity.toFixed(1)}/4 → ${safePreview(review.action, 20)}`);
-  }
   if (card.branch) lines.push(paint("dim", `  branch ${safePreview(card.branch, 120)}`));
   if (typeof report.pr === "string" && report.pr) lines.push(paint("dim", `  PR: ${safePreview(report.pr, 200)}`));
   if (Array.isArray(report.sensitive) && report.sensitive.length) {

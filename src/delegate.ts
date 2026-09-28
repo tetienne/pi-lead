@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
 import type { Herdr } from "./herdr.ts";
-import { DEFAULT_TIER, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
+import { DEFAULT_TIER, VERDICT_ORDER, type Judge, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, PUBLISHED_KINDS, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
@@ -19,8 +19,6 @@ export type DelegateParams = {
   task: string;
   /** Local branch to start from (reviews start from the branch under review). */
   startFrom?: string;
-  /** The user explicitly confirmed the ticket is ready despite Jev's doubts. */
-  confirmedReady?: boolean;
 };
 
 /** What the Lead's session knows when a task is delegated. */
@@ -62,8 +60,6 @@ export type DelegateOutcome = {
   details: {
     reported?: WorkerVerdict;
     jevVerdict?: WorkerVerdict;
-    review?: { severity: number; action: ReviewAction };
-    failure?: FailureKind;
     quota?: QuotaError;
     /** Sensitive path patterns the branch touches; a review hint only, never a status change. */
     sensitive?: string[];
@@ -110,7 +106,6 @@ export type ReportCard = {
 
 export type StartResult =
   | { status: "started"; worker: WorkerInfo; text: string }
-  | { status: "not_ready"; missing: string[]; text: string }
   | { status: "failed"; text: string };
 
 export type WorkerCommand = (input: {
@@ -696,7 +691,6 @@ export function createDelegator(deps: DelegateDeps) {
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     const verifyFailed = verification !== undefined && verification.exitCode !== 0;
     let status = judged === "done" && verifyFailed ? "partial" : judged;
-    const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
     const sensitive = sensitivePatterns(collected.changedFiles);
 
     // The worker itself pushed, opened the PR and watched CI before calling finish; the host makes
@@ -735,7 +729,7 @@ export function createDelegator(deps: DelegateDeps) {
     if (pr?.state === "error") next.push(`PI Lead could not read the PR or its checks (${pr.error}); tell the user.`);
     else if (pr && !pr.url) next.push(`The worker reported done but opened no PR on branch ${worker.remoteBranch}; tell the user.`);
     if (pr?.url && (pr.state === "fail" || pr.state === "pending")) next.push(`CI is not green on ${pr.url}; tell the user.`);
-    if (status === "done" && worker.kind === "review" && result.findings && review?.action !== "none") next.push("Review found issues: delegate an implement task with these findings, starting from the reviewed branch, without asking the user first.");
+    if (status === "done" && worker.kind === "review" && result.findings) next.push("Review found issues: delegate an implement task with these findings, starting from the reviewed branch, without asking the user first.");
     if (status === "done" && worker.kind !== "review") {
       next.push(pr?.url ? `PR opened: ${pr.url}.` : `Work is on local branch ${worker.branch}; nothing was pushed or merged.`);
     }
@@ -786,13 +780,11 @@ export function createDelegator(deps: DelegateDeps) {
               `Host check: review these before merging; they can run on your machine or in CI, or steer future agents: ${sensitive.join(", ")}.`,
             ]
           : []),
-        ...(review ? ["", `Jev review severity: ${review.severity.toFixed(1)}/4 → ${review.action}`] : []),
         ...(next.length ? ["", "Next:", ...next.map((line) => `- ${line}`)] : []),
       ].join("\n"),
       details: {
         reported: result.status,
         ...(jevVerdict ? { jevVerdict } : {}),
-        ...(review ? { review } : {}),
         ...(result.quota ? { quota: result.quota } : {}),
         ...(sensitive.length ? { sensitive } : {}),
         ...(verification ? { verification: { exitCode: verification.exitCode, ms: verification.ms } } : {}),
@@ -853,7 +845,6 @@ export function createDelegator(deps: DelegateDeps) {
       });
       return;
     }
-    const failure = await deps.judge.failureKind({ task: worker.params.task, log: errorText(error) });
     const keep = deps.config.keepFailedWorkers;
     worker.verdict = undefined;
     setState(worker, "failed");
@@ -866,13 +857,11 @@ export function createDelegator(deps: DelegateDeps) {
       text: [
         ...header(worker),
         `Worker failed: ${errorText(error)}`,
-        ...(failure ? [`Jev failure kind: ${failure}`] : []),
         ...(keep && worker.taskDir
           ? [`Kept for inspection: ${worker.taskDir} (its tab closes when this Lead session ends; the directory stays).`]
           : []),
       ].join("\n"),
       details: {
-        ...(failure ? { failure } : {}),
         card: {
           ...cardBase(worker),
           commits: 0,
@@ -903,7 +892,7 @@ export function createDelegator(deps: DelegateDeps) {
     }
   };
 
-  /** Background life of one worker: slot, launch (one retry when transient), first result. */
+  /** Background life of one worker: slot, launch (one retry on failure), first result. */
   const drive = async (worker: Worker) => {
     try {
       await takeSlot(worker);
@@ -914,8 +903,7 @@ export function createDelegator(deps: DelegateDeps) {
           break;
         } catch (error) {
           if (worker.controller.signal.aborted || worker.attempts > 1) throw error;
-          if ((await deps.judge.failureKind({ task: worker.params.task, log: errorText(error) })) !== "transient") throw error;
-          progress(`"${worker.title}" failed to start transiently; retrying once`);
+          progress(`"${worker.title}" failed to start; retrying once`);
           await closeAndClean(worker);
           worker.base = undefined; // the retry is a fresh start: HEAD may have moved
         }
@@ -947,29 +935,7 @@ export function createDelegator(deps: DelegateDeps) {
       if (params.startFrom !== undefined && !isSafeBranchName(params.startFrom)) {
         return { status: "failed", text: `"${params.startFrom}" is not a valid local branch name.` };
       }
-      const checkReadiness = params.kind === "implement" && !params.confirmedReady;
-      // One Jev round trip when readiness is checked; the tier alone otherwise.
-      const { readiness, tier: judged } = checkReadiness
-        ? await deps.judge.intake({ task: params.task, kind: params.kind, checkReadiness })
-        : { readiness: undefined, tier: await deps.judge.modelTier({ task: params.task, kind: params.kind }) };
-      if (readiness && !readiness.ready) {
-        const reasons: Record<string, string> = {
-          acceptance: "no verifiable acceptance criteria",
-          bounded: "scope is not one bounded slice",
-          decided: "open product/design decisions",
-        };
-        return {
-          status: "not_ready",
-          missing: readiness.missing,
-          text: [
-            `Not delegated: Jev judged the ticket not ready (${readiness.missing.map((m) => reasons[m] ?? m).join("; ")}).`,
-            "Jev answers yes/no per criterion and gives no reason: it cannot name the gap.",
-            "Jev saw only the `task` text: if it was a summary or a reference, delegate again with the full ticket.",
-            "Otherwise check the ticket yourself against that criterion and tell the user what you found: the gap, or that you see none.",
-            "If the user confirms it is ready as is, delegate again with confirmedReady: true; otherwise clarify (grilling), then to-spec / to-tickets.",
-          ].join("\n"),
-        };
-      }
+      const judged = await deps.judge.modelTier({ task: params.task, kind: params.kind });
       const tier: Tier = judged?.tier ?? DEFAULT_TIER;
       const { lead, available } = routable(io);
       const resolved = resolveRoute(tier, deps.config.tiers, lead, available);
