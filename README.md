@@ -68,10 +68,13 @@ you ─► Lead (Pi, your tab)
   branch; its
   `read/write/edit/bash/ls/find/grep` tools have the same network and
   filesystem access as the user running the Lead (see
-  [ADR 0005](docs/adr/0005-run-workers-on-the-host.md)). A worker is a Pi like
-  the Lead: same skills, prompts and `AGENTS.md`, plus the repository's own
-  skills when you trust the project, but no host-side extensions except
-  Herdr's Pi integration (working/idle badges). It can search the web with
+  [ADR 0005](docs/adr/0005-run-workers-on-the-host.md)). A worker is plain
+  Pi, like the Lead: your own global extensions (web, MCP and other tools,
+  Herdr's Pi integration for working/idle badges), same skills, prompts and
+  `AGENTS.md`, plus the repository's own skills and prompts when you trust the
+  project; PI Lead adds only its worker extension. Every Pi that PI Lead
+  starts runs with `PI_LEAD_ROLE` set, and PI Lead's Lead extension stays
+  inert there, so a worker never becomes a second Lead. It can search the web with
   `web_search` through your ChatGPT subscription (see
   [Web access for workers](#web-access-for-workers)). When the project names a
   `verify` command, PI Lead runs it itself when code work finishes (see
@@ -180,9 +183,10 @@ stopped automatically, and Jev is not involved.
 ### Web access for workers
 
 A worker has the same network access as the user running the Lead, so it can
-already reach npm, PyPI, GitHub, Context7 and the like directly. It loads no
-host-side extensions though, so web tools installed in your own Pi
-(pi-web-access, context-mode, an MCP server…) do not reach it.
+already reach npm, PyPI, GitHub, Context7 and the like directly, and it loads
+your own global extensions, so web tools installed in your Pi (pi-web-access,
+context-mode, an MCP server…) work there too. Extensions of the project itself
+(`.pi/extensions`, project packages) do not load in a worker.
 
 **`web_search` (built in).** Every worker has a `web_search` tool when you are
 logged in to Pi with a ChatGPT subscription (`/login` → OpenAI Codex). It sends

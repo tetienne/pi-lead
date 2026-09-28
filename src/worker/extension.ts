@@ -31,9 +31,10 @@ function runShell(command: string, cwd: string): Promise<{ exitCode: number; std
 }
 
 /**
- * Loaded only into worker Pi processes (`--no-extensions -e`). The worker runs
- * on the host, cwd its own git worktree (`task.worktreePath`): its tools are
- * Pi's own built-in ones, with no isolation from the host.
+ * Loaded only into worker Pi processes (`-e`), beside the user's own global
+ * extensions. The worker runs on the host, cwd its own git worktree
+ * (`task.worktreePath`): Pi's built-in tools and the user's, with no
+ * isolation from the host.
  */
 export default function worker(pi: ExtensionAPI) {
   pi.registerFlag("pi-lead-task", { type: "string", description: "PI Lead worker task file" });

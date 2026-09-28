@@ -6,9 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] The worker command has no `--no-extensions` and does not name Herdr's extension (test).
-- [ ] The worker's launch script sets the PI Lead marker (test).
-- [ ] With the marker set, the Lead extension registers no tools, commands, prompt guidance or handlers (test).
-- [ ] Without the marker, the Lead registers as today (test).
-- [ ] README "worker" section describes workers as plain Pi with the user's extensions.
-- [ ] `npm test` and `npm run typecheck` pass.
+**Resolution:** DONE
+
+- [x] The worker command has no `--no-extensions` and does not name Herdr's extension (test).
+- [x] The worker's launch script sets the PI Lead marker (test).
+- [x] With the marker set, the Lead extension registers no tools, commands, prompt guidance or handlers (test).
+- [x] Without the marker, the Lead registers as today (test).
+- [x] README "worker" section describes workers as plain Pi with the user's extensions.
+- [x] `npm test` and `npm run typecheck` pass.

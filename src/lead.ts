@@ -14,6 +14,7 @@ import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
 import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision } from "./jev-display.ts";
+import { ROLE_ENV } from "./protocol.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
 import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
@@ -44,8 +45,8 @@ function piInvocation(): string[] {
 
 /**
  * Herdr's own Pi integration (working/idle/blocked, session identity), written
- * by `herdr integration install pi`. It talks to the Herdr socket, which a
- * worker Pi on the host reaches like the Lead.
+ * by `herdr integration install pi`. Only checked for the startup warning:
+ * workers load it with the user's other global extensions.
  */
 export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefined {
   const path = join(agentDir, "extensions", "herdr-agent-state.ts");
@@ -53,38 +54,33 @@ export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefin
 }
 
 /**
- * A worker is a Pi like the Lead: same package and global skills and prompts,
+ * A worker is a plain Pi like the Lead: the user's global extensions (Herdr's
+ * Pi integration among them), same package and global skills and prompts,
  * plus host copies of the repository's own (see context-snapshot.ts), reads
- * running directly on the host. Code is the exception: project and global
- * extensions are left out, so only the worker extension and Herdr's Pi
- * integration load.
+ * running directly on the host. Only the worker extension is added; the Lead
+ * extension, if installed globally, stays inert under `PI_LEAD_ROLE`.
  */
-export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, resources }) => {
-  const herdr = findHerdrPiExtension();
-  return [
-    ...piInvocation(),
-    "--no-approve",
-    "--no-extensions",
-    "-e",
-    WORKER_EXTENSION,
-    ...(herdr ? ["-e", herdr] : []),
-    "--skill",
-    SKILLS_DIR,
-    ...resources.skills.flatMap((path) => ["--skill", path]),
-    ...resources.prompts.flatMap((path) => ["--prompt-template", path]),
-    ...(resources.appendSystem ? ["--append-system-prompt", resources.appendSystem] : []),
-    "--model",
-    route.model,
-    "--thinking",
-    route.thinking,
-    "--name",
-    label,
-    "--pi-lead-task",
-    taskPath,
-    "--",
-    prompt,
-  ];
-};
+export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, resources }) => [
+  ...piInvocation(),
+  "--no-approve",
+  "-e",
+  WORKER_EXTENSION,
+  "--skill",
+  SKILLS_DIR,
+  ...resources.skills.flatMap((path) => ["--skill", path]),
+  ...resources.prompts.flatMap((path) => ["--prompt-template", path]),
+  ...(resources.appendSystem ? ["--append-system-prompt", resources.appendSystem] : []),
+  "--model",
+  route.model,
+  "--thinking",
+  route.thinking,
+  "--name",
+  label,
+  "--pi-lead-task",
+  taskPath,
+  "--",
+  prompt,
+];
 
 const WORKER_ACTIONS = ["list", "message", "stop"] as const;
 
@@ -95,6 +91,9 @@ const resultText = (result: { content: ReadonlyArray<{ type: string; text?: stri
   result.content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
 
 export default function lead(pi: ExtensionAPI) {
+  // A worker or sub-agent loads the user's extensions, so this one too when
+  // installed globally: it must never become a second Lead.
+  if (process.env[ROLE_ENV]) return;
   let delegator: Delegator | undefined;
   let ui: ExtensionContext["ui"] | undefined;
   let closed = false;

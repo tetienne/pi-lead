@@ -645,7 +645,7 @@ test("a workspace listing without the Lead's own workspace never fails a worker"
   assert.equal(delegator.list()[0]!.state, "running");
 });
 
-test("the launch script and the task carry stuck detection and the Herdr hint", async (t) => {
+test("the launch script and the task carry stuck detection, the Herdr hint and the PI Lead marker", async (t) => {
   const seen: { task?: WorkerTask; script?: string } = {};
   const { delegator, nextOutcome } = await setup(t, { seen });
   const pending = nextOutcome();
@@ -655,6 +655,7 @@ test("the launch script and the task carry stuck detection and the Herdr hint", 
   assert.equal(seen.task?.verify, undefined, "no verify configured");
   assert.ok(!("jev" in seen.task!), "workers never call Jev, so they get none of its settings");
   assert.match(seen.script!, /export HERDR_AGENT=pi/);
+  assert.match(seen.script!, /export PI_LEAD_ROLE=worker/, "a Lead extension loaded in the worker stays inert");
 });
 
 test("a Lead that throws on delivery does not take the watcher down", async (t) => {

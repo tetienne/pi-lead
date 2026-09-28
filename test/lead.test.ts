@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -9,6 +9,9 @@ import { tmpdir } from "node:os";
 import { DELEGATED_SKILLS } from "../src/guidance.ts";
 import lead, { findHerdrPiExtension, startupWarnings, workerCommand } from "../src/lead.ts";
 import { parseWorkerResult, workerPrompt } from "../src/protocol.ts";
+
+// A worker running these tests has the marker set; the Lead under test must not see it.
+delete process.env.PI_LEAD_ROLE;
 
 type Handler = (event: any, ctx?: any) => any;
 
@@ -45,6 +48,29 @@ test("the Lead never intercepts user input: the model answers questions itself",
   assert.ok(!pi.handlers.has("input"), "no input handler");
   assert.deepEqual(pi.commands, ["jev"]);
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker", "git_read"]);
+});
+
+test("in a Pi that PI Lead started, the Lead extension registers nothing", (t) => {
+  const pi = fakePi();
+  const renderers: string[] = [];
+  const api = { ...pi.api, registerEntryRenderer: (type: string) => renderers.push(type), registerMessageRenderer: (type: string) => renderers.push(type) };
+  t.after(() => delete process.env.PI_LEAD_ROLE);
+  for (const role of ["worker", "sub-agent"]) {
+    process.env.PI_LEAD_ROLE = role;
+    lead(api as any);
+  }
+  assert.deepEqual(pi.tools, [], "no delegate, worker or git_read");
+  assert.deepEqual(pi.commands, [], "no /jev");
+  assert.deepEqual([...pi.handlers.keys()], [], "no guidance, skills or session handlers");
+  assert.deepEqual(renderers, []);
+});
+
+test("without the marker the Lead registers its tools, command and handlers", () => {
+  const pi = fakePi();
+  lead(pi.api as any);
+  assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker", "git_read"]);
+  assert.deepEqual(pi.commands, ["jev"]);
+  assert.deepEqual([...pi.handlers.keys()].sort(), ["before_agent_start", "resources_discover", "session_shutdown", "session_start"]);
 });
 
 test("the worker tool takes no scope widening: list, message or stop only", () => {
@@ -116,7 +142,14 @@ test("the Matt skills ship with the package and are discovered", async () => {
   assert.ok(manifest.files.includes(".agents/skills/"));
 });
 
-test("workers get the Lead's skills plus host copies of the repo's resources, and no extensions", () => {
+test("workers get the Lead's skills plus host copies of the repo's resources, and the user's own extensions", async (t) => {
+  // Herdr's Pi integration is installed: the worker still loads it by discovery, never by name.
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-lead-agent-dir-"));
+  await mkdir(join(agentDir, "extensions"), { recursive: true });
+  await writeFile(join(agentDir, "extensions", "herdr-agent-state.ts"), "");
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  t.after(() => (previous === undefined ? delete process.env.PI_CODING_AGENT_DIR : (process.env.PI_CODING_AGENT_DIR = previous)));
   const base = {
     taskPath: "/tmp/t/task.json",
     prompt: "/skill:implement do it",
@@ -127,7 +160,9 @@ test("workers get the Lead's skills plus host copies of the repo's resources, an
     ...base,
     resources: { skills: ["/tmp/t/resources/agents-skills"], prompts: ["/tmp/t/resources/prompts"], appendSystem: "/tmp/t/resources/APPEND_SYSTEM.md" },
   });
-  for (const flag of ["--no-approve", "--no-extensions"]) assert.ok(argv.includes(flag), flag);
+  assert.ok(argv.includes("--no-approve"));
+  assert.ok(!argv.includes("--no-extensions"), "global extensions (Herdr's Pi integration among them) load like in the Lead");
+  assert.deepEqual(argv.flatMap((arg, i) => (arg === "-e" ? [argv[i + 1]!] : [])).map((path) => basename(path)), ["extension.ts"], "only the worker extension is named");
   assert.ok(!argv.includes("--no-builtin-tools"), "the worker uses Pi's stock tools");
   assert.ok(!argv.includes("--no-skills"), "global skills load like in the Lead");
   assert.match(argv[argv.indexOf("-e") + 1]!, /src\/worker\/extension\.ts$/);

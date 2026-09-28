@@ -3,6 +3,12 @@ import { readFile } from "node:fs/promises";
 import type { WorkKind, WorkerVerdict } from "./jev.ts";
 import type { QuotaError } from "./quota.ts";
 
+/**
+ * Set in every Pi that PI Lead starts (`worker` today); the Lead extension
+ * stays inert wherever it is set, so a worker never becomes a second Lead.
+ */
+export const ROLE_ENV = "PI_LEAD_ROLE";
+
 /** Written by the Lead, read by the worker extension (`--pi-lead-task`). */
 export type WorkerTask = {
   version: 1;

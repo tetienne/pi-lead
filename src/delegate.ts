@@ -6,7 +6,7 @@ import type { LeadConfig, Tier } from "./config.ts";
 import type { Herdr } from "./herdr.ts";
 import { DEFAULT_TIER, VERDICT_ORDER, type Judge, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, PUBLISHED_KINDS, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, workerPrompt, WRITES_CODE, type Verification, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
@@ -642,6 +642,8 @@ export function createDelegator(deps: DelegateDeps) {
         "export GIT_COMMITTER_NAME='PI Lead worker' GIT_COMMITTER_EMAIL='pi-lead-worker@localhost'",
         // Lets Herdr recognise the Pi behind the node process as a Pi agent.
         "export HERDR_AGENT=pi",
+        // The worker loads the user's extensions: this keeps an installed Lead extension inert in it.
+        `export ${ROLE_ENV}=worker`,
         argv.map(shellQuote).join(" "),
         `echo $? > ${shellQuote(worker.exitPath)}`,
         "",
