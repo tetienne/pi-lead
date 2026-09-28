@@ -4,7 +4,7 @@ import type { WorkKind, WorkerVerdict } from "./jev.ts";
 import type { QuotaError } from "./quota.ts";
 
 /**
- * Set in every Pi that PI Lead starts (`worker` today); the Lead extension
+ * Set in every Pi that PI Lead starts (`worker`, `sub-agent`); the Lead extension
  * stays inert wherever it is set, so a worker never becomes a second Lead.
  */
 export const ROLE_ENV = "PI_LEAD_ROLE";
@@ -147,6 +147,39 @@ export function workerPrompt(kind: WorkKind, task: string, publish?: PublishTarg
   ].join("\n");
 }
 
+/**
+ * How the Lead and its workers run the sub-agents Matt's skills ask for:
+ * one non-interactive Pi per sub-agent in a Herdr pane beside the caller.
+ * The quotes split in the completion marker keep the typed command line from
+ * matching `wait-output` before the sub-agent has finished.
+ */
+export const SUB_AGENT_RECIPE = `
+## Sub-agents
+
+When a skill says to spawn, dispatch or fire a sub-agent (code-review's two
+axes, grilling's fact-finding, wayfinder's research,
+improve-codebase-architecture's exploration, codebase-design's
+design-it-twice), run each one as a non-interactive Pi in a Herdr pane beside
+you:
+
+1. Check \`test "\${HERDR_ENV:-}" = 1\`. If it fails, Herdr is unavailable: do
+   the sub-agents' steps yourself, one after the other, in this context, and
+   say so in your output.
+2. Write the sub-agent's complete brief to \`<dir>/prompt.md\` in a fresh
+   \`mktemp -d\` directory: it sees nothing of your context.
+3. \`herdr pane split --current --direction right --cwd "$PWD" --no-focus\`
+   (\`down\` if your pane is narrow), and read the new pane's id from
+   \`.result.pane.pane_id\` in the JSON it prints.
+4. \`herdr pane run <pane-id> "${ROLE_ENV}=sub-agent pi --print --no-session @<dir>/prompt.md > <dir>/report.md 2>&1; echo 'sub-agent-''finished'"\`,
+   with \`<dir>\` written out. Start every sub-agent the step asks for before
+   waiting on any.
+5. \`herdr pane wait-output <pane-id> --match sub-agent-finished --timeout 1800000\`.
+   On a timeout, look with \`herdr pane read <pane-id> --source recent-unwrapped --lines 120\`
+   before deciding.
+6. Read \`<dir>/report.md\` (the sub-agent's final answer, or its error),
+   then \`herdr pane close <pane-id>\`, and carry on with the skill.
+`;
+
 export const WORKER_RULES = `
 ## PI Lead worker
 
@@ -169,4 +202,4 @@ opens your tab.
 - You run unattended: when a skill says to confirm something with the user
   (a seam, an interface), decide from the code and say so in your finish
   summary. Use \`needs_human\` only for what the code cannot answer.
-`;
+${SUB_AGENT_RECIPE}`;

@@ -1,6 +1,8 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { SUB_AGENT_RECIPE } from "./protocol.ts";
+
 /** Skills that execute work; the Lead runs them through `delegate`, never itself. */
 export const DELEGATED_SKILLS = {
   implement: "implement",
@@ -87,9 +89,8 @@ the user; do not inspect runs yourself.
 
 When the workers for every ticket of a spec have reported done, offer the user
 \`/improve-codebase-architecture\` once, scoped to the files those workers
-changed (read them with \`git_read\`); run it here only if they agree, and do
-its exploration step yourself instead of spawning a sub-agent.
-
+changed (read them with \`git_read\`); run it here only if they agree.
+${SUB_AGENT_RECIPE}
 Skill files:
 ${skills.map((skill) => `- ${skill.name}: \`${skill.path}\``).join("\n")}
 `;

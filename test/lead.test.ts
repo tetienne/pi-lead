@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 
 import { DELEGATED_SKILLS } from "../src/guidance.ts";
 import lead, { findHerdrPiExtension, startupWarnings, workerCommand } from "../src/lead.ts";
-import { parseWorkerResult, workerPrompt } from "../src/protocol.ts";
+import { parseWorkerResult, SUB_AGENT_RECIPE, workerPrompt } from "../src/protocol.ts";
 
 // A worker running these tests has the marker set; the Lead under test must not see it.
 delete process.env.PI_LEAD_ROLE;
@@ -127,6 +127,21 @@ test("the workflow guidance is appended to the system prompt", async () => {
   assert.match(result.systemPrompt, /read Matt Pocock's router `[^`]*ask-matt\/SKILL\.md`/);
   assert.match(result.systemPrompt, /`\/diagnosing-bugs` → `delegate` kind `debug`/);
   assert.match(result.systemPrompt, /- to-tickets: `[^`]*to-tickets\/SKILL\.md`/);
+});
+
+test("the guidance starts skill sub-agents as marked, non-interactive Pis in Herdr panes", async () => {
+  const pi = fakePi();
+  lead(pi.api as any);
+  const [handler] = pi.handlers.get("before_agent_start")!;
+  const { systemPrompt } = await handler!({ systemPrompt: "BASE" });
+  assert.ok(systemPrompt.includes(SUB_AGENT_RECIPE));
+  assert.match(SUB_AGENT_RECIPE, /herdr pane split --current --direction right --cwd "\$PWD" --no-focus/);
+  assert.match(SUB_AGENT_RECIPE, /herdr pane run <pane-id> "PI_LEAD_ROLE=sub-agent pi --print --no-session @/);
+  assert.match(SUB_AGENT_RECIPE, /herdr pane wait-output <pane-id> --match/);
+  assert.match(SUB_AGENT_RECIPE, /herdr pane close <pane-id>/);
+  assert.match(SUB_AGENT_RECIPE, /Herdr is unavailable: do\s+the sub-agents' steps yourself, one after the other/);
+  assert.match(SUB_AGENT_RECIPE, /say so in your output/);
+  assert.doesNotMatch(systemPrompt, /instead of spawning a sub-agent/);
 });
 
 test("the Matt skills ship with the package and are discovered", async () => {

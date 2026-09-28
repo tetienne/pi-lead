@@ -6,8 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] The Lead's guidance carries the recipe, using Herdr 0.9.1 commands (`pane split --current --no-focus`, `pane run`, `pane wait-output`) and the marker (test on the guidance text).
-- [ ] The worker rules carry the same recipe (test on the worker prompt/rules).
-- [ ] The guidance no longer tells the Lead to do improve-codebase-architecture's exploration itself instead of a sub-agent.
-- [ ] The recipe says what to do without Herdr (sequential fallback, stated in the output).
-- [ ] `npm test` and `npm run typecheck` pass.
+**Resolution:** DONE
+
+- [x] The Lead's guidance carries the recipe, using Herdr 0.9.1 commands (`pane split --current --no-focus`, `pane run`, `pane wait-output`) and the marker (test on the guidance text).
+- [x] The worker rules carry the same recipe (test on the worker prompt/rules).
+- [x] The guidance no longer tells the Lead to do improve-codebase-architecture's exploration itself instead of a sub-agent.
+- [x] The recipe says what to do without Herdr (sequential fallback, stated in the output).
+- [x] `npm test` and `npm run typecheck` pass.

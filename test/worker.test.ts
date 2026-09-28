@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { parseWorkerResult } from "../src/protocol.ts";
+import { parseWorkerResult, SUB_AGENT_RECIPE } from "../src/protocol.ts";
 import worker, { COMMIT_LEFTOVERS } from "../src/worker/extension.ts";
 import { runVerification, shouldVerify, VERIFY_OUTPUT_TAIL } from "../src/worker/verify.ts";
 
@@ -90,6 +90,7 @@ test("the worker only adds finish and web_search; stock file/shell tools come fr
   assert.match(systemPrompt, new RegExp(`Current working directory: ${process.cwd()}`));
   assert.match(systemPrompt, /call `finish` with an honest status/);
   assert.match(systemPrompt, /"\[PI Lead\]" come from the Lead/);
+  assert.ok(systemPrompt.includes(SUB_AGENT_RECIPE), "workers start sub-agents the same way as the Lead");
 });
 
 test("a run that ends on a provider error reports it to the Lead instead of idling", async () => {
