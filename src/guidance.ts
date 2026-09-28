@@ -38,8 +38,7 @@ export function leadGuidance(skillsDir: string): string {
   const delegated = Object.entries(DELEGATED_SKILLS)
     .map(([skill, kind]) => `\`/${skill}\` → \`delegate\` kind \`${kind}\``)
     .join("; ");
-  return `
-## PI Lead
+  return `## PI Lead
 
 You are the Lead engineer of this repository. The user talks to you in plain
 language; there are no commands to learn.
@@ -109,8 +108,9 @@ when the user asks for stacking, start it from a blocker's branch with
 When the workers for every ticket of a spec have reported done, offer the user
 \`/improve-codebase-architecture\` once, scoped to the files those workers
 changed; run it here only if they agree.
+
 ${SUB_AGENT_RECIPE}
+
 Skill files:
-${skills.map((skill) => `- ${skill.name}: \`${skill.path}\``).join("\n")}
-`;
+${skills.map((skill) => `- ${skill.name}: \`${skill.path}\``).join("\n")}`;
 }

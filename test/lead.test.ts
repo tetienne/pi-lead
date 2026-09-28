@@ -115,16 +115,19 @@ test("Jev decisions render as dim transcript lines, old ones included", () => {
   assert.equal(render({ data: { junk: true } }, { expanded: false }, theme), undefined);
 });
 
-test("the workflow guidance is appended to the system prompt", async () => {
+test("the workflow guidance is a system prompt section of its own", async () => {
   const pi = fakePi();
   lead(pi.api as any);
   const [handler] = pi.handlers.get("before_agent_start")!;
-  const result = await handler!({ systemPrompt: "BASE" });
-  assert.match(result.systemPrompt, /^BASE\n/);
-  assert.match(result.systemPrompt, /\*\*Questions\*\*.*answer them\s+directly/s);
-  assert.match(result.systemPrompt, /read Matt Pocock's router `[^`]*ask-matt\/SKILL\.md`/);
-  assert.match(result.systemPrompt, /`\/diagnosing-bugs` → `delegate` kind `debug`/);
-  assert.match(result.systemPrompt, /- to-tickets: `[^`]*to-tickets\/SKILL\.md`/);
+  const event = { systemPromptOptions: { sections: { other: "kept" } } as { sections: Record<string, string> } };
+  assert.equal(await handler!(event), undefined, "the prompt is never replaced wholesale");
+  const section = event.systemPromptOptions.sections.pi_lead!;
+  assert.equal(event.systemPromptOptions.sections.other, "kept");
+  assert.match(section, /^## PI Lead\n/);
+  assert.match(section, /\*\*Questions\*\*.*answer them\s+directly/s);
+  assert.match(section, /read Matt Pocock's router `[^`]*ask-matt\/SKILL\.md`/);
+  assert.match(section, /`\/diagnosing-bugs` → `delegate` kind `debug`/);
+  assert.match(section, /- to-tickets: `[^`]*to-tickets\/SKILL\.md`/);
 });
 
 test("the guidance routes by ask-matt's multi-session branch: the Lead implements single-session work itself", () => {
@@ -186,7 +189,9 @@ test("the guidance starts skill sub-agents as marked, non-interactive Pis in Her
   const pi = fakePi();
   lead(pi.api as any);
   const [handler] = pi.handlers.get("before_agent_start")!;
-  const { systemPrompt } = await handler!({ systemPrompt: "BASE" });
+  const sections: Record<string, string> = {};
+  await handler!({ systemPromptOptions: { sections } });
+  const systemPrompt = sections.pi_lead!;
   assert.ok(systemPrompt.includes(SUB_AGENT_RECIPE));
   assert.match(SUB_AGENT_RECIPE, /herdr pane split --current --direction right --cwd "\$PWD" --no-focus/);
   assert.match(SUB_AGENT_RECIPE, /herdr pane run <pane-id> "PI_LEAD_ROLE=sub-agent pi --print --no-session @/);

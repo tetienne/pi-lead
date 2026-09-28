@@ -131,8 +131,7 @@ export function workerPrompt(kind: WorkKind, task: string, publish?: PublishTarg
  * The quotes split in the completion marker keep the typed command line from
  * matching `wait-output` before the sub-agent has finished.
  */
-export const SUB_AGENT_RECIPE = `
-## Sub-agents
+export const SUB_AGENT_RECIPE = `## Sub-agents
 
 When a skill says to spawn, dispatch or fire a sub-agent (code-review's two
 axes, grilling's fact-finding, wayfinder's research,
@@ -155,11 +154,9 @@ you:
    On a timeout, look with \`herdr pane read <pane-id> --source recent-unwrapped --lines 120\`
    before deciding.
 6. Read \`<dir>/report.md\` (the sub-agent's final answer, or its error),
-   then \`herdr pane close <pane-id>\`, and carry on with the skill.
-`;
+   then \`herdr pane close <pane-id>\`, and carry on with the skill.`;
 
-export const WORKER_RULES = `
-## PI Lead worker
+export const WORKER_RULES = `## PI Lead worker
 
 You are a worker delegated by the PI Lead. You run unattended unless a human
 opens your tab.
@@ -180,4 +177,5 @@ opens your tab.
 - You run unattended: when a skill says to confirm something with the user
   (a seam, an interface), decide from the code and say so in your finish
   summary. Use \`needs_human\` only for what the code cannot answer.
+
 ${SUB_AGENT_RECIPE}`;

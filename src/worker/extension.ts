@@ -144,7 +144,7 @@ export default function worker(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     // A new prompt from the Lead or the user: a new cycle for stuck detection.
     stuck.reset();
-    return { systemPrompt: `${event.systemPrompt}\n${WORKER_RULES}` };
+    event.systemPromptOptions.sections.pi_lead_worker = WORKER_RULES;
   });
 
   // A run that ends on a provider error (exhausted quota, or anything Pi

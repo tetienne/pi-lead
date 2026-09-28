@@ -233,7 +233,10 @@ export default function lead(pi: ExtensionAPI) {
     invalidate: () => undefined,
   }));
 
-  pi.on("before_agent_start", async (event) => ({ systemPrompt: `${event.systemPrompt}\n${leadGuidance(SKILLS_DIR)}` }));
+  // A prompt section of its own: Pi records it as a transcript delta, and other extensions keep theirs.
+  pi.on("before_agent_start", (event) => {
+    event.systemPromptOptions.sections.pi_lead = leadGuidance(SKILLS_DIR);
+  });
 
   pi.registerTool({
     name: "delegate",

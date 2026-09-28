@@ -65,13 +65,13 @@ test("the worker only adds finish; stock file/shell tools and web tools come fro
   assert.ok(flags.has("pi-lead-task"));
   assert.deepEqual(tools, ["finish"]);
 
-  const { systemPrompt } = await handlers.get("before_agent_start")!({
-    systemPrompt: `BASE\nCurrent working directory: ${process.cwd()}`,
-  });
-  assert.match(systemPrompt, new RegExp(`Current working directory: ${process.cwd()}`));
-  assert.match(systemPrompt, /call `finish` with an honest status/);
-  assert.match(systemPrompt, /"\[PI Lead\]" come from the Lead/);
-  assert.ok(systemPrompt.includes(SUB_AGENT_RECIPE), "workers start sub-agents the same way as the Lead");
+  const sections: Record<string, string> = { cwd: process.cwd() };
+  assert.equal(await handlers.get("before_agent_start")!({ systemPromptOptions: { sections } }), undefined, "the prompt is never replaced wholesale");
+  assert.equal(sections.cwd, process.cwd());
+  const rules = sections.pi_lead_worker!;
+  assert.match(rules, /call `finish` with an honest status/);
+  assert.match(rules, /"\[PI Lead\]" come from the Lead/);
+  assert.ok(rules.includes(SUB_AGENT_RECIPE), "workers start sub-agents the same way as the Lead");
 });
 
 test("a run that ends on a provider error reports it to the Lead instead of idling", async () => {
