@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { JevDecision } from "../src/jev.ts";
-import { decisionLine, isDecision, jevReport, jevStatus, renderDecision, shouldShow } from "../src/jev-display.ts";
+import { decisionLine, isDecision, jevReport, jevStatus, renderDecision } from "../src/jev-display.ts";
 
 const decision = (overrides: Partial<JevDecision>): JevDecision => ({ kind: "tier", outcome: "standard", applied: "jev", at: 0, ...overrides });
 
@@ -17,25 +17,14 @@ test("one line per decision, with its glyph", () => {
     "▲ jev · verdict done → partial (criterion 2 not met)",
   );
   assert.equal(
-    decisionLine(decision({ kind: "egress", outcome: "deny", detail: "POST paste.example/x", probability: 0.02 })),
-    "◆ jev · egress deny (POST paste.example/x, p 0.02)",
+    decisionLine(decision({ kind: "overlap", outcome: "independent → parallel", probability: 0.12 })),
+    "◆ jev · overlap independent → parallel (p 0.12)",
   );
 });
 
 test("the transcript line fits the width", () => {
   assert.equal(renderDecision(decision({ confidence: 0.82 }), 200), "◆ jev · tier standard (conf 0.82)");
   assert.equal(renderDecision(decision({ confidence: 0.82 }), 12), "◆ jev · tie…");
-});
-
-test("every Lead decision gets a line, egress only when not allowed", () => {
-  const allow = decision({ kind: "egress", outcome: "allow" });
-  const deny = decision({ kind: "egress", outcome: "deny" });
-  const ask = decision({ kind: "egress", outcome: "unsure → asks you", applied: "fallback" });
-  const tier = decision({});
-  const fallback = decision({ outcome: "unsure → standard", applied: "fallback" });
-  const overridden = decision({ kind: "verdict", outcome: "done → partial", applied: "overridden" });
-  const all = [allow, deny, ask, tier, fallback, overridden];
-  assert.deepEqual(all.filter(shouldShow), [deny, ask, tier, fallback, overridden]);
 });
 
 test("the status segment is short and turns warning, then error, as the budget runs out", () => {
@@ -52,16 +41,15 @@ test("/jev prints today's totals by kind, the budget left and the session's last
     day: "2026-09-23",
     usd: 0.0042,
     calls: 14,
-    kinds: { egress: { calls: 11, usd: 0.0031 }, tier: { calls: 2, usd: 0.0006 }, verdict: { calls: 1, usd: 0.0005 }, overlap: { calls: 0, usd: 0 } },
+    kinds: { overlap: { calls: 11, usd: 0.0031 }, tier: { calls: 3, usd: 0.0011 }, verdict: { calls: 0, usd: 0 } },
   };
   const recent = Array.from({ length: 25 }, (_, index) => decision({ at, outcome: `o${index}` }));
   assert.equal(
     jevReport(usage, 1, recent),
     [
-      "Jev today (Lead and workers): 14 calls · $0.0042 of $1.00 · $0.9958 left",
-      "  tier        2 · $0.0006",
-      "  verdict     1 · $0.0005",
-      "  egress     11 · $0.0031",
+      "Jev today (every Lead session): 14 calls · $0.0042 of $1.00 · $0.9958 left",
+      "  tier        3 · $0.0011",
+      "  overlap    11 · $0.0031",
       "",
       "Last 20 decisions this session:",
       ...recent.slice(5).map((d) => `  09:05 ◆ jev · tier ${d.outcome}`),
@@ -69,7 +57,7 @@ test("/jev prints today's totals by kind, the budget left and the session's last
   );
   assert.equal(
     jevReport({ day: "2026-09-23", usd: 2, calls: 0, kinds: {} }, 1, []),
-    "Jev today (Lead and workers): 0 calls · $2.0000 of $1.00 · $0.0000 left\n\nNo Jev decisions in this session yet.",
+    "Jev today (every Lead session): 0 calls · $2.0000 of $1.00 · $0.0000 left\n\nNo Jev decisions in this session yet.",
   );
 });
 

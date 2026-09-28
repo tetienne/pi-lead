@@ -3,13 +3,13 @@ import { mkdir, mkdtemp, readdir, readFile, rename, writeFile } from "node:fs/pr
 import { join, posix } from "node:path";
 
 import type { LeadConfig, Tier } from "./config.ts";
-import { isUsageError, type Herdr } from "./herdr.ts";
-import { defaultTier, tierForDifficulty, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
+import type { Herdr } from "./herdr.ts";
+import { DEFAULT_TIER, tierForDifficulty, VERDICT_ORDER, type FailureKind, type Judge, type ReviewAction, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, PUBLISHED_KINDS, readJsonFile, workerPrompt, WRITES_CODE, type Verification, type WorkerBrief, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
-import { filesMatching, PACKAGE_JSON, packageRunFieldsChanged, sensitivePatterns } from "./sensitive-paths.ts";
+import { sensitivePatterns } from "./sensitive-paths.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -98,7 +98,7 @@ export type ReportCard = {
   verify?: string;
   /** The verify run passed (exit 0). */
   verified?: boolean;
-  /** CI status of the draft PR (`none`, `passed`, `failed (N checks)`, `timed out`, `not checked (…)`). */
+  /** CI status of the draft PR (`none`, `passed`, `failed (N checks)`, `pending`, `not checked (…)`). */
   ci?: string;
   /**
    * The error that ended a failed worker (untrusted). A finished worker's own
@@ -164,9 +164,6 @@ const MAX_REROUTES = 3;
 const RESUME_NOTE =
   "\n\nA previous PI Lead worker ran out of model quota on this task. Its work so far is committed on the current branch: review it with git log and continue from there.";
 
-/** Abort reason of a worker that waited too long on a question. */
-class WaitingTimeout extends Error {}
-
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -208,8 +205,6 @@ type Worker = WorkerInfo & {
   /** When the task was delegated, and when the worker last started running (a relayed answer, a reroute): the card times this run. */
   delegatedAt: number;
   runningSince?: number;
-  /** When the worker started waiting on a question (waitingTimeoutMinutes). */
-  waitingSince?: number;
   /** The label Herdr last took for the worktree workspace, so a state change renames it only when it changes. */
   tabLabel?: string;
   /** The worker's pending worktree renames, in order. */
@@ -329,7 +324,6 @@ export function createDelegator(deps: DelegateDeps) {
     ...(worker.verdict ? { verdict: worker.verdict } : {}),
   });
 
-  const waitingTimeoutMs = deps.config.waitingTimeoutMinutes * 60_000;
   const now = deps.now ?? Date.now;
 
   /**
@@ -368,10 +362,6 @@ export function createDelegator(deps: DelegateDeps) {
   let metadataSeq = 0;
   const nextSeq = () => (metadataSeq = Math.max(metadataSeq + 1, now()));
 
-  /** Cleared once Herdr rejects `tab rename` as unknown (an older Herdr): later tabs open without a state glyph. */
-  let tabRenames = true;
-  const openingLabel = (worker: Worker) => (tabRenames ? tabLabel(worker) : plainTitle(worker.title));
-
   /**
    * Renames run one after another per worker, each with the label of the
    * state at that moment, so a late one never brings back an older glyph.
@@ -381,13 +371,12 @@ export function createDelegator(deps: DelegateDeps) {
     worker.renaming = (worker.renaming ?? Promise.resolve()).then(async () => {
       const workspaceId = worker.workspaceId;
       const label = tabLabel(worker);
-      if (!tabRenames || !workspaceId || label === worker.tabLabel) return;
+      if (!workspaceId || label === worker.tabLabel) return;
       try {
         await deps.herdr?.renameWorktree(workspaceId, label);
         worker.tabLabel = label;
-      } catch (error) {
-        // Only a Herdr without `workspace rename` switches glyphs off; anything else is retried on the next state change.
-        if (isUsageError(error)) tabRenames = false;
+      } catch {
+        // Retried on the next state change.
       }
     });
   };
@@ -556,10 +545,6 @@ export function createDelegator(deps: DelegateDeps) {
         }
         lastBeat = Date.now();
       }
-      // An unanswered question must not keep a worker running forever: the abort ends in `fail`.
-      if (worker.state === "waiting" && waitingTimeoutMs > 0 && Date.now() - (worker.waitingSince ?? 0) >= waitingTimeoutMs) {
-        worker.controller.abort(new WaitingTimeout(`no answer within ${deps.config.waitingTimeoutMinutes} minutes`));
-      }
       await sleep(pollMs, worker.controller.signal);
     }
   };
@@ -611,7 +596,7 @@ export function createDelegator(deps: DelegateDeps) {
     // Set on the first launch of a publishing kind (never the scout); a later reroute keeps
     // pushing onto this same remote branch instead of opening a second PR.
     if (PUBLISHED_KINDS.includes(worker.kind)) worker.remoteBranch ??= worker.branch;
-    worker.tabLabel = openingLabel(worker);
+    worker.tabLabel = tabLabel(worker);
     ({ workspaceId: worker.workspaceId, paneId: worker.paneId } = await deps.herdr!.createWorktree({
       // Herdr's `worktree create` needs the main checkout: it rejects a linked worktree as its `cwd`.
       cwd: await deps.workspace.mainCheckout(worker.repoRoot),
@@ -638,7 +623,6 @@ export function createDelegator(deps: DelegateDeps) {
       worktreePath: worker.worktreePath,
       resultPath: worker.resultPath,
       ...(worker.brief ? { allowedFiles: worker.brief.allowedFiles, protectedFiles: worker.brief.protectedFiles } : {}),
-      jev: deps.config.jev,
       stuckDetection: deps.config.stuckDetection,
       ...(deps.config.verify ? { verify: deps.config.verify, verifyTimeoutMinutes: deps.config.verifyTimeoutMinutes } : {}),
     };
@@ -687,17 +671,6 @@ export function createDelegator(deps: DelegateDeps) {
     ...(worker.route.note ? [`Note: ${worker.route.note}`] : []),
   ];
 
-  /** Sensitive patterns the branch touches, keeping `package.json` only when some file's scripts or package manager changed. */
-  const reviewHints = async (worker: Worker, changedFiles: string[]): Promise<string[]> => {
-    const patterns = sensitivePatterns(changedFiles);
-    if (!patterns.includes(PACKAGE_JSON)) return patterns;
-    const read = (rev: string, path: string) => deps.workspace.fileAt({ repoRoot: worker.repoRoot!, rev, path });
-    for (const path of filesMatching(PACKAGE_JSON, changedFiles)) {
-      if (packageRunFieldsChanged(await read(worker.base!, path), await read(worker.branch!, path))) return patterns;
-    }
-    return patterns.filter((pattern) => pattern !== PACKAGE_JSON);
-  };
-
   const cardBase = (worker: Worker) => ({
     kind: worker.kind,
     title: worker.title,
@@ -730,7 +703,7 @@ export function createDelegator(deps: DelegateDeps) {
     const scouted = await deps.workspace.collect({ repoRoot: worker.repoRoot!, branch: worker.branch!, base: worker.base! });
     // The scout's own test files: whatever it changed that it did not also allow the implementer to touch.
     const protectedFiles = scouted.changedFiles.filter((path) => !allowedFiles.includes(path));
-    const implementTier = worker.implementTier ?? defaultTier("implement");
+    const implementTier = worker.implementTier ?? DEFAULT_TIER;
     const { lead, available } = routable(worker.io);
     const resolved = resolveRoute(implementTier, deps.config.tiers, lead, available);
     // Thrown, not reported here: watch()'s catch turns it into a normal failed report for this (still scout) worker.
@@ -784,7 +757,7 @@ export function createDelegator(deps: DelegateDeps) {
       : [];
     let status = judged === "done" && (verifyFailed || outOfScope.length > 0) ? "partial" : judged;
     const review = worker.kind === "review" && result.findings ? await deps.judge.reviewSeverity(result.findings) : undefined;
-    const sensitive = await reviewHints(worker, collected.changedFiles);
+    const sensitive = sensitivePatterns(collected.changedFiles);
 
     // The worker itself pushed, opened the PR and watched CI before calling finish; the host makes
     // one non-watching check of it. A detached HEAD (no baseBranch) means the worker was never asked to publish.
@@ -810,16 +783,12 @@ export function createDelegator(deps: DelegateDeps) {
     const keep = status !== "done" && deps.config.keepFailedWorkers;
     worker.verdict = status;
     setState(worker, status === "done" ? "done" : keep ? "waiting" : "failed");
-    if (keep) worker.waitingSince = Date.now();
-    else await closeAndClean(worker);
+    if (!keep) await closeAndClean(worker);
 
     const id = worker.id.slice(0, 8);
     const next: string[] = [];
     if (keep) {
-      next.push(
-        `The worker waits in its tab: relay what it needs with \`worker\` (action message, id ${id}), or stop it.` +
-          (waitingTimeoutMs > 0 ? ` Without an answer it is stopped after ${deps.config.waitingTimeoutMinutes} minutes.` : ""),
-      );
+      next.push(`The worker waits in its tab: relay what it needs with \`worker\` (action message, id ${id}), or stop it.`);
     }
     if (status === "needs_human") next.push(keep ? "Ask the user for what the worker needs, then relay the answer." : "Ask the user for what the worker needed, then delegate a new task with the answer.");
     if (status === "partial" || status === "blocked") next.push("Tell the user what is left; continue only if they agree.");
@@ -940,20 +909,12 @@ export function createDelegator(deps: DelegateDeps) {
 
   const fail = async (worker: Worker, error: unknown) => {
     if (worker.controller.signal.aborted) {
-      const timedOut = worker.controller.signal.reason instanceof WaitingTimeout;
       setState(worker, "stopped");
       await closeAndClean(worker);
       report({
         worker: info(worker),
         status: "stopped",
-        text: timedOut
-          ? [
-              `Worker "${worker.title}" [${worker.id.slice(0, 8)}] timed out: it waited ${deps.config.waitingTimeoutMinutes} minutes for an answer, so it was stopped and its tab closed.`,
-              ...(worker.branch ? [`Work reported so far is on local branch ${worker.branch}.`] : []),
-              "Next:",
-              "- Tell the user; if the question still matters, get the answer and delegate a new task with it.",
-            ].join("\n")
-          : `Worker "${worker.title}" [${worker.id.slice(0, 8)}] was stopped.`,
+        text: `Worker "${worker.title}" [${worker.id.slice(0, 8)}] was stopped.`,
         details: {},
       });
       return;
@@ -1075,11 +1036,11 @@ export function createDelegator(deps: DelegateDeps) {
           ].join("\n"),
         };
       }
-      const tier: Tier = judged?.tier ?? defaultTier(params.kind);
+      const tier: Tier = judged?.tier ?? DEFAULT_TIER;
       // Every implement ticket is scouted first: the scout gets its own (never
       // below standard) tier, and the implement tier it hands off to is kept for later.
       const scouted = params.kind === "implement";
-      const scoutTier: Tier = judged ? tierForDifficulty(judged.difficulty, "scout") : defaultTier("scout");
+      const scoutTier: Tier = judged ? tierForDifficulty(judged.difficulty, "scout") : DEFAULT_TIER;
       const { lead, available } = routable(io);
       const resolved = resolveRoute(scouted ? scoutTier : tier, deps.config.tiers, lead, available);
       const skipped = exhaustedNote();
@@ -1166,7 +1127,6 @@ export function createDelegator(deps: DelegateDeps) {
       } catch (error) {
         return `Could not reach "${worker.title}" through Herdr: ${errorText(error)}`;
       }
-      worker.waitingSince = undefined;
       setState(worker, "running");
       return `Sent to "${worker.title}". Its next result will arrive as a message.`;
     },

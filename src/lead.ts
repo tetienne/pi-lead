@@ -13,7 +13,7 @@ import { registerGitRead } from "./git-read.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
 import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
-import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
+import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision } from "./jev-display.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
 import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
@@ -44,9 +44,8 @@ function piInvocation(): string[] {
 
 /**
  * Herdr's own Pi integration (working/idle/blocked, session identity), written
- * by `herdr integration install pi`. It is trusted host code that only talks
- * to the Herdr socket; now that worker Pi runs on the host it works as is. The
- * worker never sees the socket.
+ * by `herdr integration install pi`. It talks to the Herdr socket, which a
+ * worker Pi on the host reaches like the Lead.
  */
 export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefined {
   const path = join(agentDir, "extensions", "herdr-agent-state.ts");
@@ -121,7 +120,7 @@ export default function lead(pi: ExtensionAPI) {
     ui?.setStatus("pi-lead", parts.length ? parts.join(" · ") : undefined);
   };
 
-  /** Workers charge the same ledger from their own processes, so it is re-read rather than counted here. */
+  /** Other Lead sessions charge the same ledger from their own processes, so it is re-read rather than counted here. */
   const refreshUsage = async () => {
     if (!jev || closed) return;
     jevUsage = await jev.ledger.usage().catch(() => jevUsage);
@@ -154,7 +153,7 @@ export default function lead(pi: ExtensionAPI) {
         recent.push(decision);
         if (recent.length > RECENT_DECISIONS) recent.shift();
         // A custom entry, not a message: the transcript shows it, the model never sees it.
-        if (shouldShow(decision)) pi.appendEntry(JEV_ENTRY, decision);
+        pi.appendEntry(JEV_ENTRY, decision);
         void refreshUsage();
       },
     });

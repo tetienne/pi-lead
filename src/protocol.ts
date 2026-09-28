@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 
-import type { LeadConfig } from "./config.ts";
 import type { WorkKind, WorkerVerdict } from "./jev.ts";
 import type { QuotaError } from "./quota.ts";
 
@@ -20,7 +19,6 @@ export type WorkerTask = {
   allowedFiles?: string[];
   /** The scout's own test files: must not be changed, only made to pass. */
   protectedFiles?: string[];
-  jev: LeadConfig["jev"];
   /** Steer the worker when it keeps repeating a failing command. Absent means on. */
   stuckDetection?: boolean;
   /**

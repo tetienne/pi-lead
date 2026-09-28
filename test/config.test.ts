@@ -28,12 +28,13 @@ test("settings in their right place produce no notice", async () => {
   assert.deepEqual((await loadConfigWithNotices(none.cwd, { projectTrusted: false, agentDir: none.agentDir })).ignored, []);
 });
 
-test("an old maxWorkers or leadGuard key in a user file is ignored, no error and no notice", async () => {
-  const { agentDir, cwd } = await dirs({ maxWorkers: 3 }, { leadGuard: "off" });
+test("an old maxWorkers, leadGuard or waitingTimeoutMinutes key in a user file is ignored, no error and no notice", async () => {
+  const { agentDir, cwd } = await dirs({ maxWorkers: 3, waitingTimeoutMinutes: 5 }, { leadGuard: "off" });
   const { config, ignored } = await loadConfigWithNotices(cwd, { projectTrusted: true, agentDir });
   assert.deepEqual(ignored, []);
   assert.equal((config as { maxWorkers?: number }).maxWorkers, undefined);
   assert.equal((config as { leadGuard?: string }).leadGuard, undefined);
+  assert.equal((config as { waitingTimeoutMinutes?: number }).waitingTimeoutMinutes, undefined);
 });
 
 test("verify in the global config is dropped with a notice naming the file", async () => {

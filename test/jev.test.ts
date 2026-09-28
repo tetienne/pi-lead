@@ -15,7 +15,6 @@ import {
   createJudge,
   createLedger,
   describeJevProblem,
-  describeRequest,
   parseUsage,
   tierForDifficulty,
   type AskJev,
@@ -57,7 +56,6 @@ test("without a key Jev is unavailable and every judgment falls back", async () 
   assert.equal(judge.available, false);
   assert.equal(await judge.modelTier({ task: "x", kind: "implement" }), undefined);
   assert.deepEqual(await judge.intake({ task: "x", kind: "implement", checkReadiness: true }), {});
-  assert.equal(await judge.egress({ task: "x", method: "GET", url: "https://example.com" }), "ask");
   assert.equal(await judge.overlap("a", "b"), undefined);
 });
 
@@ -237,21 +235,6 @@ test("intake parses readiness and difficulty independently", async () => {
   assert.deepEqual(await failing.intake({ task: "t", kind: "implement", checkReadiness: true }), {});
 });
 
-test("egress decisions are banded and cached per method, host and path", async () => {
-  const calls: unknown[] = [];
-  const judge = createJudge({ ask: fakeAsk({ needed: { noul: 0.95 } }, calls), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
-  assert.equal(await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/a?x=1" }), "allow");
-  assert.equal(await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/a?x=2" }), "allow");
-  assert.equal(calls.length, 1);
-  await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/b" });
-  assert.equal(calls.length, 2, "one judged URL does not vouch for the rest of the host");
-
-  const unsure = createJudge({ ask: fakeAsk({ needed: { noul: 0.5 } }), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
-  assert.equal(await unsure.egress({ task: "t", method: "POST", url: "https://paste.example/x" }), "ask");
-  const deny = createJudge({ ask: fakeAsk({ needed: { noul: 0.02 } }), config: DEFAULT_CONFIG.jev, ledger: await ledgerIn() });
-  assert.equal(await deny.egress({ task: "t", method: "POST", url: "https://paste.example/x" }), "deny");
-});
-
 test("the daily budget stops calls once spent, and failures fall back", async () => {
   const ledger = await ledgerIn();
   await ledger.charge(1);
@@ -282,7 +265,6 @@ test("a failing Jev is reported once, clipped, and still falls back", async () =
   });
   assert.equal(await judge.overlap("a", "b"), undefined);
   assert.deepEqual(await judge.intake({ task: "t", kind: "implement", checkReadiness: true }), {});
-  assert.equal(await judge.egress({ task: "t", method: "GET", url: "https://example.com/x" }), "ask");
   assert.equal(problems.length, 1);
   assert.equal(problems[0]!.kind, "error");
   assert.ok(problems[0]!.message.startsWith("404 model not found: xxx"));
@@ -376,15 +358,15 @@ test("the ledger reads the older { day, usd } file and counts calls per kind", a
   await writeFile(path, JSON.stringify({ day: today, usd: 0.25 }));
   const ledger = createLedger(path);
   assert.deepEqual(await ledger.usage(), { day: today, usd: 0.25, calls: 0, kinds: {} });
-  await ledger.charge(0.001, "egress");
-  await ledger.charge(0.001, "egress");
+  await ledger.charge(0.001, "overlap");
+  await ledger.charge(0.001, "overlap");
   await ledger.charge(0.002, "verdict");
   await ledger.charge(0.5);
   const usage = await ledger.usage();
   assert.equal(usage.calls, 3, "a charge without a kind adds to the spend only");
   assert.ok(Math.abs(usage.usd - 0.754) < 1e-9);
-  assert.equal(usage.kinds.egress?.calls, 2);
-  assert.ok(Math.abs(usage.kinds.egress!.usd - 0.002) < 1e-9);
+  assert.equal(usage.kinds.overlap?.calls, 2);
+  assert.ok(Math.abs(usage.kinds.overlap!.usd - 0.002) < 1e-9);
   assert.deepEqual(usage.kinds.verdict, { calls: 1, usd: 0.002 });
   assert.equal(await ledger.spent(), usage.usd);
   assert.deepEqual(Object.keys(JSON.parse(await readFile(path, "utf8"))).sort(), ["calls", "day", "kinds", "usd"]);
@@ -396,26 +378,30 @@ test("the ledger reads the older { day, usd } file and counts calls per kind", a
     calls: 0,
     kinds: { tier: { calls: 0, usd: 0 } },
   });
+  assert.deepEqual(
+    parseUsage({ day: today, usd: 0.5, calls: 12, kinds: { egress: { calls: 11, usd: 0.003 }, tier: { calls: 1, usd: 0.001 } } }, today),
+    { day: today, usd: 0.5, calls: 12, kinds: { tier: { calls: 1, usd: 0.001 } } },
+    "an egress entry from an older version is no longer a kind, its spend still counts",
+  );
 });
 
 test("parallel charges in one process all land", async () => {
   const ledger = await ledgerIn();
-  await Promise.all(Array.from({ length: 20 }, () => ledger.charge(0.001, "egress")));
+  await Promise.all(Array.from({ length: 20 }, () => ledger.charge(0.001, "overlap")));
   const usage = await ledger.usage();
   assert.equal(usage.calls, 20);
-  assert.equal(usage.kinds.egress?.calls, 20);
+  assert.equal(usage.kinds.overlap?.calls, 20);
 });
 
 test("the judge charges each call to its kind", async () => {
   const ledger = await ledgerIn();
-  const judge = createJudge({ ask: fakeAsk({ overlap: { noul: 0.9 }, needed: { noul: 0.9 } }), config: DEFAULT_CONFIG.jev, ledger });
+  const judge = createJudge({ ask: fakeAsk({ overlap: { noul: 0.9 }, difficulty: { score: 2, confidence: 0.9 } }), config: DEFAULT_CONFIG.jev, ledger });
   await judge.overlap("a", "b");
-  await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/a" });
-  await judge.egress({ task: "t", method: "GET", url: "https://docs.rs/a" });
+  await judge.modelTier({ task: "t", kind: "implement" });
   const usage = await ledger.usage();
-  assert.equal(usage.calls, 2, "a cached egress answer is not a call");
+  assert.equal(usage.calls, 2);
   assert.equal(usage.kinds.overlap?.calls, 1);
-  assert.equal(usage.kinds.egress?.calls, 1);
+  assert.equal(usage.kinds.tier?.calls, 1);
 });
 
 const judgeWith = async (answers: Record<string, unknown>) => {
@@ -439,7 +425,7 @@ test("each judgment emits one decision: applied or fallback", async () => {
   {
     const { judge, decisions } = await judgeWith({ difficulty: { score: 2.1, confidence: 0.3 } });
     await judge.modelTier({ task: "t", kind: "review" });
-    assert.deepEqual(decisions.map(shape), [{ kind: "tier", outcome: "unsure → deep", applied: "fallback", confidence: 0.3 }]);
+    assert.deepEqual(decisions.map(shape), [{ kind: "tier", outcome: "unsure → standard", applied: "fallback", confidence: 0.3 }]);
   }
   {
     const { judge, decisions } = await judgeWith({ acceptance: { noul: 0.1 }, bounded: { noul: 0.9 }, decided: { noul: 0.9 }, difficulty: { score: 1, confidence: 0.9 } });
@@ -513,25 +499,6 @@ test("each judgment emits one decision: applied or fallback", async () => {
       ],
     );
   }
-});
-
-test("egress decisions carry a clipped request and no query string", async () => {
-  const { judge, decisions } = await judgeWith({ needed: { noul: 0.02 } });
-  await judge.egress({ task: "t", method: "POST", url: `https://paste.example/${"a".repeat(200)}?token=secret` });
-  await judge.egress({ task: "t", method: "POST", url: `https://paste.example/${"a".repeat(200)}?token=other` });
-  assert.equal(decisions.length, 1, "a cached answer emits nothing");
-  const [decision] = decisions;
-  assert.deepEqual([decision!.applied, decision!.outcome, decision!.probability], ["jev", "deny", 0.02]);
-  assert.doesNotMatch(decision!.detail!, /secret|token/);
-  assert.ok(decision!.detail!.startsWith("POST paste.example/aaa"));
-  assert.ok(decision!.detail!.length <= "POST ".length + 80);
-
-  const { judge: unsure, decisions: asked } = await judgeWith({ needed: { noul: 0.5 } });
-  await unsure.egress({ task: "t", method: "get", url: "https://example.com/x" });
-  assert.deepEqual([asked[0]!.applied, asked[0]!.outcome, asked[0]!.detail], ["fallback", "unsure → asks you", "GET example.com/x"]);
-
-  assert.equal(describeRequest("PO\u001bST", "https://exämple.com/p\u0007ath?q=1"), "POST xn--exmple-cua.com/p%07ath");
-  assert.equal(describeRequest("GET", "not a url"), "GET (invalid URL)");
 });
 
 test("a failing, over-budget or unconfigured Jev: fallbacks name the reason, or nothing is emitted", async () => {

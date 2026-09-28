@@ -32,8 +32,6 @@ export type LeadConfig = {
   };
   /** Keep the Herdr worktree workspace of a worker that did not finish cleanly. */
   keepFailedWorkers: boolean;
-  /** A worker waiting on a question this long without an answer is stopped and its tab closed. 0 disables. */
-  waitingTimeoutMinutes: number;
   /**
    * Steer a worker whose shell commands keep failing with no file changed in
    * between (see worker/stuck.ts), once per prompt.
@@ -65,7 +63,6 @@ export const DEFAULT_CONFIG: LeadConfig = {
     minConfidence: 0.7,
   },
   keepFailedWorkers: true,
-  waitingTimeoutMinutes: 120,
   stuckDetection: true,
   verifyTimeoutMinutes: 15,
 };
@@ -74,7 +71,6 @@ type PartialConfig = {
   tiers?: Partial<Record<Tier, Partial<TierRoute>>>;
   jev?: Partial<LeadConfig["jev"]>;
   keepFailedWorkers?: boolean;
-  waitingTimeoutMinutes?: number;
   stuckDetection?: boolean;
   verify?: string;
   verifyTimeoutMinutes?: number;
@@ -89,7 +85,6 @@ export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConf
     tiers,
     jev: { ...base.jev, ...override.jev },
     keepFailedWorkers: override.keepFailedWorkers ?? base.keepFailedWorkers,
-    waitingTimeoutMinutes: override.waitingTimeoutMinutes ?? base.waitingTimeoutMinutes,
     stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
     ...(typeof override.verify === "string" && override.verify.trim()
       ? { verify: override.verify.trim() }

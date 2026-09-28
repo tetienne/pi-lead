@@ -42,8 +42,6 @@ export type Workspace = {
     changedFiles: string[];
     head: string;
   }>;
-  /** A file's content at `rev`, or undefined when it is absent or unreadable. */
-  fileAt(input: { repoRoot: string; rev: string; path: string }): Promise<string | undefined>;
   /**
    * One non-watching read of the worker's own draft PR and its checks. Never
    * throws: `state` is `none` both when the branch has no open PR and when a
@@ -116,15 +114,6 @@ export const gitWorkspace: Workspace = {
       git(["rev-parse", `refs/heads/${branch}`], repoRoot),
     ]);
     return { commits, diffStat, changedFiles: names.split("\0").filter(Boolean), head };
-  },
-
-  async fileAt({ repoRoot, rev, path }) {
-    // cat-file, not show: plumbing applies no textconv or other configured filter to the worker's blob.
-    try {
-      return await git(["cat-file", "blob", `${rev}:${path}`], repoRoot);
-    } catch {
-      return undefined;
-    }
   },
 
   async prChecks({ repoRoot, branch }) {

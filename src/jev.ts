@@ -19,20 +19,18 @@ export type WorkKind = "implement" | "prototype" | "debug" | "review" | "researc
 export type WorkerVerdict = "done" | "partial" | "blocked" | "needs_human";
 export type FailureKind = "transient" | "environment" | "task_bug" | "needs_info";
 export type ReviewAction = "none" | "fix";
-export type EgressDecision = "allow" | "deny" | "ask";
 export type TierJudgment = { tier: Tier; difficulty: number };
 export type ReadinessJudgment = { ready: boolean; missing: string[] };
 
 /** What a Jev call was about; `tier` covers both `modelTier` and `intake`. */
-export const JEV_KINDS = ["tier", "overlap", "verdict", "review", "failure", "egress"] as const;
+export const JEV_KINDS = ["tier", "overlap", "verdict", "review", "failure"] as const;
 export type JevKind = (typeof JEV_KINDS)[number];
 
 /**
  * One judgment, for display only. `jev`: Jev's answer was applied; `fallback`:
  * Jev was unsure, failing or over budget and a default applied; `overridden`:
  * Jev's answer replaced the worker's (a more pessimistic verdict). Every text
- * field is built here from closed labels, except `detail` on egress, which
- * carries the request's method and a clipped host + path.
+ * field is built here from closed labels.
  */
 export type JevDecision = {
   kind: JevKind;
@@ -57,7 +55,6 @@ export type Judge = {
     readiness?: ReadinessJudgment;
     tier?: TierJudgment;
   }>;
-  egress(input: { task: string; method: string; url: string }): Promise<EgressDecision>;
   verdict(input: {
     task: string;
     reported: WorkerVerdict;
@@ -98,10 +95,8 @@ export const DIFFICULTY_RUBRIC = [
   "Very hard: architectural change, ambiguous requirements, or deep debugging.",
 ] as const;
 
-/** The tier used when Jev gives no difficulty. */
-export function defaultTier(kind: WorkKind): Tier {
-  return kind === "debug" || kind === "review" ? "deep" : "standard";
-}
+/** The tier used when Jev gives no difficulty, whatever the kind of work. */
+export const DEFAULT_TIER: Tier = "standard";
 
 /** Least to most pessimistic; the Lead trusts the more pessimistic of the worker and Jev. */
 export const VERDICT_ORDER: readonly WorkerVerdict[] = ["done", "partial", "blocked", "needs_human"];
@@ -171,7 +166,7 @@ export function acceptanceCriteria(ticket: string): string[] {
 // ---- budget ---------------------------------------------------------------
 
 export type KindUsage = { calls: number; usd: number };
-/** One day of Jev use, across the Lead and every worker. */
+/** One day of Jev use, across every Lead session. */
 export type JevUsage = { day: string; usd: number; calls: number; kinds: Partial<Record<JevKind, KindUsage>> };
 
 const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0);
@@ -189,7 +184,7 @@ export function parseUsage(raw: unknown, day: string): JevUsage {
   return { day, usd: ledger.usd as number, calls: count(ledger.calls), kinds };
 }
 
-/** File-backed so the Lead and every worker share one daily budget. */
+/** File-backed so every Lead session shares one daily budget. */
 export function createLedger(path = join(homedir(), ".pi", "agent", "pi-lead", "jev-usage.json")) {
   const today = () => new Date().toISOString().slice(0, 10);
   const read = async (): Promise<JevUsage> => {
@@ -217,9 +212,9 @@ export function createLedger(path = join(homedir(), ".pi", "agent", "pi-lead", "
     spent: async () => (await read()).usd,
     usage: read,
     charge(usd: number, kind?: JevKind): Promise<void> {
-      // Parallel judgments (a worker's egress, most often) charge one at a time
-      // within a process, so they neither lose each other's update nor share a
-      // temporary file; other processes can still race, as before.
+      // Parallel judgments charge one at a time within a process, so they
+      // neither lose each other's update nor share a temporary file; other
+      // processes can still race.
       const next = queue.then(() => write(usd, kind));
       queue = next.catch(() => undefined);
       return next;
@@ -288,19 +283,6 @@ export function describeJevProblem(problem: JevProblem): string {
     : `Jev is configured but failing (${problem.message}); PI Lead falls back to its defaults.`;
 }
 
-/** Method and host + path of a worker's request, safe to show: no query, no control characters, at most `max` characters. */
-export function describeRequest(method: string, url: string, max = 80): string {
-  let target: string;
-  try {
-    const parsed = new URL(url);
-    target = `${parsed.host}${parsed.pathname}`.replace(/[^\x21-\x7e]/g, "");
-  } catch {
-    target = "(invalid URL)";
-  }
-  const verb = method.replace(/[^A-Za-z]/g, "").slice(0, 10).toUpperCase() || "?";
-  return `${verb} ${target.length > max ? `${target.slice(0, max - 1)}…` : target}`;
-}
-
 type Call = { answers?: Record<string, unknown>; failure?: JevProblem["kind"] };
 type DecisionInput = Omit<JevDecision, "at">;
 
@@ -316,7 +298,6 @@ export function createJudge(options: {
   onDecision?: (decision: JevDecision) => void;
 }): Judge {
   const { ask, config, ledger, onProblem, onDecision } = options;
-  const egressCache = new Map<string, EgressDecision>();
   const problemsSeen = new Set<JevProblem["kind"]>();
   const report = (kind: JevProblem["kind"], message: string) => {
     if (problemsSeen.has(kind)) return;
@@ -365,7 +346,7 @@ export function createJudge(options: {
     const detail = [extra, judged ? `difficulty ${judged.difficulty.toFixed(1)}/4` : undefined].filter(Boolean).join(", ");
     return {
       kind: "tier",
-      outcome: judged ? judged.tier : defaultTier(kind),
+      outcome: judged ? judged.tier : DEFAULT_TIER,
       applied: judged ? "jev" : "fallback",
       ...confidence(answer),
       ...(detail ? { detail } : {}),
@@ -402,41 +383,6 @@ export function createJudge(options: {
         emit(call, tierDecision(answers?.difficulty, kind, tier, !checkReadiness ? undefined : readiness ? "ready" : "readiness unsure"));
       }
       return { ...(readiness ? { readiness } : {}), ...(tier ? { tier } : {}) };
-    },
-
-    async egress({ task, method, url }) {
-      let key: string;
-      try {
-        const parsed = new URL(url);
-        // Per path, not per host: one judged URL must not vouch for the rest of the host.
-        key = `${method} ${parsed.host}${parsed.pathname}`;
-      } catch {
-        return "deny";
-      }
-      const cached = egressCache.get(key);
-      if (cached) return cached;
-      const call = await run(
-        "egress",
-        { ticket: clip(task, 4_000), request: { method, url: clip(url, 500) } },
-        {
-          needed: noul(
-            "Is this network request plausibly needed to do the ticket (installing declared dependencies, fetching docs or sources it names)?",
-            { true: "Needed for the ticket.", false: "Unrelated, exfiltration-like, or sending data somewhere the ticket does not need." },
-          ),
-        },
-      );
-      const probability = noulOf(call?.answers?.needed);
-      const decision: EgressDecision =
-        probability === undefined ? "ask" : { yes: "allow", no: "deny", unsure: "ask" }[band(probability, 0.15, 0.85)] as EgressDecision;
-      if (decision !== "ask") egressCache.set(key, decision);
-      emit(call, {
-        kind: "egress",
-        outcome: decision === "ask" ? "asks you" : decision,
-        applied: decision === "ask" ? "fallback" : "jev",
-        ...(probability !== undefined ? { probability } : {}),
-        detail: describeRequest(method, url),
-      });
-      return decision;
     },
 
     async verdict({ task, reported, summary, diffStat, commits, changedFiles, verification }) {

@@ -1,8 +1,8 @@
 import { JEV_KINDS, type JevDecision, type JevUsage } from "./jev.ts";
 
 /**
- * How Jev's work shows in the terminal. Pure formatting, so the Lead and the
- * worker extension only wire these strings to Pi's UI:
+ * How Jev's work shows in the terminal. Pure formatting, so the Lead only
+ * wires these strings to Pi's UI:
  *
  * - `◆` Jev decided and its answer applied;
  * - `◇` Jev was unsure, failing or over budget, and a default applied;
@@ -18,12 +18,6 @@ export const RECENT_DECISIONS = 20;
 function glyph(decision: Pick<JevDecision, "applied">): string {
   return decision.applied === "fallback" ? "◇" : decision.applied === "overridden" ? "▲" : "◆";
 }
-
-/**
- * Whether a decision gets its own line (transcript in the Lead, notification in
- * a worker tab): every Lead decision, but egress only when not allowed.
- */
-export const shouldShow = (decision: JevDecision) => decision.kind !== "egress" || decision.outcome !== "allow";
 
 /** Is a stored entry (possibly from another version) a decision this code can render? */
 export function isDecision(value: unknown): value is JevDecision {
@@ -88,7 +82,7 @@ const clock = (at: number) => {
 export function jevReport(usage: JevUsage, budgetUsd: number, recent: readonly JevDecision[]): string {
   const left = Math.max(0, budgetUsd - usage.usd);
   const lines = [
-    `Jev today (Lead and workers): ${usage.calls} calls · $${fixed(usage.usd, 4)} of $${fixed(budgetUsd)} · $${fixed(left, 4)} left`,
+    `Jev today (every Lead session): ${usage.calls} calls · $${fixed(usage.usd, 4)} of $${fixed(budgetUsd)} · $${fixed(left, 4)} left`,
   ];
   for (const kind of JEV_KINDS) {
     const entry = usage.kinds[kind];

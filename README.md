@@ -39,8 +39,8 @@ you ─► Lead (Pi, your tab)
   [ADR 0006](docs/adr/0006-no-lead-guard.md)). When the worker's
   branch touches files that can run on your machine or in CI, or steer future
   agents, the report adds a host-generated "Host check" line naming the
-  matched patterns: CI workflows and actions, `package.json` (only when its
-  `scripts` or `packageManager` change), `.npmrc`/`.yarnrc`, mise, direnv, git
+  matched patterns: CI workflows and actions, `package.json`,
+  `.npmrc`/`.yarnrc`, mise, direnv, git
   hooks, `.vscode` tasks/settings, `.pi/`, `.agents/`, `.claude/`,
   `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` and `.gitmodules`. It is a hint
   to focus your review, not a security guarantee: ordinary source, tests and
@@ -152,7 +152,6 @@ A global file, for example:
   },
   "jev": { "via": "openrouter", "dailyBudgetUsd": 1 },
   "keepFailedWorkers": true,
-  "waitingTimeoutMinutes": 120,
   "stuckDetection": true,
   "verifyTimeoutMinutes": 15
 }
@@ -249,13 +248,13 @@ tail sits in the untrusted worker block and goes to Jev's verdict. Without
 
 The worker controls the repository, so it can change what `verify` runs (a
 `package.json` script, a test file): `verify` catches honest mistakes, and the
-sensitive-path review hint (changed `package.json` scripts, CI, `.pi` and
+sensitive-path review hint (a changed `package.json`, CI, `.pi` and
 similar) points at the dishonest ones. Review both before merging.
 
 ### Seeing Jev
 
 With a Jev key set, the Lead's status line carries `◆ 14 · $0.004/1.00`: Jev
-calls today across the Lead and every worker, and spend against
+calls today across every Lead session, and spend against
 `dailyBudgetUsd` (dim, then warning from 80%, error once spent). Each judgment
 the Lead makes gets one dim line in the transcript, which the model never sees:
 
