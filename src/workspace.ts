@@ -49,6 +49,8 @@ export type Workspace = {
    */
   prChecks(input: { repoRoot: string; branch: string }): Promise<{
     url?: string;
+    /** The commit the PR's head points at (`headRefOid`): its checks are for that commit only. */
+    head?: string;
     state: "pass" | "fail" | "pending" | "none" | "error";
     failed: { name: string; link: string }[];
     error?: string;
@@ -123,19 +125,23 @@ export const gitWorkspace: Workspace = {
         ({ stdout, stderr }) => ({ stdout, stderr }),
         (error: { stdout?: string; stderr?: string }) => ({ stdout: error.stdout, stderr: error.stderr, error }),
       );
-    const view = await gh(["pr", "view", branch, "--json", "url"]);
+    const view = await gh(["pr", "view", branch, "--json", "url,headRefOid"]);
     if (view.error) {
       if (/no pull requests found/i.test(view.stderr ?? "")) return { state: "none", failed: [] };
       return { state: "error", failed: [], error: ghError(view) };
     }
-    let url: string | undefined;
+    let pr: { url?: string; headRefOid?: string };
     try {
-      url = (JSON.parse(view.stdout ?? "") as { url?: string }).url;
+      pr = (JSON.parse(view.stdout ?? "") as typeof pr | null) ?? {};
     } catch (error) {
       return { state: "error", failed: [], error: shortError(error) };
     }
-    if (!url) return { state: "none", failed: [] };
-    return { url, ...readChecks(await gh(["pr", "checks", branch, "--json", "name,bucket,link"])) };
+    if (!pr.url) return { state: "none", failed: [] };
+    return {
+      url: pr.url,
+      ...(pr.headRefOid ? { head: pr.headRefOid } : {}),
+      ...readChecks(await gh(["pr", "checks", branch, "--json", "name,bucket,link"])),
+    };
   },
 
   async remove(path) {

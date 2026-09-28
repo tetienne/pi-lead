@@ -204,6 +204,8 @@ type Worker = WorkerInfo & {
   /** Continues the branch of an attempt that ran out of quota. */
   resumed: boolean;
   reroutes: number;
+  /** A CI or verify partial already went back to the worker: the next one reaches the Lead. */
+  sentBack: boolean;
 };
 
 export function slugify(text: string): string {
@@ -677,28 +679,40 @@ export function createDelegator(deps: DelegateDeps) {
       branch: worker.branch!,
       base: worker.base!,
     });
-    const jevVerdict = await deps.judge.verdict({
-      task: worker.params.task,
-      reported: result.status,
-      summary: result.summary,
-      diffStat: collected.diffStat,
-      commits: collected.commits,
-      changedFiles: collected.changedFiles,
-      ...(verification ? { verification: { command: verification.command, exitCode: verification.exitCode, outputTail: verification.outputTail } } : {}),
-    });
-    // Trust the more pessimistic of the worker and Jev; a failed verify run makes `done` at most `partial` (ADR 0002).
-    const judged =
-      jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     const verifyFailed = verification !== undefined && verification.exitCode !== 0;
-    let status = judged === "done" && verifyFailed ? "partial" : judged;
-    const sensitive = sensitivePatterns(collected.changedFiles);
 
     // The worker itself pushed, opened the PR and watched CI before calling finish; the host makes
     // one non-watching check of it. A detached HEAD (no baseBranch) means the worker was never asked to publish.
     let pr: Awaited<ReturnType<typeof deps.workspace.prChecks>> | undefined;
-    let ci: string | undefined;
-    if (status === "done" && PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined) {
+    if (result.status === "done" && !verifyFailed && PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined) {
       pr = await deps.workspace.prChecks({ repoRoot: worker.repoRoot!, branch: worker.remoteBranch! });
+      // Checks run on the PR's head: green on an older commit is not green on the branch.
+      if (pr.url !== undefined && pr.state !== "error" && pr.head !== collected.head) pr = { ...pr, state: "pending", failed: [] };
+    }
+    // Verify passed (or none is configured) and CI is green on the head (or runs no checks): the
+    // host has proven the work, and no model may downgrade it.
+    const proven = pr?.url !== undefined && (pr.state === "pass" || pr.state === "none") && (!verify || verification?.exitCode === 0);
+    const jevVerdict = proven
+      ? undefined
+      : await deps.judge.verdict({
+          task: worker.params.task,
+          reported: result.status,
+          summary: result.summary,
+          diffStat: collected.diffStat,
+          commits: collected.commits,
+          changedFiles: collected.changedFiles,
+          ...(verification ? { verification: { command: verification.command, exitCode: verification.exitCode, outputTail: verification.outputTail } } : {}),
+        });
+    // Trust the more pessimistic of the worker and Jev; a failed verify run makes `done` at most `partial` (ADR 0002).
+    const judged =
+      jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
+    let status = judged === "done" && verifyFailed ? "partial" : judged;
+    const sensitive = sensitivePatterns(collected.changedFiles);
+
+    // Only a `done` report is capped by its PR and CI.
+    let ci: string | undefined;
+    if (status !== "done") pr = undefined;
+    if (pr) {
       if (pr.state === "error") {
         status = "partial"; // gh could not be read: CI unverified
         ci = `not checked (${pr.error})`;
@@ -711,6 +725,28 @@ export function createDelegator(deps: DelegateDeps) {
       } else {
         status = "partial"; // still failing or pending: cap the report
         ci = pr.state === "fail" ? `failed (${pr.failed.length} check${pr.failed.length === 1 ? "" : "s"})` : "pending";
+      }
+    }
+
+    // Capped only by the host's own evidence (the worker and Jev said done): the worker gets that
+    // evidence and fixes it itself, once, before the Lead hears about it.
+    const ciRed = pr?.url !== undefined && (pr.state === "fail" || pr.state === "pending") ? pr : undefined;
+    if (judged === "done" && status === "partial" && (verifyFailed || ciRed) && !worker.sentBack) {
+      const evidence = verifyFailed
+        ? [verificationLine(verify, verification), ...(verification?.outputTail ? ["Output (tail):", verification.outputTail] : [])]
+        : ciRed!.state === "fail"
+          ? [`CI is not green on ${ciRed!.url}. Failed checks:`, ...ciRed!.failed.map((check) => `${check.name} (${check.link})`)]
+          : ciRed!.head === collected.head
+            ? [`CI is not green on ${ciRed!.url}: its checks are still pending.`]
+            : [`CI is not green on ${ciRed!.url}: the PR head is ${ciRed!.head ?? "unknown"}, not your branch head ${collected.head}; push your branch.`];
+      const unsent = await relay(
+        worker,
+        ["The host capped your finish to partial:", ...evidence, "Fix it, commit (push and wait for CI again if you published), then call `finish` again."].join("\n"),
+      );
+      if (unsent === undefined) {
+        worker.sentBack = true;
+        progress(`"${worker.title}": ${verifyFailed ? "verify failed" : ciRed!.state === "fail" ? "CI failed" : "CI pending"}; sent back to the worker`);
+        return;
       }
     }
 
@@ -916,6 +952,25 @@ export function createDelegator(deps: DelegateDeps) {
     await watch(worker);
   };
 
+  /**
+   * Type a `[PI Lead]` message into a running or finished worker's Pi and mark
+   * it running again: its next `finish` is watched as usual. Returns why it
+   * could not, or undefined once sent.
+   */
+  async function relay(worker: Worker, text: string): Promise<string | undefined> {
+    if (!worker.paneId || (worker.state !== "running" && worker.state !== "waiting")) {
+      return `Worker "${worker.title}" is ${worker.state}; it cannot receive messages.`;
+    }
+    if ((await readIfPresent(worker.exitPath!))?.trim()) return `Worker "${worker.title}" has exited; it cannot receive messages.`;
+    try {
+      await deps.herdr!.sendToAgent(worker.paneId, `[PI Lead] ${text}`);
+    } catch (error) {
+      return `Could not reach "${worker.title}" through Herdr: ${errorText(error)}`;
+    }
+    setState(worker, "running");
+    return undefined;
+  }
+
   const find = (ref: string): Worker | { error: string } => {
     const needle = ref.trim().toLowerCase();
     const matches = [...workers.values()].filter(
@@ -965,6 +1020,7 @@ export function createDelegator(deps: DelegateDeps) {
         renameTries: 0,
         resumed: false,
         reroutes: 0,
+        sentBack: false,
       };
       workers.set(worker.id, worker);
       void drive(worker).catch(() => undefined);
@@ -984,17 +1040,7 @@ export function createDelegator(deps: DelegateDeps) {
     async message(ref: string, text: string): Promise<string> {
       const worker = find(ref);
       if ("error" in worker) return worker.error;
-      if (!worker.paneId || (worker.state !== "running" && worker.state !== "waiting")) {
-        return `Worker "${worker.title}" is ${worker.state}; it cannot receive messages.`;
-      }
-      if ((await readIfPresent(worker.exitPath!))?.trim()) return `Worker "${worker.title}" has exited; it cannot receive messages.`;
-      try {
-        await deps.herdr!.sendToAgent(worker.paneId, `[PI Lead] ${text}`);
-      } catch (error) {
-        return `Could not reach "${worker.title}" through Herdr: ${errorText(error)}`;
-      }
-      setState(worker, "running");
-      return `Sent to "${worker.title}". Its next result will arrive as a message.`;
+      return (await relay(worker, text)) ?? `Sent to "${worker.title}". Its next result will arrive as a message.`;
     },
 
     async stop(ref: string): Promise<string> {

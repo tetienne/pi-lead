@@ -49,7 +49,7 @@ function fakeWorkspace(log: Log): Workspace {
     // Most tests don't care about CI: no checks reported, so the report goes out at once.
     prChecks: async ({ branch }) => {
       log.push(`prChecks ${branch}`);
-      return { url: `https://example.test/pr/${branch}`, state: "none", failed: [] };
+      return { url: `https://example.test/pr/${branch}`, head: "def456", state: "none", failed: [] };
     },
     remove: async () => void log.push("remove dir"),
   };
@@ -335,7 +335,8 @@ test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t)
     judge: { available: true, modelTier: async () => ({ tier: "deep", difficulty: 3.4 }), verdict: async () => "partial" },
   });
   const pending = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Hard", task: "t" }, io);
+  // A prototype opens no PR, so the host never proves it: Jev has the last word.
+  const started = await delegator.start({ kind: "prototype", title: "Hard", task: "t" }, io);
   assert.match(started.text, /thinking high, tier deep, Jev difficulty 3\.4\/4/);
   const outcome = await pending;
   assert.equal(outcome.status, "partial");
@@ -619,7 +620,8 @@ test("a failed launch is retried exactly once, without asking Jev", async (t) =>
     const judge: Partial<Judge> = { available: true, verdict: async () => void judged.push("verdict") };
     const { delegator, nextOutcome, progress } = await setup(t, { herdr: { ...herdr, createWorktree }, judge });
     const pending = nextOutcome();
-    assert.equal((await delegator.start({ kind: "debug", title: "x", task: "y" }, io)).status, "started");
+    // A prototype is never proven by CI, so its verdict is asked.
+    assert.equal((await delegator.start({ kind: "prototype", title: "x", task: "y" }, io)).status, "started");
     const outcome = await pending;
     const attempts = log.filter((line) => line.startsWith("create")).length;
     assert.equal(attempts, 2, `${failures} failure(s): one launch and one retry`);
@@ -969,7 +971,7 @@ test("a rerouted worker's PR check still targets the first remote branch", async
       ...fakeWorkspace([]),
       prChecks: async ({ branch }) => {
         checked.push(branch);
-        return { url: `https://example.test/pr/${branch}`, state: "pass", failed: [] };
+        return { url: `https://example.test/pr/${branch}`, head: "def456", state: "pass", failed: [] };
       },
     },
   });
@@ -1089,7 +1091,7 @@ test("an implement worker may change any file: done is never capped for scope", 
   const { delegator, nextOutcome } = await setup(t, {
     workspace: {
       ...fakeWorkspace([]),
-      collect: async () => ({ commits: "i1 impl", diffStat: "", changedFiles: ["src/a.ts", "src/other.ts", "test/a.test.ts"], head: "i1" }),
+      collect: async () => ({ commits: "i1 impl", diffStat: "", changedFiles: ["src/a.ts", "src/other.ts", "test/a.test.ts"], head: "def456" }),
     },
   });
   const pending = nextOutcome();
@@ -1107,7 +1109,7 @@ test("a finished implement ticket reports its own PR and passing CI, checked on 
       ...fakeWorkspace([]),
       prChecks: async (input) => {
         checked.push(input);
-        return { url: "https://example.test/pr/1", state: "pass" as const, failed: [] };
+        return { url: "https://example.test/pr/1", head: "def456", state: "pass" as const, failed: [] };
       },
     },
   });
@@ -1169,7 +1171,7 @@ test("a detached HEAD never checks for a PR", async (t) => {
     workspace: {
       ...fakeWorkspace([]),
       currentBranch: async () => undefined,
-      prChecks: async () => (checked += 1, { url: "https://example.test/pr/1", state: "pass" as const, failed: [] }),
+      prChecks: async () => (checked += 1, { url: "https://example.test/pr/1", head: "def456", state: "pass" as const, failed: [] }),
     },
   });
   const pending = nextOutcome();
@@ -1182,7 +1184,7 @@ test("a detached HEAD never checks for a PR", async (t) => {
 
 test("no checks reported for the branch: done with CI: none", async (t) => {
   const { delegator, nextOutcome } = await setup(t, {
-    workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", state: "none" as const, failed: [] }) },
+    workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state: "none" as const, failed: [] }) },
   });
   const pending = nextOutcome();
   await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
@@ -1193,7 +1195,7 @@ test("no checks reported for the branch: done with CI: none", async (t) => {
 
 test("CI passes: reported done with CI: passed", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
-    workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", state: "pass" as const, failed: [] }) },
+    workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state: "pass" as const, failed: [] }) },
   });
   const pending = nextOutcome();
   await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
@@ -1209,6 +1211,7 @@ test("CI checks failing: capped to partial, check names only inside the untruste
       ...fakeWorkspace([]),
       prChecks: async () => ({
         url: "https://example.test/pr/1",
+        head: "def456",
         state: "fail" as const,
         failed: [{ name: "test", link: "https://example.test/run/2" }],
       }),
@@ -1228,11 +1231,117 @@ test("CI checks failing: capped to partial, check names only inside the untruste
 
 test("CI still pending: capped to partial", async (t) => {
   const { delegator, nextOutcome } = await setup(t, {
-    workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", state: "pending" as const, failed: [] }) },
+    workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state: "pending" as const, failed: [] }) },
   });
   const pending = nextOutcome();
   await delegator.start({ kind: "debug", title: "Fix", task: "t" }, io);
   const outcome = await pending;
   assert.equal(outcome.status, "partial");
   assert.match(outcome.text, /^CI: pending$/m);
+});
+
+test("a first CI-failed partial goes back to the worker with the host's evidence; the second reaches the Lead", async (t) => {
+  const { delegator, log, outcomes, nextOutcome, progress } = await setup(t, {
+    replies: [{ status: "done", summary: "first" }, { status: "done", summary: "second" }],
+    workspace: {
+      ...fakeWorkspace([]),
+      prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state: "fail" as const, failed: [{ name: "test", link: "https://example.test/run/2" }] }),
+    },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Fix", task: "t" }, io);
+  const outcome = await pending;
+  const sent = log.filter((line) => line.startsWith("send "));
+  assert.equal(sent.length, 1, "sent back exactly once");
+  assert.match(sent[0]!, /^send pane-1: \[PI Lead\] /);
+  assert.match(sent[0]!, /CI is not green on https:\/\/example\.test\/pr\/1/);
+  assert.match(sent[0]!, /test \(https:\/\/example\.test\/run\/2\)/);
+  assert.match(sent[0]!, /call `finish` again/);
+  assert.equal(outcomes.length, 1, "the first partial never reached the Lead");
+  assert.equal(outcome.status, "partial");
+  assert.match(outcome.text, /second/);
+  assert.match(outcome.text, /CI is not green on https:\/\/example\.test\/pr\/1; tell the user\./);
+  assert.ok(progress.some((line) => /"Fix": CI failed; sent back to the worker/.test(line)));
+});
+
+test("a first verify-failed partial goes back to the worker with the verify line and output; the second reaches the Lead", async (t) => {
+  const failing = { command: "npm test", exitCode: 1, outputTail: "1 failing: export.test.ts", ms: 2_000 };
+  const { delegator, log, outcomes, nextOutcome } = await setup(t, {
+    config: { verify: "npm test" },
+    replies: [{ status: "done", verification: failing }, { status: "done", summary: "still red", verification: failing }],
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "prototype", title: "Export", task: "t" }, io);
+  const outcome = await pending;
+  const sent = log.filter((line) => line.startsWith("send "));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, /Verify: `npm test` failed \(exit 1, 2s\)\./);
+  assert.match(sent[0]!, /1 failing: export\.test\.ts/);
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcome.status, "partial");
+  assert.match(outcome.text, /still red/);
+  assert.match(outcome.text, /Status: partial \(verify failed\)/);
+});
+
+test("a partial, blocked or needs_human the worker reported itself reaches the Lead at once", async (t) => {
+  for (const status of ["partial", "blocked", "needs_human"] as const) {
+    const { delegator, log, nextOutcome } = await setup(t, {
+      config: { verify: "npm test" },
+      replies: [{ status, verification: { command: "npm test", exitCode: 1, outputTail: "red", ms: 1 } }],
+    });
+    const pending = nextOutcome();
+    await delegator.start({ kind: "implement", title: "x", task: "t" }, io);
+    assert.equal((await pending).status, status);
+    assert.ok(!log.some((line) => line.startsWith("send ")), `${status} is not sent back`);
+  }
+});
+
+test("a partial Jev judged, not the host, reaches the Lead at once", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    config: { verify: "npm test" },
+    judge: { available: true, verdict: async () => "partial" },
+    replies: [{ status: "done", verification: { command: "npm test", exitCode: 1, outputTail: "red", ms: 1 } }],
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "x", task: "t" }, io);
+  assert.equal((await pending).status, "partial");
+  assert.ok(!log.some((line) => line.startsWith("send ")));
+});
+
+test("green checks on a PR head other than the worker's branch head count as pending", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, {
+    workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "0ld0ld", state: "pass" as const, failed: [] }) },
+  });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Fix", task: "t" }, io);
+  const outcome = await pending;
+  assert.equal(outcome.status, "partial");
+  assert.match(outcome.text, /^CI: pending$/m);
+  const sent = log.filter((line) => line.startsWith("send "));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, /PR head is 0ld0ld, not your branch head def456/);
+});
+
+test("no Jev verdict call once the host proved the work: verify passed (or none configured) and CI green on the head (or no checks)", async (t) => {
+  const passing = { command: "npm test", exitCode: 0, outputTail: "ok", ms: 1 };
+  const cases = [
+    { config: { verify: "npm test" }, verification: passing, state: "pass" as const, asked: 0 },
+    { config: {}, verification: undefined, state: "none" as const, asked: 0 },
+    // Not proven: CI red, or a configured verify with no run.
+    { config: { verify: "npm test" }, verification: passing, state: "fail" as const, asked: 2 },
+    { config: { verify: "npm test" }, verification: undefined, state: "pass" as const, asked: 1 },
+  ];
+  for (const { config, verification, state, asked } of cases) {
+    let calls = 0;
+    const { delegator, nextOutcome } = await setup(t, {
+      config,
+      judge: { available: true, verdict: async () => (calls += 1, undefined) },
+      replies: [{ status: "done", ...(verification ? { verification } : {}) }],
+      workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state, failed: [] }) },
+    });
+    const pending = nextOutcome();
+    await delegator.start({ kind: "implement", title: "x", task: "t" }, io);
+    await pending;
+    assert.equal(calls, asked, `${state}, verify ${config.verify ?? "none"}, run ${verification ? "passed" : "missing"}`);
+  }
 });

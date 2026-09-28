@@ -23,7 +23,7 @@ you ─► Lead (Pi, your tab)
                                  → Herdr worktree workspace (no focus), worker Pi in it
                                  worker Pi: runs on the host, /skill:implement …
                                  worker pushes, opens a draft PR, gets CI green, calls finish
-                                 Jev checks the verdict, worktree removed (branch kept)
+                                 Jev checks the verdict (unless verify and CI proved it), worktree removed (branch kept)
                                  (delegate returns at once; the result comes back as a message)
         worker tool         → list workers, relay an answer to one waiting on you, stop one
 ```
@@ -58,6 +58,11 @@ you ─► Lead (Pi, your tab)
   on its local branch. Once the worker calls `finish`, the host makes one
   non-watching check of the PR and its checks; a PR it cannot find, or CI
   still failing or pending, caps the report to `partial` instead of `done`.
+  Checks count only on the worker's branch head: a PR whose head is another
+  commit counts as pending. A report capped only because CI failed or is
+  pending, or because `verify` failed, goes back to the same worker once,
+  automatically, with the host's evidence; you hear about it only if the next
+  report is still not `done`.
 - A **worker** is an interactive Pi session in its own Herdr worktree
   workspace (`herdr worktree create`), running directly on the host on its own
   branch; its
@@ -239,8 +244,12 @@ When an implement, prototype or debug worker calls `finish` with `done` or
 what is left, then runs `verify` in the worker's worktree, with the bash tool's
 shell and environment, for at most `verifyTimeoutMinutes`. A
 non-zero exit (or a timeout) makes the result at most `partial`, whatever the
-worker or Jev says. The report states the command and exit code; the output's
-tail sits in the untrusted worker block and goes to Jev's verdict. Without
+worker or Jev says; the first such result goes back to the worker once with
+the command, exit code and output tail before it reaches you. The report
+states the command and exit code; the output's tail sits in the untrusted
+worker block and goes to Jev's verdict. When `verify` passed (or none is
+configured) and CI passed on the PR's head (or the repository runs no
+checks), the host has proven the work and Jev's verdict is not asked. Without
 `verify`, the report says the work is unverified.
 
 The worker controls the repository, so it can change what `verify` runs (a
