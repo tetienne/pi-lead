@@ -1,4 +1,4 @@
-import type { MergeMethod, Workspace } from "./workspace.ts";
+import { checkList, type MergeMethod, type Workspace } from "./workspace.ts";
 
 /**
  * Merging workers' green PRs, one at a time (mattpocock/skills#493: parallel
@@ -36,8 +36,6 @@ export type MergeDeps = {
 
 /** Checks can take a few seconds to register on a new head. */
 const GRACE_TRIES = 3;
-
-const failedChecks = (failed: { name: string; link: string }[]) => failed.map((check) => `${check.name} (${check.link})`).join(", ");
 
 export async function mergeOne(target: MergeTarget, deps: MergeDeps): Promise<MergeStep> {
   const { workspace, graceMs } = deps;
@@ -91,7 +89,7 @@ export async function mergeOne(target: MergeTarget, deps: MergeDeps): Promise<Me
     return problem(
       `CI failed on ${view.url} after it was updated from ${view.base} (new head ${checks.head}, ${checks.failed.length} failed check${checks.failed.length === 1 ? "" : "s"})`,
       `The update is a merge commit on the remote branch: run \`git pull --no-rebase origin ${target.branch ?? "<your branch>"}\` first, then fix it, commit, push, wait for CI with \`gh pr checks --watch\`, and call \`finish\` again.`,
-      `: ${failedChecks(checks.failed)}`,
+      `: ${checkList(checks.failed).join(", ")}`,
     );
   }
   if (checks.state === "pending") return stop(`CI is still pending on ${view.url} (head ${checks.head})`);

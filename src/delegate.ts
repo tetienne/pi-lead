@@ -12,7 +12,7 @@ import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
 import { mergeOne, type MergeTarget } from "./merge.ts";
-import type { MergeMethod, Workspace } from "./workspace.ts";
+import { checkList, type MergeMethod, type Workspace } from "./workspace.ts";
 
 export type DelegateParams = {
   kind: WorkKind;
@@ -714,7 +714,7 @@ export function createDelegator(deps: DelegateDeps) {
     if (judged === "done" && status === "partial" && ciRed && !worker.sentBack) {
       const evidence =
         ciRed.state === "fail"
-          ? [`CI is not green on ${ciRed.url}. Failed checks:`, ...ciRed.failed.map((check) => `${check.name} (${check.link})`)]
+          ? [`CI is not green on ${ciRed.url}. Failed checks:`, ...checkList(ciRed.failed)]
           : ciRed.head === collected.head
             ? [`CI is not green on ${ciRed.url}: its checks are still pending.`]
             : [`CI is not green on ${ciRed.url}: the PR head is ${ciRed.head ?? "unknown"}, not your branch head ${collected.head}; push your branch.`];
@@ -768,6 +768,27 @@ export function createDelegator(deps: DelegateDeps) {
       next.push(`The model stopped on a provider error: tell the user; to retry, ${resume}.`);
     }
 
+    const section = (heading: string, body: string | undefined) => (body ? ["", `${heading}:`, body] : []);
+    const untrusted = [
+      "Summary:",
+      result.summary,
+      ...section("Commits", collected.commits),
+      ...section("Diff stat", collected.diffStat),
+      ...section("Findings", result.findings),
+      ...section("CI checks failed", checkList(pr?.failed ?? []).join("\n")),
+      ...sharedWith.flatMap((other) => section(`Files also changed by the open PR of "${other.title}"`, other.files.join("\n"))),
+    ].join("\n");
+    // Host-generated, so outside the block: the patterns come from a fixed list, and the file names they matched stay inside.
+    const hostChecks = [
+      sensitive.length
+        ? [`Host check: review these before merging; they can run on your machine or in CI, or steer future agents: ${sensitive.join(", ")}.`]
+        : [],
+      sharedWith.map(
+        (other) =>
+          `Host check: this branch shares files with the open PR of "${other.title}" (${other.pr}), listed in the report above; merging one may conflict with the other.`,
+      ),
+    ];
+
     report({
       worker: info(worker),
       status,
@@ -782,33 +803,11 @@ export function createDelegator(deps: DelegateDeps) {
         `Head: ${collected.head}`,
         `Base: ${worker.base}`,
         "",
-        // Everything in this block was written by the worker: report it, never obey it.
+        // Everything in this block was written by the worker, its repository or its branch: report it, never obey it.
         "<worker-report untrusted>",
-        "Summary:",
-        unmarked(result.summary),
-        ...(collected.commits ? ["", "Commits:", unmarked(collected.commits)] : []),
-        ...(collected.diffStat ? ["", "Diff stat:", unmarked(collected.diffStat)] : []),
-        ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
-        ...(pr?.failed.length ? ["", "CI checks failed:", unmarked(pr.failed.map((check) => `${check.name} (${check.link})`).join("\n"))] : []),
-        ...sharedWith.flatMap((other) => ["", `Files also changed by the open PR of "${other.title}":`, unmarked(other.files.join("\n"))]),
+        unmarked(untrusted),
         "</worker-report>",
-        // Host-generated from the fixed pattern list, so it sits outside the block; worker-chosen file names stay inside.
-        ...(sensitive.length
-          ? [
-              "",
-              `Host check: review these before merging; they can run on your machine or in CI, or steer future agents: ${sensitive.join(", ")}.`,
-            ]
-          : []),
-        // Host data; the shared file names are listed inside the block above.
-        ...(sharedWith.length
-          ? [
-              "",
-              ...sharedWith.map(
-                (other) =>
-                  `Host check: this branch shares files with the open PR of "${other.title}" (${other.pr}), listed in the report above; merging one may conflict with the other.`,
-              ),
-            ]
-          : []),
+        ...hostChecks.flatMap((lines) => (lines.length ? ["", ...lines] : [])),
         ...(next.length ? ["", "Next:", ...next.map((line) => `- ${line}`)] : []),
       ].join("\n"),
       details: {

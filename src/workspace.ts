@@ -20,6 +20,9 @@ export function classifyChecks(checks: CheckBucket[]): { state: "pass" | "pendin
   return { state: checks.some((check) => check.bucket === "pending") ? "pending" : "pass", failed: [] };
 }
 
+/** Failed checks as `name (link)`, one per entry. Check names and links are the repository's: untrusted text. */
+export const checkList = (failed: readonly { name: string; link: string }[]) => failed.map((check) => `${check.name} (${check.link})`);
+
 /** gh's merge methods, in the order its own `gh pr merge` prompt offers them. */
 export const MERGE_METHODS = ["merge", "rebase", "squash"] as const;
 export type MergeMethod = (typeof MERGE_METHODS)[number];
