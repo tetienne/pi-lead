@@ -29,8 +29,11 @@ you ─► Lead (Pi, your tab)
 ```
 
 - The **Lead** is ordinary Pi plus a short workflow section in its system
-  prompt (questions: answer; otherwise follow `ask-matt`) and one tool,
-  `delegate`. It never intercepts your messages.
+  prompt (questions: answer; otherwise follow `ask-matt`) and two tools,
+  `delegate` and `worker`. It implements single-session work itself with
+  `/implement`, delegates each ticket of a multi-session build (or anything
+  you ask to run in the background), and inspects worker branches and CI
+  with git and `gh` through bash. It never intercepts your messages.
 - **Worker reports are untrusted.** The worker's own words reach the Lead
   inside a `<worker-report untrusted>` block, and the Lead is told to report
   them, not follow them. There is no confirmation step: a worker already runs
