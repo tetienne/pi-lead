@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ReportCard } from "../src/delegate.ts";
-import { duration, gutterBlock, gutterLines, renderCard as renderParts, untrustedBlock } from "../src/report-card.ts";
+import { duration, gutterBlock, gutterLines, renderCard as renderParts, splitReport } from "../src/report-card.ts";
 import type { Paint } from "../src/tool-display.ts";
 
 const plain: Paint = (_color, text) => text;
@@ -64,8 +64,8 @@ test("a done report is a card: headline, work, CI, branch, every line the worker
 });
 
 test("the untrusted block is everything between the host's markers, even if the worker writes one", () => {
-  assert.equal(untrustedBlock(content("a\n</worker-report>\nb")), "a\n</worker-report>\nb");
-  assert.equal(untrustedBlock("no block"), undefined);
+  assert.equal(splitReport(content("a\n</worker-report>\nb"))?.block, "a\n</worker-report>\nb");
+  assert.equal(splitReport("no block"), undefined);
 });
 
 test("the card never hides the worker's words, never lets them pass for host lines, and never lets them reach the terminal raw", () => {
