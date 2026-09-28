@@ -32,7 +32,6 @@ export type DelegateIO = {
 };
 
 export type WorkerState =
-  | "queued"
   | "starting"
   | "running"
   | "waiting" // stopped on needs_human / partial / blocked, tab open, can be messaged
@@ -123,7 +122,7 @@ export type DelegateDeps = {
   stateRoot: string;
   /** Called for every result: first finish, each later finish, failures and stops. */
   onOutcome(outcome: DelegateOutcome): void;
-  /** Short progress lines, one per event (started, queued, rerouted), for the Lead's transcript. */
+  /** Short progress lines, one per event (started, retried, rerouted), for the Lead's transcript. */
   onProgress?(text: string): void;
   /** The end of a `merge` run: what merged, where it stopped and why. */
   onMergeReport?(text: string): void;
@@ -279,7 +278,7 @@ export function isSafeBranchName(name: string): boolean {
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
- * Delegation is asynchronous: `start` returns as soon as the worker is queued,
+ * Delegation is asynchronous: `start` returns as soon as the worker is starting,
  * the Lead keeps talking with the user, and every result is pushed through
  * `onOutcome`. Workers stopped on a question stay reachable through `message`.
  */
@@ -457,18 +456,6 @@ export function createDelegator(deps: DelegateDeps) {
     } catch {
       return undefined;
     }
-  };
-
-  /**
-   * Every worker starts at once: the Lead sequences tickets by their Blocked-by
-   * edges, and conflicts surface in the one-at-a-time merge flow.
-   */
-  const markStarting = (worker: Worker) => {
-    const signal = worker.controller.signal;
-    if (signal.aborted) throw signal.reason;
-    // Not setState: there is no tab to describe yet. A rerouted waiting worker no longer waits on the user.
-    worker.state = "starting";
-    worker.verdict = undefined;
   };
 
   const readIfPresent = async (path: string) => {
@@ -847,10 +834,12 @@ export function createDelegator(deps: DelegateDeps) {
     worker.route = { model: route.model, thinking: route.thinking, tier: route.tier, note: `${from} ran out of quota; continued on ${route.model} from ${previous}` };
     worker.resumed = true;
     progress(`"${worker.title}": ${from} ran out of quota; continuing on ${route.model}`);
-    // A worker left waiting (the user may have typed in its tab) no longer waits on the user.
     await closeAndClean(worker);
-    // Throws when stopped meanwhile: open no new tab.
-    markStarting(worker);
+    // Stopped meanwhile: open no new tab.
+    if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
+    // Not setState: its tab is gone. A worker left waiting (the user may have typed in its tab) no longer waits on the user.
+    worker.state = "starting";
+    worker.verdict = undefined;
     await launch(worker);
     setState(worker, "running");
     return true;
@@ -929,7 +918,6 @@ export function createDelegator(deps: DelegateDeps) {
   /** Background life of one worker: launch (one retry on failure), first result. */
   const drive = async (worker: Worker) => {
     try {
-      markStarting(worker);
       while (true) {
         try {
           await launch(worker);
@@ -1100,7 +1088,7 @@ export function createDelegator(deps: DelegateDeps) {
         id: randomUUID(),
         title: params.title,
         kind: params.kind,
-        state: "queued",
+        state: "starting",
         route,
         params,
         io,

@@ -1,6 +1,6 @@
 import type { StartResult, WorkerInfo } from "./delegate.ts";
 import { safePreview } from "./safe-preview.ts";
-import { stateGlyph } from "./worker-display.ts";
+import { stateGlyph, type WorkerDisplayState } from "./worker-display.ts";
 
 /**
  * How the `delegate` and `worker` tool calls show in the Lead's transcript.
@@ -67,7 +67,8 @@ export function workerCall(args: { action?: unknown; id?: unknown; message?: unk
   return `${paint("toolTitle", "worker ")}${action}${target}${action === "message" ? message : ""}`;
 }
 
-const STATE_COLOR: Record<WorkerInfo["state"], Color> = {
+/** Display states, so a worker list stored by an older version still renders. */
+const STATE_COLOR: Record<WorkerDisplayState, Color> = {
   queued: "dim",
   starting: "dim",
   running: "accent",

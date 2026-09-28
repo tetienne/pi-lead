@@ -6,7 +6,7 @@ import type { WorkKind, WorkerVerdict } from "./jev.ts";
  * formatting, like jev-display.ts. Every glyph is one column wide, and each
  * is a distinct shape, so none relies on colour:
  *
- * - `○` queued or starting, `●` running;
+ * - `○` starting, `●` running;
  * - `?` waiting for the user's answer, `~` partial, `✗` blocked or failed;
  * - `✓` done, `-` stopped.
  *
@@ -15,7 +15,10 @@ import type { WorkKind, WorkerVerdict } from "./jev.ts";
  * fixed host string.
  */
 
-/** The lifecycle states of delegate.ts, repeated so this module stays free of it. */
+/**
+ * The lifecycle states of delegate.ts, repeated so this module stays free of it, plus `queued`,
+ * which worker lists stored by versions that queued workers still carry.
+ */
 export type WorkerDisplayState = "queued" | "starting" | "running" | "waiting" | "done" | "failed" | "stopped";
 
 export type WorkerView = {
@@ -111,15 +114,13 @@ export function attentionNotice(worker: WorkerView): { title: string; sound: "re
   return undefined;
 }
 
-/** The Lead's footer counters: `2 running · 1 queued · 1 needs you`, or undefined with no live worker. */
+/** The Lead's footer counters: `2 running · 1 needs you`, or undefined with no live worker. */
 export function workerCounts(workers: readonly Pick<WorkerView, "state">[]): { text: string; needsYou: boolean } | undefined {
   const count = (...states: WorkerDisplayState[]) => workers.filter((worker) => states.includes(worker.state)).length;
   const running = count("starting", "running");
-  const queued = count("queued");
   const waiting = count("waiting");
   const parts = [
     ...(running ? [`${running} running`] : []),
-    ...(queued ? [`${queued} queued`] : []),
     ...(waiting ? [`${waiting} needs you`] : []),
   ];
   return parts.length ? { text: `● ${parts.join(" · ")}`, needsYou: waiting > 0 } : undefined;
