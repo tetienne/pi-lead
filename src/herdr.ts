@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-/** Host-side Herdr presentation. Workers never receive the Herdr socket. */
+/** The Lead's Herdr client: worker worktrees, their panes and their presentation. */
 export type Herdr = {
   /** The Lead's own workspace, where the Lead itself runs. */
   readonly workspace: string;
@@ -17,6 +17,11 @@ export type Herdr = {
   removeWorktree(workspaceId: string): Promise<void>;
   /** Ids of the workspaces that currently exist. */
   listWorkspaces(): Promise<string[]>;
+  /**
+   * Whether Herdr still detects a live agent in a pane (`herdr agent get <pane>`,
+   * which only resolves a pane currently hosting one). False on any error.
+   */
+  hasAgent(paneId: string): Promise<boolean>;
   /**
    * Display-only pane metadata (title, sidebar name, tokens, working label).
    * Never lifecycle state: that stays with Herdr's Pi integration.
@@ -53,18 +58,6 @@ function collectStrings(value: unknown, field: string, found: string[] = []): st
   return found;
 }
 
-/**
- * Herdr rejected the command line itself: an older Herdr without that
- * subcommand or flag (clap exits 2). A timeout, a busy socket or a missing
- * tab is not one, and never switches a feature off.
- */
-export function isUsageError(error: unknown): boolean {
-  const failure = error as { code?: unknown; stderr?: unknown; message?: unknown } | undefined;
-  if (failure?.code === 2) return true;
-  const text = `${typeof failure?.stderr === "string" ? failure.stderr : ""}\n${typeof failure?.message === "string" ? failure.message : ""}`;
-  return /unrecognized subcommand|unexpected argument|unrecognized option|invalid value/i.test(text);
-}
-
 /** The workspace is the prefix of a pane or tab id (`<workspace>:<pane>`, `<workspace>:<tab>`). */
 export function workspaceFromPaneId(paneId: string | undefined): string | undefined {
   const separator = paneId?.indexOf(":") ?? -1;
@@ -78,8 +71,6 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     const { stdout } = await execFileAsync("herdr", args, { encoding: "utf8", timeout: 10_000, maxBuffer: 1 << 20 });
     return stdout.trim() ? (JSON.parse(stdout) as unknown) : undefined;
   };
-  /** Set once a full metadata report failed and the older form went through. */
-  let legacyMetadata = false;
   return {
     workspace,
     async createWorktree({ cwd, branch, base, path, label }) {
@@ -107,9 +98,15 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
     async listWorkspaces() {
       return collectStrings(await herdr(["workspace", "list"]), "workspace_id");
     },
+    async hasAgent(paneId) {
+      return herdr(["agent", "get", paneId]).then(
+        () => true,
+        () => false,
+      );
+    },
     async reportMetadata(paneId, { title, displayAgent, tokens, workingLabel, idleLabel, blockedLabel, seq }) {
       // argv, never a shell: titles and branches are user/model text.
-      const base = [
+      await herdr([
         "pane",
         "report-metadata",
         paneId,
@@ -124,9 +121,6 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
         ...Object.entries(tokens).flatMap(([name, value]) => ["--token", `${name}=${value}`]),
         "--state-label",
         `working=${workingLabel}`,
-      ];
-      const full = [
-        ...base,
         "--state-label",
         `idle=${idleLabel}`,
         "--state-label",
@@ -135,23 +129,7 @@ export function createHerdrCli(environment: NodeJS.ProcessEnv = process.env): He
         `blocked=${blockedLabel}`,
         "--seq",
         String(seq),
-      ];
-      if (!legacyMetadata) {
-        try {
-          return void (await herdr(full));
-        } catch (error) {
-          // A Herdr without `--seq` or these state labels rejects the whole report: keep what it knows.
-          if (!isUsageError(error)) throw error;
-          try {
-            await herdr(base);
-          } catch {
-            throw error;
-          }
-          legacyMetadata = true;
-          return;
-        }
-      }
-      await herdr(base);
+      ]);
     },
     async renameAgent(paneId, name) {
       await herdr(["agent", "rename", paneId, name]);

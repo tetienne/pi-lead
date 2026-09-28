@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { createHerdrCli, isUsageError, workspaceFromPaneId } from "../src/herdr.ts";
+import { createHerdrCli, workspaceFromPaneId } from "../src/herdr.ts";
 
 /** A fake `herdr` on PATH that logs its argv and refuses `agent prompt` (agent not detected). */
 async function fakeHerdrBinary(options: { rejectSeq?: boolean } = {}) {
@@ -41,6 +41,7 @@ case "$1 $2" in
   "worktree create") echo '{"id":"cli:worktree:create","result":{"workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"w1:p3"}}}' ;;
   "workspace list") echo '{"result":{"workspaces":[{"workspace_id":"w1"},{"workspace_id":"w2"}]}}' ;;
   "agent prompt") echo 'agent_not_found' >&2; exit 1 ;;
+  "agent get") case "$3" in w1:p3) echo '{"result":{"agent":{"pane_id":"w1:p3"}}}' ;; *) echo 'agent_not_found' >&2; exit 1 ;; esac ;;
 esac
 `,
   );
@@ -90,32 +91,35 @@ test("workspace listing, pane metadata and agent names go through argv, never a 
   }
 });
 
-test("an older Herdr that rejects --seq or the new state labels still gets title, tokens and the working label", async () => {
+test("a Herdr that rejects --seq gets no older form of the report: 0.9.1 is required", async () => {
   const { dir, argv } = await fakeHerdrBinary({ rejectSeq: true });
   const previous = process.env.PATH;
   process.env.PATH = `${dir}:${previous}`;
   try {
     const herdr = createHerdrCli({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" })!;
     const metadata = { title: "T", displayAgent: "pi-lead debug", tokens: {}, workingLabel: "w", idleLabel: "i", blockedLabel: "b", seq: 1 };
-    await herdr.reportMetadata("w1:p3", metadata);
-    await herdr.reportMetadata("w1:p3", { ...metadata, seq: 2 });
-    const legacy = "[pane][report-metadata][w1:p3][--source][custom:pi-lead][--agent][pi][--title][T][--display-agent][pi-lead debug][--state-label][working=w]";
+    await assert.rejects(herdr.reportMetadata("w1:p3", metadata));
+    await assert.rejects(herdr.reportMetadata("w1:p3", { ...metadata, seq: 2 }));
     const calls = await argv();
-    assert.equal(calls.length, 3, "one failed full report, then the older form only");
-    assert.match(calls[0]!, /\[--seq\]\[1\]/);
-    assert.deepEqual(calls.slice(1), [legacy, legacy]);
+    assert.equal(calls.length, 2, "one full report per call, no retry without --seq");
+    assert.ok(calls.every((call) => call.includes("[--seq]")));
   } finally {
     process.env.PATH = previous;
   }
 });
 
-test("only a rejected command line counts as an older Herdr, never a timeout or a missing tab", () => {
-  assert.ok(isUsageError({ code: 2, stderr: "" }));
-  assert.ok(isUsageError(new Error("Command failed: herdr workspace rename\nerror: unrecognized subcommand 'rename'")));
-  assert.ok(isUsageError({ code: 1, stderr: "error: unexpected argument '--seq' found" }));
-  assert.ok(!isUsageError({ code: 1, stderr: "workspace_not_found" }));
-  assert.ok(!isUsageError(Object.assign(new Error("Command failed: herdr"), { killed: true, signal: "SIGTERM" })));
-  assert.ok(!isUsageError(undefined));
+test("a pane runs an agent only while Herdr resolves it with agent get", async () => {
+  const { dir, argv } = await fakeHerdrBinary();
+  const previous = process.env.PATH;
+  process.env.PATH = `${dir}:${previous}`;
+  try {
+    const herdr = createHerdrCli({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" })!;
+    assert.equal(await herdr.hasAgent("w1:p3"), true);
+    assert.equal(await herdr.hasAgent("w1:p4"), false, "no agent in the pane (Pi exited, or the pane is gone)");
+    assert.deepEqual(await argv(), ["[agent][get][w1:p3]", "[agent][get][w1:p4]"]);
+  } finally {
+    process.env.PATH = previous;
+  }
 });
 
 test("the Lead's workspace comes from its own pane id", () => {

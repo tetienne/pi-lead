@@ -60,8 +60,8 @@ test("an unavailable configured model falls back to the first available fallback
 });
 
 test("config merging keeps defaults for unspecified fields", () => {
-  const config = mergeConfig(DEFAULT_CONFIG, { jev: { dailyBudgetUsd: 0.5 } });
-  assert.equal(config.jev.dailyBudgetUsd, 0.5);
+  const config = mergeConfig(DEFAULT_CONFIG, { jev: { minConfidence: 0.5 } });
+  assert.equal(config.jev.minConfidence, 0.5);
   assert.equal(config.jev.model, DEFAULT_CONFIG.jev.model);
   assert.equal(config.stuckDetection, true);
   assert.equal(mergeConfig(DEFAULT_CONFIG, { stuckDetection: false }).stuckDetection, false);

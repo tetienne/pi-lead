@@ -1,8 +1,13 @@
 import { readFile } from "node:fs/promises";
 
-import type { LeadConfig } from "./config.ts";
 import type { WorkKind, WorkerVerdict } from "./jev.ts";
 import type { QuotaError } from "./quota.ts";
+
+/**
+ * Set in every Pi that PI Lead starts (`worker`, `sub-agent`); the Lead extension
+ * stays inert wherever it is set, so a worker never becomes a second Lead.
+ */
+export const ROLE_ENV = "PI_LEAD_ROLE";
 
 /** Written by the Lead, read by the worker extension (`--pi-lead-task`). */
 export type WorkerTask = {
@@ -16,19 +21,8 @@ export type WorkerTask = {
   worktreePath: string;
   /** Host path the worker writes its `WorkerResult` to (outside the worktree). */
   resultPath: string;
-  /** Set for an implement worker built on a scout's brief. */
-  allowedFiles?: string[];
-  /** The scout's own test files: must not be changed, only made to pass. */
-  protectedFiles?: string[];
-  jev: LeadConfig["jev"];
   /** Steer the worker when it keeps repeating a failing command. Absent means on. */
   stuckDetection?: boolean;
-  /**
-   * The project's `verify` command (trusted project config only), run by the
-   * worker extension on the host's behalf when code work finishes.
-   */
-  verify?: string;
-  verifyTimeoutMinutes?: number;
 };
 
 /** Written by the worker's `finish` tool. */
@@ -39,10 +33,8 @@ export type WorkerResult = {
   seq: number;
   status: WorkerVerdict;
   summary: string;
-  /** Review findings, when the work was a review; for a scout, the brief for the implementer. */
+  /** Review findings, when the work was a review. */
   findings?: string;
-  /** Written by a scout's `finish`: exact repo-relative paths the implementer may change or create. */
-  allowedFiles?: string[];
   /**
    * Written by the worker extension, not by `finish`: the model stopped on a
    * provider error. `quota` is set when that error is an exhausted allowance.
@@ -51,23 +43,12 @@ export type WorkerResult = {
   quota?: QuotaError;
   /** Changes left in the worktree because committing them failed. */
   uncommitted?: boolean;
-  /** Written by the worker extension, not by `finish`: the run of `WorkerTask.verify`. */
-  verification?: Verification;
 };
-
-/**
- * The task's `verify` command, run by the worker extension (host-side code)
- * in the worker's worktree after the model's last commit; the model cannot
- * choose or skip it. `exitCode` is -1 when it did not complete (timeout,
- * error). The worker controls the repository, so `outputTail` is
- * worker-produced text.
- */
-export type Verification = { command: string; exitCode: number; outputTail: string; ms: number };
 
 /** Work kinds whose worker changes code, and so should run its tests. */
 export const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debug"];
 
-/** Kinds that push, open a draft PR and watch its CI once they settle `done`: not prototype, review or scout. */
+/** Kinds that push, open a draft PR and watch its CI once they settle `done`: not prototype or review. */
 export const PUBLISHED_KINDS: readonly WorkKind[] = ["implement", "debug", "research"];
 
 export const WORKER_STATUSES = ["done", "partial", "blocked", "needs_human"] as const satisfies readonly WorkerVerdict[];
@@ -86,14 +67,8 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
     !WORKER_STATUSES.includes(result.status as WorkerVerdict) ||
     typeof result.summary !== "string" ||
     (result.findings !== undefined && typeof result.findings !== "string") ||
-    (result.allowedFiles !== undefined && (!Array.isArray(result.allowedFiles) || result.allowedFiles.some((f) => typeof f !== "string"))) ||
     (result.modelError !== undefined && typeof result.modelError !== "string") ||
     (result.uncommitted !== undefined && typeof result.uncommitted !== "boolean") ||
-    (result.verification !== undefined &&
-      (typeof result.verification?.command !== "string" ||
-        !Number.isInteger(result.verification.exitCode) ||
-        typeof result.verification.outputTail !== "string" ||
-        !(Number.isFinite(result.verification.ms) && result.verification.ms >= 0))) ||
     (result.quota !== undefined &&
       (typeof result.quota?.message !== "string" ||
         (result.quota.retryAfterMinutes !== undefined &&
@@ -104,9 +79,6 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
   return result as WorkerResult;
 }
 
-/** A scout's brief for the implementer that builds on its branch. */
-export type WorkerBrief = { allowedFiles: string[]; protectedFiles: string[]; text: string };
-
 /** Where the worker pushes its ticket and opens its draft PR; the worker watches that PR's CI itself. */
 export type PublishTarget = { baseBranch: string; remoteBranch: string; title: string };
 
@@ -114,23 +86,9 @@ export type PublishTarget = { baseBranch: string; remoteBranch: string; title: s
 const shellQuote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
 
 /** First message of the worker session; explicit `/skill:` invocation. */
-export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief, publish?: PublishTarget): string {
+export function workerPrompt(kind: WorkKind, task: string, publish?: PublishTarget): string {
   const base = ((): string => {
     switch (kind) {
-      case "scout":
-        return [
-          `You prepare this ticket for a cheaper implementer; do not implement it: ${task}`,
-          "",
-          "Read the ticket and the code. Find existing helpers, types and patterns the change must reuse.",
-          "Write failing tests for the acceptance criteria at the public seams, copying the style of an existing test.",
-          "Run them and confirm they fail for the expected reason. Commit them.",
-          "If the ticket cannot be tested (docs, config), write no test.",
-          "Call `finish` with `allowedFiles`: exact repo-relative paths the implementer may change or create (source",
-          "files, plus the lockfile only if a dependency must change); do not list your own test files; no directories.",
-          "And `findings`: the brief (helpers to reuse with paths, the seam and interface decided, the test command",
-          "that runs your tests, anything the implementer must not do).",
-          "Use `needs_human` when the code cannot settle a decision.",
-        ].join("\n");
       case "implement":
         return `/skill:implement ${task}`;
       case "prototype":
@@ -151,20 +109,9 @@ export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief, 
         ].join("\n");
     }
   })();
-  const withBrief = !brief
-    ? base
-    : [
-        base,
-        "",
-        "## Scout brief",
-        `Allowed files (change or create only these): ${brief.allowedFiles.join(", ")}`,
-        `Protected test files (do not change; make them pass): ${brief.protectedFiles.join(", ")}`,
-        "",
-        brief.text,
-      ].join("\n");
-  if (!publish || !PUBLISHED_KINDS.includes(kind)) return withBrief;
+  if (!publish || !PUBLISHED_KINDS.includes(kind)) return base;
   return [
-    withBrief,
+    base,
     "",
     "## Publishing",
     `When the work is committed: push it with \`git push -u origin HEAD:${publish.remoteBranch}\`, open a draft PR against`,
@@ -177,6 +124,39 @@ export function workerPrompt(kind: WorkKind, task: string, brief?: WorkerBrief, 
     "status `partial` and say why. Put the PR URL in your summary.",
   ].join("\n");
 }
+
+/**
+ * How the Lead and its workers run the sub-agents Matt's skills ask for:
+ * one non-interactive Pi per sub-agent in a Herdr pane beside the caller.
+ * The quotes split in the completion marker keep the typed command line from
+ * matching `wait-output` before the sub-agent has finished.
+ */
+export const SUB_AGENT_RECIPE = `
+## Sub-agents
+
+When a skill says to spawn, dispatch or fire a sub-agent (code-review's two
+axes, grilling's fact-finding, wayfinder's research,
+improve-codebase-architecture's exploration, codebase-design's
+design-it-twice), run each one as a non-interactive Pi in a Herdr pane beside
+you:
+
+1. Check \`test "\${HERDR_ENV:-}" = 1\`. If it fails, Herdr is unavailable: do
+   the sub-agents' steps yourself, one after the other, in this context, and
+   say so in your output.
+2. Write the sub-agent's complete brief to \`<dir>/prompt.md\` in a fresh
+   \`mktemp -d\` directory: it sees nothing of your context.
+3. \`herdr pane split --current --direction right --cwd "$PWD" --no-focus\`
+   (\`down\` if your pane is narrow), and read the new pane's id from
+   \`.result.pane.pane_id\` in the JSON it prints.
+4. \`herdr pane run <pane-id> "${ROLE_ENV}=sub-agent pi --print --no-session @<dir>/prompt.md > <dir>/report.md 2>&1; echo 'sub-agent-''finished'"\`,
+   with \`<dir>\` written out. Start every sub-agent the step asks for before
+   waiting on any.
+5. \`herdr pane wait-output <pane-id> --match sub-agent-finished --timeout 1800000\`.
+   On a timeout, look with \`herdr pane read <pane-id> --source recent-unwrapped --lines 120\`
+   before deciding.
+6. Read \`<dir>/report.md\` (the sub-agent's final answer, or its error),
+   then \`herdr pane close <pane-id>\`, and carry on with the skill.
+`;
 
 export const WORKER_RULES = `
 ## PI Lead worker
@@ -198,7 +178,6 @@ opens your tab.
 - Messages starting with "[PI Lead]" come from the Lead (often relaying the
   user's answer). Continue the task with them and call \`finish\` again.
 - You run unattended: when a skill says to confirm something with the user
-  (a seam, an interface), use the scout brief when there is one, otherwise
-  decide from the code and say so in your finish summary. Use \`needs_human\`
-  only for what the code cannot answer.
-`;
+  (a seam, an interface), decide from the code and say so in your finish
+  summary. Use \`needs_human\` only for what the code cannot answer.
+${SUB_AGENT_RECIPE}`;

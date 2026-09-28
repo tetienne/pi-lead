@@ -44,8 +44,8 @@ test("a delegate result says started, with the route", () => {
     "<accent>●</accent> started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab",
   );
   assert.equal(delegateResult(started, "Delegated…", true, plain), "● started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab\nDelegated…");
-  const notReady: StartResult = { status: "not_ready", missing: ["acceptance"], text: "Not delegated: no acceptance criteria." };
-  assert.equal(delegateResult(notReady, notReady.text, false, paint), "<warning>?</warning> Not delegated: no acceptance criteria.");
+  // Jev no longer refuses tickets: a not_ready result stored by an older version shows as its text only.
+  assert.equal(delegateResult({ status: "not_ready", missing: ["acceptance"] }, "Not delegated.", false, plain), "Not delegated.");
   const failed: StartResult = { status: "failed", text: "PI Lead workers need Herdr." };
   assert.equal(delegateResult(failed, failed.text, false, paint), "<error>✗</error> PI Lead workers need Herdr.");
   const noted: StartResult = { status: "started", worker: worker({ route: { model: "a/b", thinking: "high", tier: "deep", note: "a/x ran out of quota" } }), text: "" };

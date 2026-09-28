@@ -8,17 +8,21 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { loadConfigWithNotices } from "./config.ts";
-import { createDelegator, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
-import { registerGitRead } from "./git-read.ts";
+import { createDelegator, type DelegateIO, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
-import { createAskJev, createJudge, createLedger, describeJevProblem, type JevDecision, type JevUsage } from "./jev.ts";
-import { isDecision, JEV_ENTRY, jevReport, jevStatus, RECENT_DECISIONS, renderDecision, shouldShow } from "./jev-display.ts";
+import { createAskJev, createJudge, describeJevProblem, type JevDecision } from "./jev.ts";
+import { isDecision, JEV_ENTRY, renderDecision } from "./jev-display.ts";
+import { ROLE_ENV } from "./protocol.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
-import { registerReportGuard, WORKER_REPORT_TYPE } from "./report-guard.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
 import { PROGRESS_ENTRY, renderProgress, workerCounts } from "./worker-display.ts";
-import { gitWorkspace } from "./workspace.ts";
+import { gitWorkspace, MERGE_METHODS } from "./workspace.ts";
+
+/** The custom message type the Lead uses to deliver worker results. */
+const WORKER_REPORT_TYPE = "pi-lead-worker";
+/** The custom message type that ends a `merge` run. */
+const MERGE_REPORT_TYPE = "pi-lead-merge";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SKILLS_DIR = join(PACKAGE_ROOT, ".agents", "skills");
@@ -42,9 +46,8 @@ function piInvocation(): string[] {
 
 /**
  * Herdr's own Pi integration (working/idle/blocked, session identity), written
- * by `herdr integration install pi`. It is trusted host code that only talks
- * to the Herdr socket; now that worker Pi runs on the host it works as is. The
- * worker never sees the socket.
+ * by `herdr integration install pi`. Only checked for the startup warning:
+ * workers load it with the user's other global extensions.
  */
 export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefined {
   const path = join(agentDir, "extensions", "herdr-agent-state.ts");
@@ -52,40 +55,44 @@ export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefin
 }
 
 /**
- * A worker is a Pi like the Lead: same package and global skills and prompts,
- * plus host copies of the repository's own (see context-snapshot.ts), reads
- * running directly on the host. Code is the exception: project and global
- * extensions are left out, so only the worker extension and Herdr's Pi
- * integration load.
+ * A worker is a plain Pi like the Lead: the user's global extensions (Herdr's
+ * Pi integration among them), same package and global skills and prompts,
+ * running directly on the host. Its fresh worktree path has no saved trust
+ * decision, so the Lead's is passed for this process only: a trusted project's
+ * worker loads the project's extensions, skills, prompts and APPEND_SYSTEM.md
+ * from its worktree by Pi's own discovery, an untrusted one none of them. Only
+ * the worker extension and PI Lead's own skills are added (the Lead adds those
+ * through `resources_discover`, inert in a worker); the Lead extension, if
+ * installed globally, stays inert under `PI_LEAD_ROLE`.
  */
-export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, resources }) => {
-  const herdr = findHerdrPiExtension();
-  return [
-    ...piInvocation(),
-    "--no-approve",
-    "--no-extensions",
-    "-e",
-    WORKER_EXTENSION,
-    ...(herdr ? ["-e", herdr] : []),
-    "--skill",
-    SKILLS_DIR,
-    ...resources.skills.flatMap((path) => ["--skill", path]),
-    ...resources.prompts.flatMap((path) => ["--prompt-template", path]),
-    ...(resources.appendSystem ? ["--append-system-prompt", resources.appendSystem] : []),
-    "--model",
-    route.model,
-    "--thinking",
-    route.thinking,
-    "--name",
-    label,
-    "--pi-lead-task",
-    taskPath,
-    "--",
-    prompt,
-  ];
-};
+export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, projectTrusted }) => [
+  ...piInvocation(),
+  projectTrusted ? "--approve" : "--no-approve",
+  "-e",
+  WORKER_EXTENSION,
+  "--skill",
+  SKILLS_DIR,
+  "--model",
+  route.model,
+  "--thinking",
+  route.thinking,
+  "--name",
+  label,
+  "--pi-lead-task",
+  taskPath,
+  "--",
+  prompt,
+];
 
 const WORKER_ACTIONS = ["list", "message", "stop"] as const;
+
+/** What the session knows that a worker needs: the repository, the models it may use, the project's trust. */
+const sessionIO = (ctx: ExtensionContext): DelegateIO => ({
+  cwd: ctx.cwd,
+  lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+  available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
+  projectTrusted: ctx.isProjectTrusted(),
+});
 
 const paint = (theme: Theme): Paint => (color, text) => theme.fg(color, text);
 
@@ -94,17 +101,13 @@ const resultText = (result: { content: ReadonlyArray<{ type: string; text?: stri
   result.content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
 
 export default function lead(pi: ExtensionAPI) {
+  // A worker or sub-agent loads the user's extensions, so this one too when
+  // installed globally: it must never become a second Lead.
+  if (process.env[ROLE_ENV]) return;
   let delegator: Delegator | undefined;
   let ui: ExtensionContext["ui"] | undefined;
   let closed = false;
   let hasUI = false;
-  /** Set only when Jev is configured: the status segment and `/jev` read the shared ledger. */
-  let jev: { ledger: ReturnType<typeof createLedger>; budgetUsd: number } | undefined;
-  let jevUsage: JevUsage | undefined;
-  let usageTimer: ReturnType<typeof setInterval> | undefined;
-  /** This session's last decisions, for `/jev`. */
-  const recent: JevDecision[] = [];
-  registerReportGuard(pi);
 
   /** `delegate` calls in their start phase, which share Pi's working message. */
   let delegating = 0;
@@ -113,18 +116,7 @@ export default function lead(pi: ExtensionAPI) {
     const parts: string[] = [];
     const counts = workerCounts(delegator?.list() ?? []);
     if (counts) parts.push(hasUI && ui && counts.needsYou ? ui.theme.fg("warning", counts.text) : counts.text);
-    if (hasUI && ui && jev && jevUsage) {
-      const segment = jevStatus(jevUsage, jev.budgetUsd);
-      parts.push(ui.theme.fg(segment.level, segment.text));
-    }
     ui?.setStatus("pi-lead", parts.length ? parts.join(" · ") : undefined);
-  };
-
-  /** Workers charge the same ledger from their own processes, so it is re-read rather than counted here. */
-  const refreshUsage = async () => {
-    if (!jev || closed) return;
-    jevUsage = await jev.ledger.usage().catch(() => jevUsage);
-    if (!closed) status();
   };
 
   const setup = async (ctx: ExtensionContext) => {
@@ -134,27 +126,15 @@ export default function lead(pi: ExtensionAPI) {
     const { config, ignored } = await loadConfigWithNotices(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     // A setting dropped by the global/project rules would otherwise vanish without a trace.
     if (ctx.hasUI) for (const notice of ignored) ctx.ui.notify(notice, "warning");
-    const ask = createAskJev(config.jev);
-    const ledger = createLedger(join(agentDir, "pi-lead", "jev-usage.json"));
-    jev = ask ? { ledger, budgetUsd: config.jev.dailyBudgetUsd } : undefined;
-    jevUsage = undefined;
-    if (usageTimer) clearInterval(usageTimer);
-    usageTimer = jev ? setInterval(() => void refreshUsage(), 30_000) : undefined;
-    usageTimer?.unref();
-    void refreshUsage();
     const judge = createJudge({
-      ask,
+      ask: createAskJev(config.jev),
       config: config.jev,
-      ledger,
       // Otherwise a wrong key or model id silently turns every judgment into a default.
-      onProblem: (problem) => ui?.notify(describeJevProblem(problem), "warning"),
+      onProblem: (message) => ui?.notify(describeJevProblem(message), "warning"),
       onDecision(decision) {
         if (closed) return;
-        recent.push(decision);
-        if (recent.length > RECENT_DECISIONS) recent.shift();
         // A custom entry, not a message: the transcript shows it, the model never sees it.
-        if (shouldShow(decision)) pi.appendEntry(JEV_ENTRY, decision);
-        void refreshUsage();
+        pi.appendEntry(JEV_ENTRY, decision);
       },
     });
     delegator = createDelegator({
@@ -174,6 +154,12 @@ export default function lead(pi: ExtensionAPI) {
           { triggerTurn: true, deliverAs: "followUp" },
         );
       },
+      // Wakes the Lead too: it tells the user what merged, and where and why the run stopped.
+      onMergeReport(text) {
+        if (closed) return;
+        status();
+        pi.sendMessage({ customType: MERGE_REPORT_TYPE, content: text, display: true }, { triggerTurn: true, deliverAs: "followUp" });
+      },
       onProgress(text) {
         if (closed) return;
         // A transcript line, not the footer: the footer only counts.
@@ -192,7 +178,6 @@ export default function lead(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     closed = false;
-    recent.length = 0;
     const current = await setup(ctx);
     if (ctx.hasUI) {
       try {
@@ -204,16 +189,20 @@ export default function lead(pi: ExtensionAPI) {
         // A check must never keep the session from starting or skip the reconcile below.
       }
     }
-    // Remove worktrees a crashed or killed Lead left open; in the background, never blocking the session.
-    void current.reconcile().catch(() => undefined);
+    // Adopt this repository's workers a crashed or killed Lead left running, remove the worktrees
+    // of the others; in the background, never blocking the session.
+    void Promise.resolve()
+      .then(() => current.reconcile(sessionIO(ctx)))
+      .then(() => {
+        if (!closed) status();
+      })
+      .catch(() => undefined);
   });
 
   // Workers belong to the Lead session: when it ends (quit, /new, /resume,
   // /reload), they are stopped and cleaned up before the session goes away.
   pi.on("session_shutdown", async () => {
     closed = true;
-    if (usageTimer) clearInterval(usageTimer);
-    usageTimer = undefined;
     await delegator?.shutdown();
   });
 
@@ -244,19 +233,6 @@ export default function lead(pi: ExtensionAPI) {
     invalidate: () => undefined,
   }));
 
-  pi.registerCommand("jev", {
-    description: "Jev's calls and spend today, and this session's last decisions",
-    handler: async (_args, ctx) => {
-      if (!jev) {
-        ctx.ui.notify("Jev is not configured: set its key (PI_LEAD_JEV_API_KEY by default) to let Jev judge.", "info");
-        return;
-      }
-      jevUsage = await jev.ledger.usage();
-      status();
-      ctx.ui.notify(jevReport(jevUsage, jev.budgetUsd, recent), "info");
-    },
-  });
-
   pi.on("before_agent_start", async (event) => ({ systemPrompt: `${event.systemPrompt}\n${leadGuidance(SKILLS_DIR)}` }));
 
   pi.registerTool({
@@ -267,7 +243,7 @@ export default function lead(pi: ExtensionAPI) {
     promptSnippet: "delegate: start implement/prototype/debug/review/research work in a background worker",
     promptGuidelines: [
       "Pass the complete ticket or request in `task`; the worker does not see this conversation.",
-      "Only use kind implement for a ready ticket; shape vague ideas with the user first.",
+      "Use kind implement for a ticket, not a vague idea; shape ideas with the user first.",
       "delegate does not wait: keep talking with the user; worker results arrive as messages.",
     ],
     parameters: Type.Object({
@@ -275,23 +251,15 @@ export default function lead(pi: ExtensionAPI) {
       title: Type.String({ description: "Short title, used for the tab and branch name" }),
       task: Type.String({ description: "Self-contained ticket, symptom, review scope or research question" }),
       startFrom: Type.Optional(Type.String({ description: "Local branch to start from (the branch to review)" })),
-      confirmedReady: Type.Optional(
-        Type.Boolean({ description: "The user explicitly confirmed the ticket is ready although Jev doubted it" }),
-      ),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
-      // Jev's intake and difficulty call can take a few seconds: say what the wait is.
+      // Jev's difficulty call can take a few seconds: say what the wait is.
       // One shared slot: the last of parallel delegations restores Pi's default.
       if (ctx.hasUI && delegating++ === 0) ctx.ui.setWorkingMessage("Sizing up the ticket and picking a model…");
       let started: StartResult;
       try {
-        started = await current.start(params, {
-          cwd: ctx.cwd,
-          lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-          available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
-          projectTrusted: ctx.isProjectTrusted(),
-        });
+        started = await current.start(params, sessionIO(ctx));
       } finally {
         if (ctx.hasUI && --delegating === 0) ctx.ui.setWorkingMessage();
       }
@@ -313,12 +281,6 @@ export default function lead(pi: ExtensionAPI) {
       action: StringEnum(WORKER_ACTIONS, { description: "list, message or stop" }),
       id: Type.Optional(Type.String({ description: "Worker id prefix, title or branch (message and stop)" })),
       message: Type.Optional(Type.String({ description: "Text for the worker (message)" })),
-      allowFiles: Type.Optional(
-        Type.Array(Type.String(), {
-          description:
-            "message only: extra repo-relative paths an implementer built on a scout brief may now change, only when the user explicitly approved widening its scope",
-        }),
-      ),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
@@ -329,13 +291,13 @@ export default function lead(pi: ExtensionAPI) {
         details = { workers };
         text = workers.length
           ? workers
-              .map((w) => `- [${w.id.slice(0, 8)}] ${w.title} · ${w.kind} · ${w.state}${w.branch ? ` · ${w.branch}` : ""} · ${w.route.model}`)
+              .map((w) => `- [${w.id.slice(0, 8)}] ${w.title} · ${w.kind} · ${w.state}${w.branch ? ` · ${w.branch}` : ""} · ${w.route.model}${w.pr ? ` · PR ${w.pr}` : ""}`)
               .join("\n")
           : "No workers.";
       } else if (!params.id) {
         text = "Give the worker's id, title or branch.";
       } else if (params.action === "message") {
-        text = params.message ? await current.message(params.id, params.message, params.allowFiles) : "Give the message to send.";
+        text = params.message ? await current.message(params.id, params.message) : "Give the message to send.";
       } else {
         text = await current.stop(params.id);
       }
@@ -347,5 +309,24 @@ export default function lead(pi: ExtensionAPI) {
       new Text(isPartial ? theme.fg("dim", "…") : workerResult(result.details, resultText(result), paint(theme)), 0, 0),
   });
 
-  registerGitRead(pi);
+  pi.registerTool({
+    name: "merge",
+    label: "Merge",
+    description:
+      "Merge green PRs one at a time, in the order given, only after the user said to merge them. Each PR is updated from its base (gh pr update-branch), waits for green CI on its new head (gh pr checks --watch) and is merged at that head (gh pr merge --match-head-commit) with a method the repository allows; the worker's workspace then closes. A conflict or red CI goes back to the PR's worker and stops the run. Returns at once; the outcome arrives as a message.",
+    promptSnippet: "merge: merge green PRs one at a time, in ticket order, once the user said so",
+    promptGuidelines: [
+      "Never call merge without the user's go-ahead, for these PRs or for the whole spec.",
+      "Pass the PRs in ticket order (Blocked-by first): worker ids, titles or branches, or PR numbers or URLs.",
+    ],
+    parameters: Type.Object({
+      prs: Type.Array(Type.String(), { description: "PRs in merge order: worker id, title or branch, or PR number or URL" }),
+      method: Type.Optional(StringEnum(MERGE_METHODS, { description: "Only when the user names one; otherwise the repository's first allowed method" })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const current = delegator ?? (await setup(ctx));
+      const text = await current.merge(params.prs, sessionIO(ctx), params.method);
+      return { content: [{ type: "text", text }], details: undefined };
+    },
+  });
 }

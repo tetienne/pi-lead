@@ -3,14 +3,13 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works
 import { INVISIBLE, type ReportCard } from "./delegate.ts";
 import type { WorkerVerdict } from "./jev.ts";
 import { cleanLines, type Paint } from "./tool-display.ts";
-import { safePreview } from "./report-guard.ts";
+import { safePreview } from "./safe-preview.ts";
 
 /**
  * A worker report as a card in the Lead's transcript. The model receives the
- * report's full text either way; this is only what the user sees. The report
- * guard treats the user's next message as having seen every report, so the
- * card never hides a line the worker wrote: collapsed, it shortens only the
- * host lines, and expanding shows the full text.
+ * report's full text either way; this is only what the user sees. The card
+ * never hides a line the worker wrote, so the user reads what the model reads:
+ * collapsed, it shortens only the host lines, and expanding shows the full text.
  */
 
 type Status = WorkerVerdict | "failed" | "stopped";
@@ -28,9 +27,7 @@ export type ReportDetails = {
   status?: unknown;
   reported?: WorkerVerdict;
   jevVerdict?: WorkerVerdict;
-  review?: { severity: number; action: string };
   sensitive?: string[];
-  outOfScope?: string[];
   pr?: string;
   card?: ReportCard;
 };
@@ -122,8 +119,8 @@ export type CardParts = { head: string; said?: string; tail?: string };
 /**
  * The card, or undefined for a report without one (another version, a
  * stop): Pi then shows the plain text. Collapsed, it shows host facts and
- * every untrusted line (summary, commits, diff stat, findings, verify
- * output); expanded, the full report exactly as the model reads it.
+ * every untrusted line (summary, commits, diff stat, findings); expanded,
+ * the full report exactly as the model reads it.
  */
 export function renderCard(details: unknown, content: string, expanded: boolean, paint: Paint): CardParts | undefined {
   const report = details as ReportDetails | undefined;
@@ -145,19 +142,11 @@ export function renderCard(details: unknown, content: string, expanded: boolean,
     ...(card.diff ? [safePreview(card.diff, 120)] : []),
   ];
   if (work.length) lines.push(`  ${work.join(" · ")}`);
-  if (card.verify) lines.push(paint(card.verified ? "success" : "warning", `  ${safePreview(card.verify, 200)}`));
   if (card.ci) lines.push(paint(card.ci === "passed" || card.ci === "none" ? "success" : "warning", `  CI: ${safePreview(card.ci, 60)}`));
-  const review = report.review;
-  if (review && typeof review.severity === "number" && typeof review.action === "string") {
-    lines.push(`  Jev review severity ${review.severity.toFixed(1)}/4 → ${safePreview(review.action, 20)}`);
-  }
   if (card.branch) lines.push(paint("dim", `  branch ${safePreview(card.branch, 120)}`));
   if (typeof report.pr === "string" && report.pr) lines.push(paint("dim", `  PR: ${safePreview(report.pr, 200)}`));
   if (Array.isArray(report.sensitive) && report.sensitive.length) {
     lines.push(paint("warning", `  ! review before merging: ${report.sensitive.map((pattern) => safePreview(pattern, 60)).join(", ")}`));
-  }
-  if (Array.isArray(report.outOfScope) && report.outOfScope.length) {
-    lines.push(paint("warning", `  ! outside the scout brief: ${report.outOfScope.map((path) => safePreview(path, 60)).join(", ")}`));
   }
 
   const block = untrustedBlock(content);

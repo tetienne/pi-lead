@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import { readFile, rename, writeFile } from "node:fs/promises";
-import { relative, resolve as resolvePath, sep } from "node:path";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { isBashToolResult, isEditToolResult, isWriteToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -10,8 +9,6 @@ import { quotaError } from "../quota.ts";
 import { plainTitle } from "../worker-display.ts";
 import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createStuckDetector } from "./stuck.ts";
-import { runVerification, shouldVerify } from "./verify.ts";
-import { registerWebSearch } from "./web-search.ts";
 
 /** The braces send `git add`'s stderr to stdout too, so a failure reaches the model. */
 export const COMMIT_LEFTOVERS =
@@ -32,9 +29,10 @@ function runShell(command: string, cwd: string): Promise<{ exitCode: number; std
 }
 
 /**
- * Loaded only into worker Pi processes (`--no-extensions -e`). The worker runs
- * on the host, cwd its own git worktree (`task.worktreePath`): its tools are
- * Pi's own built-in ones, with no isolation from the host.
+ * Loaded only into worker Pi processes (`-e`), beside the user's own global
+ * extensions. The worker runs on the host, cwd its own git worktree
+ * (`task.worktreePath`): Pi's built-in tools and the user's, with no
+ * isolation from the host.
  */
 export default function worker(pi: ExtensionAPI) {
   pi.registerFlag("pi-lead-task", { type: "string", description: "PI Lead worker task file" });
@@ -77,33 +75,6 @@ export default function worker(pi: ExtensionAPI) {
     }
   });
 
-  registerWebSearch(pi);
-
-  /**
-   * Real-time scope enforcement for an implementer built on a scout brief
-   * (pattern: report-guard.ts's `tool_call` block). Only write and edit are
-   * intercepted: bash is not, since the host check after `finish` (delegate.ts
-   * settle) covers whatever it changes.
-   */
-  pi.on("tool_call", async (event) => {
-    if (event.toolName !== "write" && event.toolName !== "edit") return undefined;
-    const current = await loadTask();
-    // Read fresh every call, not the cached task: the Lead can widen scope mid-run by rewriting task.json.
-    const path = pi.getFlag("pi-lead-task") as string;
-    const { allowedFiles, protectedFiles = [] } = await readJsonFile<WorkerTask>(path);
-    if (!allowedFiles) return undefined;
-    const rawPath = (event.input as { path?: unknown }).path;
-    if (typeof rawPath !== "string" || !rawPath) return undefined;
-    const repoPath = relative(current.worktreePath, resolvePath(current.worktreePath, rawPath)).split(sep).join("/");
-    const say = (why: string) => ({
-      block: true as const,
-      reason: `PI Lead scout guard: ${why} Allowed files: ${allowedFiles.join(", ")}. If another file is truly required, stop and call finish with status partial explaining why.`,
-    });
-    if (protectedFiles.includes(repoPath)) return say(`${repoPath} is a scout test; make it pass instead of changing it.`);
-    if (!allowedFiles.includes(repoPath)) return say(`${repoPath} is not in the scout's allowed files.`);
-    return undefined;
-  });
-
   /** Commit anything left in the tree, so the branch fetched back holds every change. */
   const commitLeftovers = async (status?: WorkerResult["status"]) => {
     const current = await loadTask();
@@ -130,39 +101,15 @@ export default function worker(pi: ExtensionAPI) {
     parameters: Type.Object({
       status: StringEnum(WORKER_STATUSES, { description: "Honest outcome of the task" }),
       summary: Type.String({ description: "What changed, how it was verified, what is left" }),
-      findings: Type.Optional(
-        Type.String({ description: "Full review findings, for review tasks; the brief for the implementer, for a scout" }),
-      ),
-      allowedFiles: Type.Optional(
-        Type.Array(Type.String(), { description: "Scout only: exact repo-relative paths the implementer may change or create" }),
-      ),
+      findings: Type.Optional(Type.String({ description: "Full review findings, for review tasks" })),
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
+    async execute(_id, params) {
       const current = await loadTask();
-      // A scout that finishes done must scope the implementer that follows it.
-      if (current.kind === "scout" && params.status === "done" && !params.allowedFiles?.length) {
-        throw new Error("A scout finishing done must call finish with a non-empty allowedFiles: the repo-relative paths the implementer may change or create.");
-      }
       // A failed commit (hook, identity) must not lose work: report it to the
       // model instead of finishing.
       const commit = await commitLeftovers(params.status);
       if (commit.exitCode !== 0) {
         throw new Error(`Could not commit the remaining changes; fix this, commit, then call finish again:\n${commit.stdout.slice(-2_000)}`);
-      }
-      // The project's own check, chosen by the trusted config and run here
-      // rather than by the model: the Lead's evidence that the work holds.
-      let verification: WorkerResult["verification"];
-      if (shouldVerify(current, params.status)) {
-        ctx?.ui.setStatus("pi-lead", `Verifying: ${current.verify}`);
-        verification = await runVerification({
-          command: current.verify,
-          cwd: current.worktreePath,
-          ...(current.verifyTimeoutMinutes ? { timeoutMinutes: current.verifyTimeoutMinutes } : {}),
-          ...(signal ? { signal } : {}),
-        });
-        ctx?.ui.setStatus("pi-lead", `${current.kind} · ${current.branch}`);
-        // Stopped by the user: nothing is reported, `finish` can be called again.
-        if (signal?.aborted) throw new Error("aborted");
       }
       const result: WorkerResult = {
         version: 1,
@@ -171,8 +118,6 @@ export default function worker(pi: ExtensionAPI) {
         status: params.status,
         summary: params.summary,
         ...(params.findings ? { findings: params.findings } : {}),
-        ...(params.allowedFiles?.length ? { allowedFiles: params.allowedFiles } : {}),
-        ...(verification ? { verification } : {}),
       };
       await writeResult(result);
       return {
