@@ -55,20 +55,21 @@ export function findHerdrPiExtension(agentDir = getAgentDir()): string | undefin
 /**
  * A worker is a plain Pi like the Lead: the user's global extensions (Herdr's
  * Pi integration among them), same package and global skills and prompts,
- * plus host copies of the repository's own (see context-snapshot.ts), reads
- * running directly on the host. Only the worker extension is added; the Lead
- * extension, if installed globally, stays inert under `PI_LEAD_ROLE`.
+ * running directly on the host. Its fresh worktree path has no saved trust
+ * decision, so the Lead's is passed for this process only: a trusted project's
+ * worker loads the project's extensions, skills, prompts and APPEND_SYSTEM.md
+ * from its worktree by Pi's own discovery, an untrusted one none of them. Only
+ * the worker extension and PI Lead's own skills are added (the Lead adds those
+ * through `resources_discover`, inert in a worker); the Lead extension, if
+ * installed globally, stays inert under `PI_LEAD_ROLE`.
  */
-export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, resources }) => [
+export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, projectTrusted }) => [
   ...piInvocation(),
-  "--no-approve",
+  projectTrusted ? "--approve" : "--no-approve",
   "-e",
   WORKER_EXTENSION,
   "--skill",
   SKILLS_DIR,
-  ...resources.skills.flatMap((path) => ["--skill", path]),
-  ...resources.prompts.flatMap((path) => ["--prompt-template", path]),
-  ...(resources.appendSystem ? ["--append-system-prompt", resources.appendSystem] : []),
   "--model",
   route.model,
   "--thinking",

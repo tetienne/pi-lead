@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { test, type TestContext } from "node:test";
 
 import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
@@ -13,6 +13,7 @@ import {
   unmarked,
   type DelegateIO,
   type DelegateOutcome,
+  type WorkerCommand,
 } from "../src/delegate.ts";
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
 import { createJudge, type Judge, type WorkerVerdict } from "../src/jev.ts";
@@ -151,6 +152,7 @@ async function setup(t: TestContext, options: {
   workspace?: Workspace;
   processAlive?: (pid: number) => boolean;
   stateRoot?: string;
+  workerCommand?: WorkerCommand;
 } = {}) {
   const log: Log = [];
   const outcomes: DelegateOutcome[] = [];
@@ -166,7 +168,7 @@ async function setup(t: TestContext, options: {
         : options.herdr ?? fakeHerdr(log, options.replies ?? [{ status: "done" }], options.seen, options.herdrOptions),
     workspace: options.workspace ?? fakeWorkspace(log),
     ...(options.processAlive ? { processAlive: options.processAlive } : {}),
-    workerCommand: ({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt],
+    workerCommand: options.workerCommand ?? (({ taskPath, prompt, route }) => ["pi", "--model", route.model, "--thinking", route.thinking, "--pi-lead-task", taskPath, "--", prompt]),
     stateRoot,
     onOutcome: (outcome) => {
       outcomes.push(outcome);
@@ -589,6 +591,25 @@ test("the launch script and the task carry stuck detection, the Herdr hint and t
   assert.ok(!("jev" in seen.task!), "workers never call Jev, so they get none of its settings");
   assert.match(seen.script!, /export HERDR_AGENT=pi/);
   assert.match(seen.script!, /export PI_LEAD_ROLE=worker/, "a Lead extension loaded in the worker stays inert");
+});
+
+test("a worker is started with the Lead's trust decision, and nothing is copied out of its worktree", async (t) => {
+  for (const projectTrusted of [true, false]) {
+    const seen: boolean[] = [];
+    const { delegator, nextOutcome, stateRoot } = await setup(t, {
+      workerCommand: (input) => {
+        seen.push(input.projectTrusted);
+        assert.ok(!("resources" in input));
+        return ["pi", "--pi-lead-task", input.taskPath];
+      },
+    });
+    const done = nextOutcome();
+    await delegator.start({ kind: "implement", title: "x", task: "y" }, { ...io, projectTrusted });
+    await done;
+    assert.deepEqual(seen, [projectTrusted]);
+    const taskDirs = await readdir(stateRoot, { recursive: true });
+    assert.ok(!taskDirs.some((path) => path.split(sep).includes("resources")), "no snapshot of project resources");
+  }
 });
 
 test("a Lead that throws on delivery does not take the watcher down", async (t) => {

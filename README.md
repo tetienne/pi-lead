@@ -77,8 +77,13 @@ you ─► Lead (Pi, your tab)
   [ADR 0005](docs/adr/0005-run-workers-on-the-host.md)). A worker is plain
   Pi, like the Lead: your own global extensions (web, MCP and other tools,
   Herdr's Pi integration for working/idle badges), same skills, prompts and
-  `AGENTS.md`, plus the repository's own skills and prompts when you trust the
-  project; PI Lead adds only its worker extension. Every Pi that PI Lead
+  `AGENTS.md`. A worker trusts its worktree exactly when the Lead trusts the
+  project: PI Lead starts it with `--approve` or `--no-approve`, for that
+  process only (nothing is saved to Pi's trust store). A worker of a trusted
+  project then loads the project's own extensions, skills, prompts and
+  `APPEND_SYSTEM.md` from its worktree, as Pi discovers them; a worker of an
+  untrusted project loads none of them. PI Lead adds only its worker
+  extension and its own skills. Every Pi that PI Lead
   starts runs with `PI_LEAD_ROLE` set, and PI Lead's Lead extension stays
   inert there, so a worker never becomes a second Lead.
 - **Seeing workers.** Each worker workspace's label starts with its state:

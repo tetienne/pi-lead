@@ -6,8 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] Read Pi's docs on project trust (`--approve`, `--no-approve`, trust-gated resources) first and rely on them.
-- [ ] A worker of a trusted project starts with `--approve`; of an untrusted one with `--no-approve` (test).
-- [ ] The context snapshot module, its copying and its `--skill`/`--prompt-template`/`--append-system-prompt` arguments are removed (test on the worker command).
-- [ ] A worker of a trusted project loads project extensions (README says so); an untrusted one loads none.
-- [ ] `npm test` and `npm run typecheck` pass.
+- [x] Read Pi's docs on project trust (`--approve`, `--no-approve`, trust-gated resources) first and rely on them.
+- [x] A worker of a trusted project starts with `--approve`; of an untrusted one with `--no-approve` (test).
+- [x] The context snapshot module, its copying and its `--skill`/`--prompt-template`/`--append-system-prompt` arguments are removed (test on the worker command).
+- [x] A worker of a trusted project loads project extensions (README says so); an untrusted one loads none.
+- [x] `npm test` and `npm run typecheck` pass.
+
+**Resolution:** DONE

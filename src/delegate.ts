@@ -8,7 +8,6 @@ import { DEFAULT_TIER, VERDICT_ORDER, type Judge, type WorkKind, type WorkerVerd
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
 import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
-import { snapshotProjectResources, type ProjectResources } from "./context-snapshot.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
 import type { Workspace } from "./workspace.ts";
@@ -26,7 +25,7 @@ export type DelegateIO = {
   cwd: string;
   lead: ModelRef | undefined;
   available: readonly ModelRef[];
-  /** Whether the Lead trusts this project; workers then get its skills and prompts too. */
+  /** Whether the Lead trusts this project; its workers then trust their worktrees too. */
   projectTrusted: boolean;
 };
 
@@ -107,8 +106,8 @@ export type WorkerCommand = (input: {
   prompt: string;
   route: WorkerRoute;
   label: string;
-  /** Host copies of the repository's skills, prompts and APPEND_SYSTEM.md (trusted projects). */
-  resources: ProjectResources;
+  /** The Lead's trust in the project, which the worker's Pi applies to its worktree. */
+  projectTrusted: boolean;
 }) => string[];
 
 export type DelegateDeps = {
@@ -576,13 +575,6 @@ export function createDelegator(deps: DelegateDeps) {
       label: worker.tabLabel,
     }));
     await writeRecord(worker);
-    // Host copies of the repository's own skills, prompts and APPEND_SYSTEM.md.
-    const resourceDir = join(worker.taskDir, "resources");
-    const resources = await snapshotProjectResources({
-      worktreePath: worker.worktreePath,
-      resourceDir,
-      projectTrusted: io.projectTrusted,
-    });
     const task: WorkerTask = {
       version: 1,
       id: worker.id,
@@ -606,7 +598,7 @@ export function createDelegator(deps: DelegateDeps) {
       prompt: workerPrompt(worker.kind, params.task, publish) + (worker.resumed ? RESUME_NOTE : ""),
       route: worker.route,
       label,
-      resources,
+      projectTrusted: io.projectTrusted,
     });
     const script = join(worker.taskDir, "run.sh");
     await writeFile(
