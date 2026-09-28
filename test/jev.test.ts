@@ -40,7 +40,6 @@ test("probability bands", () => {
 test("without a key Jev is unavailable and every judgment falls back", async () => {
   assert.equal(createAskJev(DEFAULT_CONFIG.jev, {}), undefined);
   const judge = createJudge({ config: DEFAULT_CONFIG.jev });
-  assert.equal(judge.available, false);
   assert.equal(await judge.modelTier({ task: "x", kind: "implement" }), undefined);
   assert.equal(await judge.verdict({ task: "x", reported: "done", summary: "", diffStat: "", commits: "", changedFiles: [] }), undefined);
 });

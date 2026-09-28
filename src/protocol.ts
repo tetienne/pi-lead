@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-
 import type { WorkKind, WorkerVerdict } from "./jev.ts";
 import type { QuotaError } from "./quota.ts";
 
@@ -52,10 +50,6 @@ export const WRITES_CODE: readonly WorkKind[] = ["implement", "prototype", "debu
 export const PUBLISHED_KINDS: readonly WorkKind[] = ["implement", "debug", "research"];
 
 export const WORKER_STATUSES = ["done", "partial", "blocked", "needs_human"] as const satisfies readonly WorkerVerdict[];
-
-export async function readJsonFile<T>(path: string): Promise<T> {
-  return JSON.parse(await readFile(path, "utf8")) as T;
-}
 
 export function parseWorkerResult(value: unknown, id: string): WorkerResult {
   const result = value as Partial<WorkerResult> | undefined;

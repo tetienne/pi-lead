@@ -22,7 +22,6 @@ import type { WorkerResult, WorkerTask } from "../src/protocol.ts";
 import type { MergeMethod, PrView, Workspace } from "../src/workspace.ts";
 
 const noJudge: Judge = {
-  available: false,
   modelTier: async () => undefined,
   verdict: async () => undefined,
 };
@@ -440,7 +439,7 @@ test("a transient rename failure keeps the glyphs and is retried on the next sta
 
 test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
-    judge: { available: true, modelTier: async () => ({ tier: "deep", difficulty: 3.4 }), verdict: async () => "partial" },
+    judge: { modelTier: async () => ({ tier: "deep", difficulty: 3.4 }), verdict: async () => "partial" },
   });
   const pending = nextOutcome();
   // A prototype opens no PR, so the host never proves it: Jev has the last word.
@@ -456,7 +455,7 @@ test("Jev's verdict is asked with the commits and changed files", async (t) => {
   const asked: Array<Parameters<Judge["verdict"]>[0]> = [];
   const { delegator, nextOutcome } = await setup(t, {
     replies: [{ status: "done", summary: "tests pass" }],
-    judge: { available: true, verdict: async (input) => (asked.push(input), "partial") },
+    judge: { verdict: async (input) => (asked.push(input), "partial") },
   });
   const pending = nextOutcome();
   // A prototype opens no PR, so the host proves nothing and Jev is asked.
@@ -588,7 +587,7 @@ test("a branch touching only ordinary files gets no host warning", async (t) => 
 });
 
 test("code-writing tickets start in parallel, with or without a Jev key", async (t) => {
-  for (const judge of [{}, { available: true, modelTier: async () => ({ tier: "standard" as const, difficulty: 2 }) }]) {
+  for (const judge of [{}, { modelTier: async () => ({ tier: "standard" as const, difficulty: 2 }) }]) {
     const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", delayMs: 30 }], judge });
     const both = [nextOutcome(), nextOutcome()];
     await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
@@ -683,7 +682,7 @@ test("a failed launch is retried exactly once, without asking Jev", async (t) =>
       return herdr.createWorktree(input);
     };
     const judged: string[] = [];
-    const judge: Partial<Judge> = { available: true, verdict: async () => void judged.push("verdict") };
+    const judge: Partial<Judge> = { verdict: async () => void judged.push("verdict") };
     const { delegator, nextOutcome, progress } = await setup(t, { herdr: { ...herdr, createWorktree }, judge });
     const pending = nextOutcome();
     // A prototype is never proven by CI, so its verdict is asked.
@@ -1265,7 +1264,7 @@ test("an implement delegation starts exactly one worker, on the implement route,
 });
 
 test("a trivial implement ticket runs on the fast tier: no scout floor", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, { judge: { available: true, modelTier: async () => ({ tier: "fast", difficulty: 0.4 }) } });
+  const { delegator, nextOutcome } = await setup(t, { judge: { modelTier: async () => ({ tier: "fast", difficulty: 0.4 }) } });
   const pending = nextOutcome();
   const started = await delegator.start({ kind: "implement", title: "Typo", task: "t" }, io);
   assert.match(started.text, /tier fast/);
@@ -1464,7 +1463,7 @@ test("a partial, blocked or needs_human the worker reported itself reaches the L
 
 test("a partial Jev judged, not the host, reaches the Lead at once", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
-    judge: { available: true, verdict: async () => "partial" },
+    judge: { verdict: async () => "partial" },
     replies: [{ status: "done" }],
     workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state: "fail" as const, failed: [] }) },
   });
@@ -1499,7 +1498,7 @@ test("no Jev verdict call once the host proved the work: a PR with CI green on t
   for (const { kind, state, asked } of cases) {
     let calls = 0;
     const { delegator, nextOutcome } = await setup(t, {
-      judge: { available: true, verdict: async () => (calls += 1, undefined) },
+      judge: { verdict: async () => (calls += 1, undefined) },
       replies: [{ status: "done" }, { status: "done" }],
       workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state, failed: [] }) },
     });

@@ -7,7 +7,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } fro
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { loadConfigWithNotices } from "./config.ts";
+import { loadConfig } from "./config.ts";
 import { createDelegator, type DelegateIO, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
@@ -123,7 +123,7 @@ export default function lead(pi: ExtensionAPI) {
     ui = ctx.ui;
     hasUI = ctx.hasUI;
     const agentDir = getAgentDir();
-    const { config, ignored } = await loadConfigWithNotices(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
+    const { config, ignored } = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     // A setting dropped by the global/project rules would otherwise vanish without a trace.
     if (ctx.hasUI) for (const notice of ignored) ctx.ui.notify(notice, "warning");
     const judge = createJudge({

@@ -7,7 +7,7 @@ import { Type } from "typebox";
 
 import { quotaError } from "../quota.ts";
 import { plainTitle } from "../worker-display.ts";
-import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
+import { WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createStuckDetector } from "./stuck.ts";
 
 /** The braces send `git add`'s stderr to stdout too, so a failure reaches the model. */
@@ -47,7 +47,7 @@ export default function worker(pi: ExtensionAPI) {
     if (task) return task;
     const path = pi.getFlag("pi-lead-task");
     if (typeof path !== "string" || !path) throw new Error("PI Lead worker started without --pi-lead-task");
-    task = await readJsonFile<WorkerTask>(path);
+    task = JSON.parse(await readFile(path, "utf8")) as WorkerTask;
     // Continue numbering after a /reload or /new in this tab, so the Lead sees the next finish.
     try {
       const previous = JSON.parse(await readFile(task.resultPath, "utf8")) as { seq?: unknown };

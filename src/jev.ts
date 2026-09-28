@@ -39,7 +39,6 @@ export type JevDecision = {
 };
 
 export type Judge = {
-  readonly available: boolean;
   modelTier(input: { task: string; kind: WorkKind }): Promise<TierJudgment | undefined>;
   verdict(input: {
     task: string;
@@ -225,8 +224,6 @@ export function createJudge(options: {
   });
 
   return {
-    available: ask !== undefined,
-
     async modelTier({ task, kind }) {
       const call = await run({ kind, task: clip(task) }, { difficulty: score(DIFFICULTY_QUESTION, DIFFICULTY_RUBRIC) });
       const judged = tierOf(call?.answers?.difficulty, kind, config.minConfidence);

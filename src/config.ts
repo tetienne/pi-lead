@@ -108,7 +108,7 @@ async function exists(path: string): Promise<boolean> {
  * `ignored` has one line per setting dropped by these rules, so the Lead can
  * say so instead of silently ignoring it. It names keys and paths only.
  */
-export async function loadConfigWithNotices(
+export async function loadConfig(
   cwd: string,
   options: { projectTrusted: boolean; agentDir?: string },
 ): Promise<{ config: LeadConfig; ignored: string[] }> {
@@ -129,11 +129,4 @@ export async function loadConfigWithNotices(
     );
   }
   return { config, ignored };
-}
-
-export async function loadConfig(
-  cwd: string,
-  options: { projectTrusted: boolean; agentDir?: string },
-): Promise<LeadConfig> {
-  return (await loadConfigWithNotices(cwd, options)).config;
 }
