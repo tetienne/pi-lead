@@ -15,9 +15,9 @@ export type TierJudgment = { tier: Tier; difficulty: number };
 
 /**
  * What a Jev call was about. Older versions also judged `egress`, `review`
- * severity and `failure` kind; their stored decisions still render.
+ * severity, `failure` kind and ticket `overlap`; their stored decisions still render.
  */
-export const JEV_KINDS = ["tier", "overlap", "verdict"] as const;
+export const JEV_KINDS = ["tier", "verdict"] as const;
 export type JevKind = (typeof JEV_KINDS)[number];
 
 /**
@@ -32,7 +32,7 @@ export type JevDecision = {
   applied: "jev" | "fallback" | "overridden";
   /** Of a choice or score answer. */
   confidence?: number;
-  /** Of a yes/no answer. */
+  /** Of a yes/no answer (stored by older versions' overlap judgment). */
   probability?: number;
   detail?: string;
   at: number;
@@ -51,7 +51,6 @@ export type Judge = {
     /** Changed paths since `base` (`Workspace.collect`), collected on the host. */
     changedFiles: string[];
   }): Promise<WorkerVerdict | undefined>;
-  overlap(a: string, b: string): Promise<boolean | undefined>;
 };
 
 /** Minimal shape of `TypeSafeClient.systemOne`, injectable for tests. */
@@ -281,22 +280,6 @@ export function createJudge(options: {
         emit(call, { ...common, outcome: final, applied: "jev", ...(detail ? { detail } : {}) });
       }
       return final;
-    },
-
-    async overlap(a, b) {
-      const call = await run(
-        { first: clip(a, 5_000), second: clip(b, 5_000) },
-        { overlap: noul("Would doing these two tickets in parallel likely edit the same files or the same behaviour?") },
-      );
-      const probability = noulOf(call?.answers?.overlap);
-      const overlaps = probability === undefined ? undefined : probability >= 0.5;
-      emit(call, {
-        kind: "overlap",
-        outcome: overlaps === undefined ? "waits" : overlaps ? "overlaps → waits" : "independent → parallel",
-        applied: overlaps === undefined ? "fallback" : "jev",
-        ...(probability !== undefined ? { probability } : {}),
-      });
-      return overlaps;
     },
   };
 }

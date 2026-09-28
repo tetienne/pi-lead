@@ -6,9 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] No overlap judgment remains: Jev's `overlap`, its cache and the "waits for overlapping" queue are removed; Jev kinds are `tier` and `verdict` (old ledger/decision entries still load if ticket 13 has not removed the ledger yet) (test).
-- [ ] Two code-writing workers start in parallel with or without a Jev key (test).
-- [ ] The Lead's guidance says: delegate a ticket only when its Blocked-by tickets are merged, or start it from the blocker's branch with `startFrom` when the user asks for stacking (test on the guidance text).
-- [ ] A report whose changed files intersect another open worker PR's names the other ticket and the shared files (test).
-- [ ] README no longer describes overlap scheduling.
-- [ ] `npm test` and `npm run typecheck` pass.
+- [x] No overlap judgment remains: Jev's `overlap`, its cache and the "waits for overlapping" queue are removed; Jev kinds are `tier` and `verdict` (old ledger/decision entries still load if ticket 13 has not removed the ledger yet) (test).
+- [x] Two code-writing workers start in parallel with or without a Jev key (test).
+- [x] The Lead's guidance says: delegate a ticket only when its Blocked-by tickets are merged, or start it from the blocker's branch with `startFrom` when the user asks for stacking (test on the guidance text).
+- [x] A report whose changed files intersect another open worker PR's names the other ticket and the shared files (test).
+- [x] README no longer describes overlap scheduling.
+- [x] `npm test` and `npm run typecheck` pass.
+
+**Resolution:** DONE

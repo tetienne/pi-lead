@@ -168,6 +168,12 @@ test("the guidance merges only on the user's go-ahead, one PR at a time, through
   assert.match(guidance, /its worker is gone\) is yours to tell the user/);
 });
 
+test("the guidance sequences tickets by Blocked-by: merged blockers first, or stacked with startFrom on request", () => {
+  const guidance = leadGuidance("/skills");
+  assert.match(guidance, /Delegate a ticket only once its Blocked-by tickets are merged, or,\s+when the user asks for stacking, start it from a blocker's branch with\s+`startFrom`/);
+  assert.doesNotMatch(guidance, /overlap/i);
+});
+
 test("the merge tool is for the user's go-ahead only and offers gh's merge methods", async () => {
   const pi = fakePi();
   lead(pi.api as any);

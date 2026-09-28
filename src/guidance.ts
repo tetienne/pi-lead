@@ -102,6 +102,9 @@ its tab open until then. A conflict or red CI after the update goes back to
 that PR's worker and stops the run; when the worker reports done again, call
 \`merge\` again with it and the PRs left after it. A problem no worker can
 take (its worker is gone) is yours to tell the user.
+Delegate a ticket only once its Blocked-by tickets are merged, or,
+when the user asks for stacking, start it from a blocker's branch with
+\`startFrom\`; every other ticket runs in parallel.
 
 When the workers for every ticket of a spec have reported done, offer the user
 \`/improve-codebase-architecture\` once, scoped to the files those workers

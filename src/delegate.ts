@@ -239,6 +239,8 @@ type Worker = WorkerInfo & {
   reroutes: number;
   /** A CI partial already went back to the worker: the next one reaches the Lead. */
   sentBack: boolean;
+  /** Paths the branch changed since its base, as of its last finish (worker-chosen names). */
+  changedFiles?: string[];
   /** Its tab is closed on purpose (merged, stopped after done): the watcher ends without a report. */
   retired?: boolean;
 };
@@ -304,9 +306,6 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
  */
 export function createDelegator(deps: DelegateDeps) {
   const workers = new Map<string, Worker>();
-  const overlapCache = new Map<string, boolean>();
-  // Slot decisions are serialized: two workers never pass the check at once.
-  let scheduler: Promise<void> = Promise.resolve();
   const pollMs = deps.pollMs ?? 1_000;
   const heartbeatMs = deps.heartbeatMs ?? 30_000;
   const progress = (text: string) => {
@@ -494,52 +493,16 @@ export function createDelegator(deps: DelegateDeps) {
     }
   };
 
-  /** Workers holding a slot. A waiting worker idles on a question, so it does not count. */
-  const busy = () => [...workers.values()].filter((w) => w.state === "starting" || w.state === "running");
-
-  /** Two code-writing tickets that Jev thinks overlap (or can't tell) run one after the other. */
-  const mustWaitFor = async (other: Worker, worker: Worker) => {
-    if (!WRITES_CODE.includes(other.kind) || !WRITES_CODE.includes(worker.kind)) return false;
-    const key = `${other.id}:${worker.id}`;
-    let overlaps = overlapCache.get(key);
-    if (overlaps === undefined) {
-      overlaps = (await deps.judge.overlap(other.params.task, worker.params.task)) ?? true;
-      overlapCache.set(key, overlaps);
-    }
-    return overlaps;
-  };
-
-  /** FIFO: each worker takes its slot in turn and is `starting` before the next one checks. */
-  const takeSlot = (worker: Worker) => {
-    const turn = scheduler.then(() => waitForSlot(worker)).then(() => {
-      // Not setState: there is no tab to describe yet. A rerouted waiting worker no longer waits on the user.
-      worker.state = "starting";
-      worker.verdict = undefined;
-    });
-    scheduler = turn.catch(() => undefined);
-    // A stopped worker leaves the queue at once, not when its turn comes.
+  /**
+   * Every worker starts at once: the Lead sequences tickets by their Blocked-by
+   * edges, and conflicts surface in the one-at-a-time merge flow.
+   */
+  const markStarting = (worker: Worker) => {
     const signal = worker.controller.signal;
-    const aborted = new Promise<never>((_, reject) => {
-      if (signal.aborted) reject(signal.reason);
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-    });
-    aborted.catch(() => undefined);
-    return Promise.race([turn, aborted]);
-  };
-
-  const waitForSlot = async (worker: Worker) => {
-    let waitNote: string | undefined;
-    while (true) {
-      const others = busy().filter((other) => other !== worker);
-      const blockers: Worker[] = [];
-      for (const other of others) if (await mustWaitFor(other, worker)) blockers.push(other);
-      if (blockers.length === 0) return;
-      const note = `"${worker.title}" waits for overlapping "${blockers.map((b) => b.title).join('", "')}"`;
-      // Re-checked every heartbeat: a transcript line only when the reason changes.
-      if (note !== waitNote) progress(note);
-      waitNote = note;
-      await Promise.race([...blockers.map((b) => b.done), sleep(heartbeatMs, worker.controller.signal)]);
-    }
+    if (signal.aborted) throw signal.reason;
+    // Not setState: there is no tab to describe yet. A rerouted waiting worker no longer waits on the user.
+    worker.state = "starting";
+    worker.verdict = undefined;
   };
 
   const readIfPresent = async (path: string) => {
@@ -747,6 +710,14 @@ export function createDelegator(deps: DelegateDeps) {
       jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
     let status = judged;
     const sensitive = sensitivePatterns(collected.changedFiles);
+    worker.changedFiles = collected.changedFiles;
+    // Other workers' PRs still waiting to merge that change a file this branch changes: a likely conflict.
+    const changed = new Set(collected.changedFiles);
+    const sharedWith = [...workers.values()].flatMap((other) => {
+      if (other === worker || other.state !== "done" || other.pr === undefined || other.retired) return [];
+      const files = (other.changedFiles ?? []).filter((file) => changed.has(file));
+      return files.length ? [{ title: other.title, pr: other.pr, files }] : [];
+    });
 
     // Only a `done` report is capped by its PR and CI.
     let ci: string | undefined;
@@ -853,12 +824,23 @@ export function createDelegator(deps: DelegateDeps) {
         ...(collected.diffStat ? ["", "Diff stat:", unmarked(collected.diffStat)] : []),
         ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
         ...(pr?.failed.length ? ["", "CI checks failed:", unmarked(pr.failed.map((check) => `${check.name} (${check.link})`).join("\n"))] : []),
+        ...sharedWith.flatMap((other) => ["", `Files also changed by the open PR of "${other.title}":`, unmarked(other.files.join("\n"))]),
         "</worker-report>",
         // Host-generated from the fixed pattern list, so it sits outside the block; worker-chosen file names stay inside.
         ...(sensitive.length
           ? [
               "",
               `Host check: review these before merging; they can run on your machine or in CI, or steer future agents: ${sensitive.join(", ")}.`,
+            ]
+          : []),
+        // Host data; the shared file names are listed inside the block above.
+        ...(sharedWith.length
+          ? [
+              "",
+              ...sharedWith.map(
+                (other) =>
+                  `Host check: this branch shares files with the open PR of "${other.title}" (${other.pr}), listed in the report above; merging one may conflict with the other.`,
+              ),
             ]
           : []),
         ...(next.length ? ["", "Next:", ...next.map((line) => `- ${line}`)] : []),
@@ -900,11 +882,11 @@ export function createDelegator(deps: DelegateDeps) {
     worker.route = { model: route.model, thinking: route.thinking, tier: route.tier, note: `${from} ran out of quota; continued on ${route.model} from ${previous}` };
     worker.resumed = true;
     progress(`"${worker.title}": ${from} ran out of quota; continuing on ${route.model}`);
-    // A worker left waiting holds no slot (the user may have typed in its tab): take one again.
-    const hadSlot = worker.state === "running";
+    // A worker left waiting (the user may have typed in its tab) no longer waits on the user.
+    const wasRunning = worker.state === "running";
     await closeAndClean(worker);
-    if (hadSlot) setState(worker, "starting");
-    else await takeSlot(worker);
+    if (wasRunning) setState(worker, "starting");
+    else markStarting(worker);
     // Stopped meanwhile: open no new tab.
     if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
     await launch(worker);
@@ -982,10 +964,10 @@ export function createDelegator(deps: DelegateDeps) {
     }
   };
 
-  /** Background life of one worker: slot, launch (one retry on failure), first result. */
+  /** Background life of one worker: launch (one retry on failure), first result. */
   const drive = async (worker: Worker) => {
     try {
-      await takeSlot(worker);
+      markStarting(worker);
       while (true) {
         try {
           await launch(worker);

@@ -12,14 +12,15 @@ test("one line per decision, with its glyph", () => {
     decisionLine(decision({ detail: "difficulty 2.1/4", confidence: 0.82 })),
     "◆ jev · tier standard (difficulty 2.1/4, conf 0.82)",
   );
-  assert.equal(decisionLine(decision({ kind: "overlap", outcome: "unsure → waits", applied: "fallback" })), "◇ jev · overlap unsure → waits");
+  assert.equal(decisionLine(decision({ outcome: "unsure → standard", applied: "fallback" })), "◇ jev · tier unsure → standard");
   assert.equal(
     decisionLine(decision({ kind: "verdict", outcome: "done → partial", applied: "overridden", detail: "criterion 2 not met" })),
     "▲ jev · verdict done → partial (criterion 2 not met)",
   );
   assert.equal(
-    decisionLine(decision({ kind: "overlap", outcome: "independent → parallel", probability: 0.12 })),
+    decisionLine({ ...decision({ outcome: "independent → parallel", probability: 0.12 }), kind: "overlap" } as unknown as JevDecision),
     "◆ jev · overlap independent → parallel (p 0.12)",
+    "an overlap line stored by an older version still renders",
   );
 });
 

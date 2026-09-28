@@ -120,8 +120,8 @@ you ─► Lead (Pi, your tab)
   question plays a sound. Titles are reduced to letters, digits and plain
   punctuation, and notifications never quote the worker. The Lead's status
   line counts live workers (`● 2 running · 1 needs you`, in the warning colour
-  while one waits on you), and events such as "started on…" or "waits for
-  overlapping…" appear as dim transcript lines that the model never sees.
+  while one waits on you), and events such as "started on…" or "ran out of
+  quota…" appear as dim transcript lines that the model never sees.
   Each result shows in the Lead as a card: verdict, time, model, commits and
   diff, what CI the host checked, the branch, review hints and next steps, with every
   line the worker wrote behind a `│` gutter, marked untrusted. Expand it to
@@ -139,9 +139,14 @@ you ─► Lead (Pi, your tab)
   branch kept, and so are done workers waiting for their merge: their PRs
   still merge by number or URL, with any problem reported to you. A Lead
   never adopts the workers of another Lead that is still running.
-- **Jev** answers small closed questions (difficulty, verdict, ticket
-  overlap) and code maps each answer to an action. Without a key, documented
-  defaults apply.
+- **Tickets are sequenced by their Blocked-by edges.** Every worker starts
+  at once; the Lead delegates a blocked ticket only once its blockers' PRs are
+  merged, or starts it from a blocker's branch (`startFrom`) when you ask for
+  stacking. Conflicts surface, and are resolved, in the one-at-a-time merge
+  flow. When a finished worker's branch changes files that another worker's
+  open PR changes too, its report names that ticket and the shared files.
+- **Jev** answers small closed questions (difficulty, verdict) and code maps
+  each answer to an action. Without a key, documented defaults apply.
 
 Design record: [ADR 0001](docs/adr/0001-lead-is-a-tool-driven-conversation.md),
 [ADR 0002](docs/adr/0002-bound-jev-judgments-with-policy.md),
@@ -240,7 +245,7 @@ transcript, which the model never sees:
 
 ```
 ◆ jev · tier standard (difficulty 2.1/4, conf 0.82)
-◇ jev · overlap unsure → waits
+◇ jev · tier unsure → standard
 ▲ jev · verdict done → partial (criterion 2 not met)
 ```
 

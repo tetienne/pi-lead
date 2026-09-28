@@ -10,6 +10,7 @@ import {
   createAskJev,
   createJudge,
   describeJevProblem,
+  JEV_KINDS,
   tierForDifficulty,
   type AskJev,
   type JevDecision,
@@ -41,7 +42,12 @@ test("without a key Jev is unavailable and every judgment falls back", async () 
   const judge = createJudge({ config: DEFAULT_CONFIG.jev });
   assert.equal(judge.available, false);
   assert.equal(await judge.modelTier({ task: "x", kind: "implement" }), undefined);
-  assert.equal(await judge.overlap("a", "b"), undefined);
+  assert.equal(await judge.verdict({ task: "x", reported: "done", summary: "", diffStat: "", commits: "", changedFiles: [] }), undefined);
+});
+
+test("Jev judges only the tier and the verdict: ticket overlap is no longer asked", () => {
+  assert.deepEqual([...JEV_KINDS], ["tier", "verdict"]);
+  assert.ok(!("overlap" in createJudge({ ask: fakeAsk({}), config: DEFAULT_CONFIG.jev })));
 });
 
 test("model tier uses the difficulty score only when confident", async () => {
@@ -139,8 +145,8 @@ test("the verdict sees the evidence; an unmet criterion caps it at partial", asy
 
 test("Jev is never refused for spend: every judgment is asked, and failures fall back", async () => {
   const calls: unknown[] = [];
-  const judge = createJudge({ ask: fakeAsk({ overlap: { noul: 1 } }, calls), config: DEFAULT_CONFIG.jev });
-  for (let index = 0; index < 50; index++) assert.equal(await judge.overlap("a", "b"), true);
+  const judge = createJudge({ ask: fakeAsk({ difficulty: { score: 3.5, confidence: 0.9 } }, calls), config: DEFAULT_CONFIG.jev });
+  for (let index = 0; index < 50; index++) assert.equal((await judge.modelTier({ task: "t", kind: "implement" }))?.tier, "deep");
   assert.equal(calls.length, 50);
 
   const failing = createJudge({
@@ -161,7 +167,7 @@ test("a failing Jev is reported once, clipped, and still falls back", async () =
     config: DEFAULT_CONFIG.jev,
     onProblem: (problem) => problems.push(problem),
   });
-  assert.equal(await judge.overlap("a", "b"), undefined);
+  assert.equal(await judge.verdict({ task: "t", reported: "done", summary: "", diffStat: "", commits: "", changedFiles: [] }), undefined);
   assert.equal(await judge.modelTier({ task: "t", kind: "implement" }), undefined);
   assert.equal(problems.length, 1);
   assert.ok(problems[0]!.startsWith("404 model not found: xxx"));
@@ -176,16 +182,16 @@ test("a failure is reported once, even after Jev recovers and fails again", asyn
   const judge = createJudge({
     ask: async () => {
       if (fail) throw new Error("503");
-      return { answers: { overlap: { noul: 0.9 } } };
+      return { answers: { difficulty: { score: 3.5, confidence: 0.9 } } };
     },
     config: DEFAULT_CONFIG.jev,
     onProblem: (message) => problems.push(message),
   });
-  await judge.overlap("a", "b");
+  await judge.modelTier({ task: "t", kind: "implement" });
   fail = false;
-  assert.equal(await judge.overlap("a", "b"), true);
+  assert.equal((await judge.modelTier({ task: "t", kind: "implement" }))?.tier, "deep");
   fail = true;
-  await judge.overlap("a", "b");
+  await judge.modelTier({ task: "t", kind: "implement" });
   assert.deepEqual(problems, ["503"]);
   assert.doesNotMatch(describeJevProblem(problems[0]!), /budget/);
 });
@@ -200,7 +206,7 @@ test("a throwing notifier does not break the fallback", async () => {
       throw new Error("ui gone");
     },
   });
-  assert.equal(await judge.overlap("a", "b"), undefined);
+  assert.equal(await judge.modelTier({ task: "t", kind: "implement" }), undefined);
 });
 
 test("real client errors never carry the API key", async () => {
@@ -255,22 +261,6 @@ test("each judgment emits one decision: applied or fallback", async () => {
     assert.deepEqual(decisions.map(shape), [{ kind: "tier", outcome: "unsure → standard", applied: "fallback", confidence: 0.3 }]);
   }
   {
-    const { judge, decisions } = await judgeWith({ overlap: { noul: 0.5 } });
-    await judge.overlap("a", "b");
-    const { judge: sure, decisions: sureDecisions } = await judgeWith({ overlap: { noul: 0.2 } });
-    await sure.overlap("a", "b");
-    const { judge: unsure, decisions: unsureDecisions } = await judgeWith({ overlap: { noul: "?" } });
-    await unsure.overlap("a", "b");
-    assert.deepEqual(
-      [...decisions, ...sureDecisions, ...unsureDecisions].map((d) => [d.applied, d.outcome, d.probability]),
-      [
-        ["jev", "overlaps → waits", 0.5],
-        ["jev", "independent → parallel", 0.2],
-        ["fallback", "unsure → waits", undefined],
-      ],
-    );
-  }
-  {
     const evidence = { reported: "done" as const, summary: "", diffStat: "", commits: "", changedFiles: [] };
     const ticket = "## Acceptance criteria\n- [ ] one\n- [ ] two\n";
     const { judge, decisions } = await judgeWith({ verdict: { choice: "done", confidence: 0.9 }, criterion1: { noul: 0.9 }, criterion2: { noul: 0.05 } });
@@ -300,25 +290,25 @@ test("a failing or unconfigured Jev: fallbacks name the reason, or nothing is em
     config: DEFAULT_CONFIG.jev,
     onDecision: (d) => decisions.push(d),
   });
-  await failing.overlap("a", "b");
+  await failing.modelTier({ task: "t", kind: "implement" });
   const unsure = createJudge({ ask: fakeAsk({}), config: DEFAULT_CONFIG.jev, onDecision: (d) => decisions.push(d) });
   await unsure.modelTier({ task: "t", kind: "implement" });
   const none = createJudge({ config: DEFAULT_CONFIG.jev, onDecision: (d) => decisions.push(d) });
-  await none.overlap("a", "b");
+  await none.modelTier({ task: "t", kind: "implement" });
   assert.deepEqual(
     decisions.map((d) => [d.kind, d.applied, d.outcome]),
     [
-      ["overlap", "fallback", "failing → waits"],
+      ["tier", "fallback", "failing → standard"],
       ["tier", "fallback", "unsure → standard"],
     ],
   );
 
   const throwing = createJudge({
-    ask: fakeAsk({ overlap: { noul: 0.9 } }),
+    ask: fakeAsk({ difficulty: { score: 3.5, confidence: 0.9 } }),
     config: DEFAULT_CONFIG.jev,
     onDecision: () => {
       throw new Error("ui gone");
     },
   });
-  assert.equal(await throwing.overlap("a", "b"), true, "a throwing display never changes the decision");
+  assert.equal((await throwing.modelTier({ task: "t", kind: "implement" }))?.tier, "deep", "a throwing display never changes the decision");
 });

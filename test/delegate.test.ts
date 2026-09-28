@@ -25,7 +25,6 @@ const noJudge: Judge = {
   available: false,
   modelTier: async () => undefined,
   verdict: async () => undefined,
-  overlap: async () => undefined,
 };
 
 type Log = string[];
@@ -588,24 +587,48 @@ test("a branch touching only ordinary files gets no host warning", async (t) => 
   assert.equal(outcome.details.sensitive, undefined);
 });
 
-test("overlapping code tickets run one after the other", async (t) => {
-  const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", delayMs: 30 }], judge: { overlap: async () => true } });
-  const both = [nextOutcome(), nextOutcome()];
-  await delegator.start({ kind: "prototype", title: "One", task: "a" }, io);
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  await delegator.start({ kind: "prototype", title: "Two", task: "b" }, io);
-  await Promise.all(both);
-  assert.ok(log.indexOf("close tab-1") < log.indexOf("open ○ Two"));
-  assert.ok(progress.some((line) => line.includes('waits for overlapping "One"')));
+test("code-writing tickets start in parallel, with or without a Jev key", async (t) => {
+  for (const judge of [{}, { available: true, modelTier: async () => ({ tier: "standard" as const, difficulty: 2 }) }]) {
+    const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", delayMs: 30 }], judge });
+    const both = [nextOutcome(), nextOutcome()];
+    await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
+    await delegator.start({ kind: "prototype", title: "Two", task: "b" }, io);
+    await Promise.all(both);
+    assert.ok(log.indexOf("open ○ Two") < log.findIndex((line) => line.startsWith("prChecks")), "Two opened before One finished");
+    assert.ok(!progress.some((line) => /waits/.test(line)), "nothing waits for another worker");
+  }
 });
 
-test("independent tickets run in parallel", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", delayMs: 30 }], judge: { overlap: async () => false } });
-  const both = [nextOutcome(), nextOutcome()];
+test("a report names the open worker PRs it shares files with, the files inside the untrusted block", async (t) => {
+  const files: Record<string, string[]> = { one: ["src/a.ts", "src/shared.ts"], two: ["src/shared.ts", "src/c.ts"], three: ["docs/x.md"] };
+  const { delegator, nextOutcome } = await setup(t, {
+    replies: [{ status: "done", delayMs: 5 }],
+    workspace: {
+      ...fakeWorkspace([]),
+      collect: async ({ branch }) => ({
+        commits: "def456 work",
+        diffStat: "",
+        changedFiles: files[Object.keys(files).find((key) => branch.includes(`/${key}-`))!]!,
+        head: "def456",
+      }),
+    },
+  });
+  const first = nextOutcome();
   await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
+  const one = await first;
+  assert.doesNotMatch(one.text, /shares files/i, "no other PR is open yet");
+  const second = nextOutcome();
   await delegator.start({ kind: "implement", title: "Two", task: "b" }, io);
-  await Promise.all(both);
-  assert.ok(log.indexOf("open ○ Two") < log.findIndex((line) => line.startsWith("prChecks")), "Two opened before One finished");
+  const two = await second;
+  const block = /<worker-report untrusted>([\s\S]*)<\/worker-report>/.exec(two.text)![1]!;
+  assert.match(block, /Files also changed by the open PR of "One":\nsrc\/shared\.ts\n/);
+  assert.doesNotMatch(block, /src\/a\.ts/, "only the shared files are listed");
+  const after = two.text.slice(two.text.indexOf("</worker-report>"));
+  assert.match(after, /Host check: this branch shares files with the open PR of "One" \(https:\/\/example\.test\/pr\/pi-lead\/one-[^)]+\)/);
+  assert.doesNotMatch(after, /src\/shared\.ts/, "worker-chosen file names stay inside the untrusted block");
+  const third = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Three", task: "c" }, io);
+  assert.doesNotMatch((await third).text, /shares files|also changed/, "no shared file, no note");
 });
 
 test("without Herdr or with a bad branch name nothing starts", async (t) => {
@@ -762,28 +785,6 @@ test("shutdown stops live workers and waits for their cleanup", async (t) => {
   await delegator.shutdown();
   assert.ok(log.includes("close tab-1"));
   assert.equal(outcomes.at(-1)?.status, "stopped");
-});
-
-test("queued overlapping tickets start one at a time, in order", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", delayMs: 20 }], judge: { overlap: async () => true } });
-  const all = [nextOutcome(), nextOutcome(), nextOutcome()];
-  for (const title of ["A", "B", "C"]) await delegator.start({ kind: "prototype", title, task: title }, io);
-  await Promise.all(all);
-  const opens = lifecycle(log).filter((line) => !line.startsWith("remove"));
-  assert.deepEqual(opens, ["open ○ A", "close tab-1", "open ○ B", "close tab-2", "open ○ C", "close tab-3"]);
-});
-
-test("a worker queued behind an overlapping one can be stopped before its turn", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, { replies: ["silent"], judge: { overlap: async () => true } });
-  await delegator.start({ kind: "prototype", title: "First", task: "a" }, io);
-  const second = await delegator.start({ kind: "prototype", title: "Second", task: "b" }, io);
-  assert.equal(second.status, "started", "delegate always starts; queuing shows up in the worker's own state");
-  assert.equal(delegator.list()[1]!.state, "queued");
-  const stopped = nextOutcome();
-  await delegator.stop("second");
-  const outcome = await stopped;
-  assert.equal(outcome.worker.title, "Second");
-  assert.equal(outcome.status, "stopped");
 });
 
 const until = async (condition: () => boolean) => {
@@ -1515,10 +1516,16 @@ const ghTrail = (log: Log) =>
     .filter((line) => line.startsWith("gh ") || line.startsWith("close ") || line.startsWith("send "))
     .map((line) => line.replace(/https:\/\/example\.test\/pr\/pi-lead\/([a-z]+)-[0-9a-f]+/g, "$1"));
 
-/** Delegate implement tickets and wait until each reports done with its green PR. */
+/**
+ * Delegate implement tickets and wait until each reports done with its green PR.
+ * Workers start in parallel: each tab opens before the next starts, so the Nth ticket gets tab-N.
+ */
 async function doneWorkers(lead: Awaited<ReturnType<typeof setup>>, titles: string[]) {
   const outcomes = titles.map(() => lead.nextOutcome());
-  for (const title of titles) await lead.delegator.start({ kind: "implement", title, task: `ticket ${title}` }, io);
+  for (const title of titles) {
+    await lead.delegator.start({ kind: "implement", title, task: `ticket ${title}` }, io);
+    await until(() => lead.log.includes(`open ○ ${title}`));
+  }
   for (const outcome of await Promise.all(outcomes)) assert.equal(outcome.status, "done");
 }
 
