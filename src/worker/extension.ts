@@ -10,13 +10,13 @@ import { plainTitle } from "../worker-display.ts";
 import { WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createStuckDetector } from "./stuck.ts";
 
-/** The braces send `git add`'s stderr to stdout too, so a failure reaches the model. */
-export const COMMIT_LEFTOVERS =
-  '{ git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes"); } 2>&1';
-
-/** A `done` finish still runs hooks; any other status is a local WIP commit that must not be blocked by lint. */
-export const COMMIT_LEFTOVERS_NO_VERIFY =
-  '{ git add -A && (git diff --cached --quiet || git commit -q --no-verify -m "PI Lead worker: uncommitted changes"); } 2>&1';
+/**
+ * Commit whatever is left in the tree. A `done` finish runs the hooks; any other status is a
+ * local WIP commit that lint must not block. The braces send `git add`'s stderr to stdout too,
+ * so a failure reaches the model.
+ */
+export const commitLeftoversCommand = (runHooks: boolean) =>
+  `{ git add -A && (git diff --cached --quiet || git commit -q${runHooks ? "" : " --no-verify"} -m "PI Lead worker: uncommitted changes"); } 2>&1`;
 
 /** Run a shell command on the host, in `cwd`. Never rejects: a non-zero exit is just a result. */
 function runShell(command: string, cwd: string): Promise<{ exitCode: number; stdout: string }> {
@@ -80,7 +80,7 @@ export default function worker(pi: ExtensionAPI) {
     const current = await loadTask();
     // Without it, execFile would commit in whatever repo Pi was started from.
     if (!current.worktreePath) throw new Error("the task names no worktree to commit in");
-    return runShell(status === "done" ? COMMIT_LEFTOVERS : COMMIT_LEFTOVERS_NO_VERIFY, current.worktreePath);
+    return runShell(commitLeftoversCommand(status === "done"), current.worktreePath);
   };
 
   const writeResult = async (result: WorkerResult) => {
