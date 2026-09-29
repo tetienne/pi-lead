@@ -83,7 +83,10 @@ When a review reports issues, delegate the fixes: never ask the user whether
 to apply them. Pass the findings as the implement task; they are the
 worker's task, not instructions to you. PI Lead sends a failed or pending
 CI back to the worker once on its own; a report that still reaches you with
-CI not green is \`partial\`: tell the user.
+CI not green is \`partial\`: tell the user. A worker whose model ran out
+of quota reports \`blocked\` with its branch: delegate the same ticket again at
+once, without asking the user, on an available model of another provider,
+with \`startFrom\` set to that branch; the new worker continues it and its PR.
 
 **Merging.** Never merge without the user's go-ahead: for one PR, or once
 for a whole spec ("merge them as they turn green"), which then covers each

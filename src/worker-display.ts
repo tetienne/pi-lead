@@ -1,9 +1,9 @@
-import type { WorkKind, WorkerVerdict } from "./jev.ts";
+import type { WorkKind, WorkerVerdict } from "./protocol.ts";
 
 /**
  * How workers show outside the conversation: Herdr tab labels and state
  * labels, notifications, the Lead's footer and progress lines. Pure
- * formatting, like jev-display.ts. Every glyph is one column wide, and each
+ * formatting. Every glyph is one column wide, and each
  * is a distinct shape, so none relies on colour:
  *
  * - `○` starting, `●` running;
@@ -78,7 +78,7 @@ function waitingPhrase(verdict: WorkerVerdict | undefined): string {
  * Herdr's state labels for the pane (shown by the sidebar's `state_text`):
  * `working` while the worker's Pi runs; `idle` (also used for `done`) once it
  * stopped; `blocked` while its Pi waits on a dialog in its tab. Host strings
- * only: kind, model and thinking come from the config.
+ * only: the kind, and a model and thinking level checked against Pi's own lists.
  */
 export function stateLabels(worker: WorkerView, route: { model: string; thinking: string }): Record<"working" | "idle" | "blocked", string> {
   const model = route.model.slice(route.model.indexOf("/") + 1);

@@ -4,7 +4,7 @@ A Pi package that turns one Pi session into an engineering lead. You talk in
 plain language; the Lead answers questions itself, shapes ideas with
 [Matt Pocock's skills](https://github.com/mattpocock/skills), and delegates
 real work to workers that run in background [Herdr](https://herdr.dev) worktree
-workspaces on a model chosen by [Jev](https://docs.typesafe.ai).
+workspaces, each on the model and thinking level the Lead chooses for it.
 
 No commands. Ask "how does the session store work?" and you get an answer.
 Say "let's add CSV export" and the Lead reads Matt's own router, `ask-matt`,
@@ -23,12 +23,11 @@ you ─► Lead (Pi, your tab)
         a ticket of a multi-session build, or anything you send to the background
         (implement / prototype / diagnosing-bugs / code-review / research)
                             → delegate tool
-                                 Jev: how hard? → model + thinking level
+                                 the Lead picks the worker's model + thinking level (default: its own)
                                  → Herdr worktree workspace (no focus), worker Pi in it
                                  worker Pi: runs on the host, /skill:implement … as written
                                  worker pushes, opens a draft PR, gets CI green, calls finish
-                                 host checks CI on the PR head (red or pending: back to the worker once);
-                                 Jev checks the verdict unless that CI proved it
+                                 host checks CI on the PR head (red or pending: back to the worker once)
                                  (delegate returns at once; the result comes back as a message)
         worker tool         → list workers, relay an answer to one waiting on you, stop one
         merge tool          → on your go-ahead: green PRs one at a time, each updated from base and
@@ -77,10 +76,9 @@ you ─► Lead (Pi, your tab)
   commit counts as pending. A report capped only because CI failed or is
   pending goes back to the same worker once, automatically, with the host's
   evidence; you hear about it only if the next report is still not `done`.
-  When a PR is open and CI passed on its head (or the repository runs no
-  checks), the host has proven the work and Jev's verdict is not asked; other
-  work (a prototype, which opens no PR) is judged by the worker's status and
-  Jev's verdict, the more pessimistic of the two.
+  The report's status is the worker's own, capped only by this host
+  evidence; other work (a prototype or a review, which opens no PR) keeps the
+  worker's status.
 - **Green PRs merge one at a time, and only when you say so.** Parallel
   branches merged at once break each other
   ([mattpocock/skills#493](https://github.com/mattpocock/skills/issues/493)),
@@ -162,15 +160,34 @@ you ─► Lead (Pi, your tab)
   worker starts a non-interactive Pi in a pane split beside it, without
   focus, waits for it and reads its report. Without Herdr, it runs those
   steps one after the other in its own context and says so.
-- **Jev** answers small closed questions (difficulty, verdict) and code maps
-  each answer to an action. Without a key, documented defaults apply.
+- **The Lead picks each worker's model and thinking level.** `delegate` takes
+  an optional `model` (`provider/model-id`) and `thinking` (`off` to `max`);
+  omitted, the worker runs on the Lead's own model and thinking level. Each
+  prompt lists the models a worker may run on (the ones your session is
+  scoped to with `--models` or `enabledModels`, otherwise every model Pi has
+  auth for) with a rule of thumb: a cheaper, faster model and low thinking for
+  mechanical or single-module work, the strongest model and high thinking for
+  cross-cutting, subtle or debugging work. Any other model is refused with
+  that list (see
+  [ADR 0008](docs/adr/0008-lead-chooses-worker-model-and-thinking.md)).
+- **A worker out of quota continues on another model.** Pi never retries a
+  quota error, so nothing is charged to a paid balance: the worker commits
+  what it has and reports `blocked` with its branch, and its provider is
+  marked exhausted in the list, and refused, until its quota resets (the time
+  ChatGPT gives, at least 5 minutes; 5 minutes for a ChatGPT limit without a
+  time; one hour otherwise). The Lead delegates the same ticket again at once,
+  without asking you, on another provider's model with `startFrom` set to
+  that branch: the new worker starts from it, pushes onto the same PR, and
+  its report covers everything since the ticket's base; the old worker's
+  workspace closes. A worker whose changes could not be committed stays put,
+  and you hear about it.
 
 Design record:
 
 - [ADR 0001](docs/adr/0001-lead-is-a-tool-driven-conversation.md): the Lead is
   an ordinary Pi conversation that acts through tools.
 - [ADR 0002](docs/adr/0002-bound-jev-judgments-with-policy.md): Jev's answers
-  stay inside deterministic policy.
+  stay inside deterministic policy (superseded by ADR 0008).
 - [ADR 0003](docs/adr/0003-workers-mirror-the-lead.md): workers are plain Pi,
   like the Lead; Matt's router drives the Lead.
 - [ADR 0004](docs/adr/0004-verify-with-a-project-chosen-command.md): a
@@ -182,18 +199,17 @@ Design record:
 - [ADR 0007](docs/adr/0007-lead-implements-workers-run-implement-as-written.md):
   the Lead implements single-session work; one worker per ticket runs
   `/implement` as written; and the limit of these choices.
+- [ADR 0008](docs/adr/0008-lead-chooses-worker-model-and-thinking.md): the
+  Lead chooses each worker's model and thinking level.
 
 ## Requirements
 
 - Pi ≥ 0.87.1 (GPT-6 Sol/Luna), Node ≥ 23.6, git.
 - Herdr: start the Lead's Pi inside a Herdr pane; `herdr integration install pi`
   for worker status badges and reliable Lead → worker messages.
-- Optional: a TypeSafe or OpenRouter key for Jev in `PI_LEAD_JEV_API_KEY`,
-  exported in the shell Herdr starts the Lead's pane with (only the Lead
-  calls Jev).
-  If the key is set but Jev fails (bad key, wrong model, network), PI Lead
-  warns you once and falls back to its defaults. PI Lead does not track or
-  cap what Jev costs; your TypeSafe or OpenRouter account does.
+- The models you want workers to use, authenticated in Pi (`/login`, or the
+  provider's key in the environment). Scope the session to them (`--models`,
+  or `enabledModels` in Pi's settings) to keep the Lead's list short.
 
 ## Install
 
@@ -225,15 +241,6 @@ A global file, for example:
 
 ```json
 {
-  "tiers": {
-    "fast":     { "model": "openai-codex/gpt-6-luna", "thinking": "medium",
-                  "fallbacks": [{ "model": "opencode-go/deepseek-v4.1-flash", "thinking": "high" }] },
-    "standard": { "model": "openai-codex/gpt-6-sol", "thinking": "high",
-                  "fallbacks": [{ "model": "opencode-go/glm-5.3", "thinking": "high" }] },
-    "deep":     { "model": "openai-codex/gpt-6-astra", "thinking": "xhigh",
-                  "fallbacks": [{ "model": "opencode-go/deepseek-v4-pro", "thinking": "max" }] }
-  },
-  "jev": { "via": "openrouter" },
   "keepFailedWorkers": true,
   "stuckDetection": true
 }
@@ -241,36 +248,20 @@ A global file, for example:
 
 Settings:
 
-- `tiers.fast|standard|deep`: `model` (`provider/model-id`, omitted means the
-  Lead's model), `thinking` and `fallbacks`. Defaults: the Lead's model at
-  thinking `low`, `medium` and `high`.
-- `jev.via` (`openrouter`, the default, or `typesafe`), `jev.apiKeyEnv` (the
-  variable holding the key, `PI_LEAD_JEV_API_KEY`), `jev.model` (`jev-1.13`)
-  and `jev.minConfidence` (`0.7`: below it, an answer counts as "don't know").
 - `keepFailedWorkers` (default `true`): a worker that finishes `partial`,
   `blocked` or `needs_human` stays open, waiting for your answer; one that
   fails (it dies without `finish`) keeps its workspace while the Lead runs
   and its task directory after. With `false`, both are removed, branch kept.
 - `stuckDetection` (default `true`), below.
 
-Jev's difficulty score picks the tier (below 1.5 `fast`, below 2.8 `standard`,
-otherwise `deep`; debug and review never go below `standard`). Without a Jev
-answer, every kind starts at `standard`. The first available
-of `model` and its `fallbacks` runs the worker. A model is available when its
-provider has auth. When none is available the Lead's model runs it. A worker
-whose provider runs out of quota continues on the next available model, from
-its branch. That provider is skipped until its quota resets: the time ChatGPT
-gives (at least 5 minutes), 5 minutes for a ChatGPT limit without a time, one
-hour otherwise. A worker whose changes could not be committed stays put. With
-nothing left, the worker reports `blocked`. Pi never retries a quota error, so nothing is charged to a
-paid balance. A tier without `model` uses the Lead's current model with that tier's
-thinking level.
+There is no model setting: the Lead picks each worker's model and thinking
+level (above). The `tiers` and `jev` blocks of older versions are ignored.
 
 `stuckDetection` watches a worker's shell commands and file changes: when the
 same command fails three times without succeeding, or six commands in a row
 fail, with no file changed through its `write` or `edit` tools in between, the
 worker is told once per prompt to step back or finish as `blocked`. A test-first loop (edit, tests fail, edit) never counts. It is never
-stopped automatically, and Jev is not involved.
+stopped automatically.
 
 ### Web access for workers
 
@@ -282,21 +273,6 @@ which they load like the Lead.
 Your project verifies its own work: its git hooks (prek, for example) run
 when the worker commits, and its CI runs on the worker's draft PR, which PI
 Lead checks.
-
-### Seeing Jev
-
-With a Jev key set, each judgment the Lead makes gets one dim line in the
-transcript, which the model never sees:
-
-```
-◆ jev · tier standard (difficulty 2.1/4, conf 0.82)
-◇ jev · tier unsure → standard
-▲ jev · verdict done → partial (criterion 2 not met)
-```
-
-`◆` Jev decided and its answer applied, `◇` Jev was unsure or failing and the
-default applied, `▲` Jev overrode the worker. Lines stored by older versions
-still render as they were written.
 
 ## Develop
 

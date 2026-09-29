@@ -16,14 +16,8 @@ import {
   type WorkerCommand,
 } from "../src/delegate.ts";
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
-import { createJudge, type Judge, type WorkerVerdict } from "../src/jev.ts";
-import { shellQuote, type WorkerResult, type WorkerTask } from "../src/protocol.ts";
+import { shellQuote, type WorkerResult, type WorkerTask, type WorkerVerdict } from "../src/protocol.ts";
 import type { MergeMethod, PrView, Workspace } from "../src/workspace.ts";
-
-const noJudge: Judge = {
-  modelTier: async () => undefined,
-  verdict: async () => undefined,
-};
 
 type Log = string[];
 type Reply =
@@ -232,12 +226,12 @@ function fakeHerdr(
 const io: DelegateIO = {
   cwd: "/repo",
   lead: { provider: "anthropic", id: "claude-sonnet-5" },
+  thinking: "medium",
   available: [{ provider: "anthropic", id: "claude-sonnet-5" }],
   projectTrusted: true,
 };
 
 async function setup(t: TestContext, options: {
-  judge?: Partial<Judge>;
   replies?: Reply[];
   herdr?: Herdr | false;
   seen?: Seen;
@@ -263,7 +257,6 @@ async function setup(t: TestContext, options: {
   const stateRoot = options.stateRoot ?? (await mkdtemp(join(tmpdir(), "pi-lead-state-")));
   const delegator = createDelegator({
     config: mergeConfig(DEFAULT_CONFIG, { ...options.config }),
-    judge: { ...noJudge, ...options.judge },
     herdr:
       options.herdr === false
         ? undefined
@@ -345,7 +338,7 @@ test("delegate returns at once; the result arrives later, then the worker is cle
   assert.equal(outcome.status, "done");
   assert.match(outcome.text, /Branch: pi-lead\/add-csv-export-[^\n]*\nHead: def456\nBase: abc123\n/);
   assert.match(outcome.text, /src\/a\.ts/);
-  assert.match(outcome.text, /anthropic\/claude-sonnet-5 · thinking medium · tier standard \(default tier; Jev unavailable\)/);
+  assert.match(outcome.text, /anthropic\/claude-sonnet-5 · thinking medium\n/);
   assert.deepEqual(lifecycle(log), ["open ○ Add CSV export", "close tab-1", "remove dir"]);
   assert.equal(delegator.list()[0]!.state, "done");
   const card = outcome.details.card!;
@@ -447,40 +440,47 @@ test("a transient rename failure keeps the glyphs and is retried on the next sta
   assert.deepEqual(log.filter((line) => line.startsWith("label")), ["label tab-1 ● One", "label tab-1 ? One"]);
 });
 
-test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, {
-    judge: { modelTier: async () => ({ tier: "deep", difficulty: 3.4 }), verdict: async () => "partial" },
-  });
+const luna = { provider: "openai-codex", id: "gpt-6-luna" };
+const withLuna: DelegateIO = { ...io, available: [...io.available, luna] };
+
+test("a delegation with a model and thinking level launches the worker on them, and its report and card say so", async (t) => {
+  const seen: Seen = {};
+  const { delegator, nextOutcome } = await setup(t, { seen });
   const pending = nextOutcome();
-  // A prototype opens no PR, so the host never proves it: Jev has the last word.
-  const started = await delegator.start({ kind: "prototype", title: "Hard", task: "t" }, io);
-  assert.match(started.text, /thinking high, tier deep, Jev difficulty 3\.4\/4/);
+  const started = await delegator.start({ kind: "implement", title: "Rename", task: "t", model: "openai-codex/gpt-6-luna", thinking: "low" }, withLuna);
+  assert.equal(started.status, "started");
+  assert.match(started.text, /to openai-codex\/gpt-6-luna \(thinking low\)\./);
   const outcome = await pending;
-  assert.equal(outcome.status, "partial");
-  assert.match(outcome.text, /worker said done, Jev said partial/);
-  assert.deepEqual(log.filter((line) => line.startsWith("close")), [], "a partial keeps its tab");
+  assert.match(seen.script!, /'--model' 'openai-codex\/gpt-6-luna' '--thinking' 'low'/);
+  assert.match(outcome.text, /^Worker "Rename" \[[0-9a-f]{8}\]: openai-codex\/gpt-6-luna · thinking low$/m);
+  assert.deepEqual([outcome.details.card?.model, outcome.details.card?.thinking], ["openai-codex/gpt-6-luna", "low"]);
+  assert.deepEqual(delegator.list()[0]!.route, { model: "openai-codex/gpt-6-luna", thinking: "low" });
 });
 
-test("Jev's verdict is asked with the commits and changed files", async (t) => {
-  const asked: Array<Parameters<Judge["verdict"]>[0]> = [];
-  const { delegator, nextOutcome } = await setup(t, {
-    replies: [{ status: "done", summary: "tests pass" }],
-    judge: { verdict: async (input) => (asked.push(input), "partial") },
-  });
+test("without a model or thinking level the worker runs on the Lead's own", async (t) => {
+  const seen: Seen = {};
+  const { delegator, nextOutcome } = await setup(t, { seen });
   const pending = nextOutcome();
-  // A prototype opens no PR, so the host proves nothing and Jev is asked.
-  await delegator.start({ kind: "prototype", title: "Export", task: "## Acceptance criteria\n- [ ] CSV" }, io);
-  assert.equal((await pending).status, "partial");
-  assert.equal(asked.length, 1);
-  const { commits, ...rest } = asked[0]!;
-  assert.match(commits, /^def456 work on pi-lead\//);
-  assert.deepEqual(rest, {
-    task: "## Acceptance criteria\n- [ ] CSV",
-    reported: "done",
-    summary: "tests pass",
-    diffStat: " src/a.ts | 3 ++-",
-    changedFiles: ["src/a.ts"],
-  });
+  await delegator.start({ kind: "debug", title: "Flaky", task: "t" }, { ...withLuna, thinking: "high" });
+  await pending;
+  assert.match(seen.script!, /'--model' 'anthropic\/claude-sonnet-5' '--thinking' 'high'/);
+  const half = await setup(t, { seen });
+  const next = half.nextOutcome();
+  await half.delegator.start({ kind: "debug", title: "Flaky", task: "t", thinking: "xhigh" }, withLuna);
+  await next;
+  assert.match(seen.script!, /'--model' 'anthropic\/claude-sonnet-5' '--thinking' 'xhigh'/, "a thinking level alone keeps the Lead's model");
+});
+
+test("a model Pi cannot use now is refused, listing the available ones, and nothing starts", async (t) => {
+  const { delegator, log } = await setup(t);
+  const refused = await delegator.start({ kind: "implement", title: "x", task: "t", model: "openai-codex/gpt-6-astra" }, withLuna);
+  assert.equal(refused.status, "failed");
+  assert.equal(
+    refused.text,
+    "No worker started: openai-codex/gpt-6-astra is not a model Pi can use now. Available: anthropic/claude-sonnet-5 (yours), openai-codex/gpt-6-luna.",
+  );
+  assert.deepEqual(delegator.list(), []);
+  assert.ok(!log.some((line) => line.startsWith("create")));
 });
 
 test("code work says which CI the host checked, or that it checked none; other work says nothing", async (t) => {
@@ -497,7 +497,7 @@ test("code work says which CI the host checked, or that it checked none; other w
   pending = prototype.nextOutcome();
   await prototype.delegator.start({ kind: "prototype", title: "x", task: "t" }, io);
   outcome = await pending;
-  assert.equal(outcome.status, "done", "judged by the worker and Jev; no CI to cap it");
+  assert.equal(outcome.status, "done", "the worker's own status; no CI to cap it");
   assert.match(outcome.text, /^CI: not checked \(no PR\)$/m);
 
   const partial = await setup(t, { replies: [{ status: "partial" }] });
@@ -513,25 +513,6 @@ test("code work says which CI the host checked, or that it checked none; other w
   }
 });
 
-test("a delegated ticket always starts: Jev is asked for the difficulty only", async (t) => {
-  const calls: Array<Record<string, unknown>> = [];
-  const judge = createJudge({
-    ask: async (_state, questions) => {
-      calls.push(questions);
-      return { answers: { difficulty: { score: 3.4, confidence: 0.9 } } };
-    },
-    config: DEFAULT_CONFIG.jev,
-  });
-  const { delegator, nextOutcome } = await setup(t, { judge: { ...judge, verdict: async () => undefined } });
-  const pending = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Vague", task: "make it nicer" }, io);
-  assert.equal(started.status, "started");
-  assert.match(started.text, /tier deep, Jev difficulty 3\.4\/4/);
-  assert.equal(calls.length, 1);
-  assert.deepEqual(Object.keys(calls[0]!), ["difficulty"], "no readiness question");
-  assert.equal((await pending).status, "done");
-});
-
 test("reviews start from the reviewed branch and their findings always go to an implement task", async (t) => {
   for (const findings of ["SQL injection in search", "Rename foo to bar"]) {
     const { delegator, log, nextOutcome } = await setup(t, { replies: [{ status: "done", findings }] });
@@ -541,7 +522,6 @@ test("reviews start from the reviewed branch and their findings always go to an 
     assert.ok(log.some((line) => line.endsWith("from feature/login")));
     assert.ok(outcome.text.includes(findings));
     assert.match(outcome.text, /Review found issues: delegate an implement task .* without asking the user first/);
-    assert.equal("review" in outcome.details, false, "no Jev severity");
   }
 });
 
@@ -596,18 +576,16 @@ test("a branch touching only ordinary files gets no host warning", async (t) => 
   assert.equal(outcome.details.sensitive, undefined);
 });
 
-test("code-writing tickets start in parallel, with or without a Jev key", async (t) => {
-  for (const judge of [{}, { modelTier: async () => ({ tier: "standard" as const, difficulty: 2 }) }]) {
-    // No worker finishes before Two has opened: it opens while One still runs, or never.
-    const twoOpened = (log: Log) => until(() => log.includes("open ○ Two"));
-    const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", after: twoOpened }], judge });
-    const both = [nextOutcome(), nextOutcome()];
-    await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
-    await delegator.start({ kind: "prototype", title: "Two", task: "b" }, io);
-    await Promise.all(both);
-    assert.ok(log.indexOf("open ○ Two") < log.findIndex((line) => line.startsWith("prChecks")), "Two opened before One finished");
-    assert.ok(!progress.some((line) => /waits/.test(line)), "nothing waits for another worker");
-  }
+test("code-writing tickets start in parallel", async (t) => {
+  // No worker finishes before Two has opened: it opens while One still runs, or never.
+  const twoOpened = (log: Log) => until(() => log.includes("open ○ Two"));
+  const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", after: twoOpened }] });
+  const both = [nextOutcome(), nextOutcome()];
+  await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
+  await delegator.start({ kind: "prototype", title: "Two", task: "b" }, io);
+  await Promise.all(both);
+  assert.ok(log.indexOf("open ○ Two") < log.findIndex((line) => line.startsWith("prChecks")), "Two opened before One finished");
+  assert.ok(!progress.some((line) => /waits/.test(line)), "nothing waits for another worker");
 });
 
 test("a report names the open worker PRs it shares files with, the files inside the untrusted block", async (t) => {
@@ -681,7 +659,7 @@ test("a worker whose tab vanished before Pi ran is reported as failed", async (t
   assert.match(outcome.text, /worker tab closed before Pi finished/);
 });
 
-test("a failed launch is retried exactly once, without asking Jev", async (t) => {
+test("a failed launch is retried exactly once", async (t) => {
   for (const failures of [1, 2]) {
     const log: Log = [];
     const herdr = fakeHerdr(log, [{ status: "done" }]);
@@ -693,11 +671,8 @@ test("a failed launch is retried exactly once, without asking Jev", async (t) =>
       }
       return herdr.createWorktree(input);
     };
-    const judged: string[] = [];
-    const judge: Partial<Judge> = { verdict: async () => void judged.push("verdict") };
-    const { delegator, nextOutcome, progress } = await setup(t, { herdr: { ...herdr, createWorktree }, judge });
+    const { delegator, nextOutcome, progress } = await setup(t, { herdr: { ...herdr, createWorktree } });
     const pending = nextOutcome();
-    // A prototype is never proven by CI, so its verdict is asked.
     assert.equal((await delegator.start({ kind: "prototype", title: "x", task: "y" }, io)).status, "started");
     const outcome = await pending;
     const attempts = log.filter((line) => line.startsWith("create")).length;
@@ -705,12 +680,10 @@ test("a failed launch is retried exactly once, without asking Jev", async (t) =>
     assert.ok(progress.some((line) => /failed to start; retrying once/.test(line)));
     if (failures === 1) {
       assert.equal(outcome.status, "done");
-      assert.deepEqual(judged, ["verdict"]);
     } else {
       assert.equal(outcome.status, "failed");
       assert.match(outcome.text, /index\.lock exists/);
       assert.doesNotMatch(outcome.text, /failure kind/i);
-      assert.deepEqual(judged, [], "Jev is not asked about a failure");
     }
   }
 });
@@ -730,7 +703,6 @@ test("the launch script and the task carry stuck detection, the Herdr hint and t
   await pending;
   assert.equal(seen.task?.stuckDetection, true);
   assert.ok(!("verify" in seen.task!), "the host runs no verify command");
-  assert.ok(!("jev" in seen.task!), "workers never call Jev, so they get none of its settings");
   assert.match(seen.script!, /export HERDR_AGENT=pi/);
   assert.match(seen.script!, /export PI_LEAD_ROLE=worker/, "a Lead extension loaded in the worker stays inert");
 });
@@ -758,7 +730,6 @@ test("a Lead that throws on delivery does not take the watcher down", async (t) 
   const log: string[] = [];
   const delegator = createDelegator({
     config: DEFAULT_CONFIG,
-    judge: noJudge,
     herdr: fakeHerdr(log, [{ status: "done" }]),
     workspace: fakeWorkspace(log),
     workerCommand: ({ taskPath }) => ["pi", "--pi-lead-task", taskPath],
@@ -833,19 +804,6 @@ test("shutdown closes a failed worker's kept tab but keeps its directory", async
   assert.equal(record.workspaceId, undefined, "nothing left for a later Lead to close");
   assert.equal(record.failed, true);
   assert.equal(record.leadPid, process.pid);
-});
-
-test("with no Jev difficulty, debug and review start at the standard tier", async (t) => {
-  for (const params of [
-    { kind: "debug", title: "Fix", task: "t" },
-    { kind: "review", title: "Review", task: "t", startFrom: "main" },
-  ] as const) {
-    const { delegator, nextOutcome } = await setup(t);
-    const pending = nextOutcome();
-    const started = await delegator.start(params, io);
-    assert.match(started.text, /thinking medium, tier standard/, params.kind);
-    await pending;
-  }
 });
 
 test("a worker waiting on the user's answer waits until answered or stopped, however long", async (t) => {
@@ -1211,49 +1169,45 @@ const chatgptLimit = {
   quota: { message: "You have hit your ChatGPT usage limit (pro plan). Try again in ~90 min.", retryAfterMinutes: 90 },
 } as const;
 
-test("a worker out of quota continues on the tier's fallback from its branch, and later workers skip the provider", async (t) => {
+/** The Lead on ChatGPT, with another provider's model available. */
+const codexAndGo: DelegateIO = {
+  ...io,
+  lead: { provider: "openai-codex", id: "gpt-6-sol" },
+  available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
+};
+
+test("a worker out of quota is reported blocked with its branch, never sent to a paid balance, and its provider shows as exhausted", async (t) => {
+  const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [chatgptLimit] });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Export", task: "t" }, codexAndGo);
+  const outcome = await pending;
+  assert.equal(outcome.status, "blocked");
+  assert.ok(progress.includes(`"Export": openai-codex/gpt-6-sol ran out of quota`));
+  assert.equal(outcome.details.quota?.retryAfterMinutes, 90);
+  const branch = delegator.list()[0]!.branch!;
+  assert.match(outcome.text, new RegExp(`^Branch: ${branch}$`, "m"));
+  assert.match(outcome.text, /quota of openai-codex is exhausted \(back around \d\d:\d\d\); nothing was charged to a paid balance/);
+  assert.match(
+    outcome.text,
+    new RegExp(`Delegate this ticket again now, without asking the user: the same kind, title and task, \`startFrom\` ${branch}, and a \`model\` of another provider that is available; it continues this branch and its PR\\.`),
+  );
+  assert.doesNotMatch(outcome.text, /continue only if they agree|The worker waits in its tab/, "nothing to ask the user first");
+  assert.equal(log.filter((line) => line.startsWith("open")).length, 1, "nothing starts on its own");
+  assert.equal(delegator.list()[0]!.state, "waiting");
+
+  assert.match(delegator.models(codexAndGo), /^openai-codex\/gpt-6-sol \(yours, quota exhausted until ~\d\d:\d\d\), opencode-go\/glm-5\.3$/);
+  const refused = await delegator.start({ kind: "implement", title: "Import", task: "t" }, codexAndGo);
+  assert.equal(refused.status, "failed");
+  assert.match(refused.text, /the quota of openai-codex is exhausted until ~\d\d:\d\d\. Available: .*opencode-go\/glm-5\.3/, "the Lead's own model too, until it is back");
+});
+
+test("a delegation from the out-of-quota worker's branch continues its ticket on the chosen model: branch, PR and base carry over", async (t) => {
+  const checked: string[] = [];
   const seen: Seen = {};
   const { delegator, log, nextOutcome } = await setup(t, {
     replies: [chatgptLimit, { status: "done" }],
     herdrOptions: { sharedTurns: true },
     seen,
-    config: {
-      tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high", fallbacks: [{ model: "opencode-go/glm-5.3" }] } },
-    },
-  });
-  const both: DelegateIO = {
-    ...io,
-    lead: { provider: "openai-codex", id: "gpt-6-sol" },
-    available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
-  };
-  const pending = nextOutcome();
-  const started = await delegator.start({ kind: "prototype", title: "Export", task: "t" }, both);
-  assert.match(started.text, /to openai-codex\/gpt-6-sol \(thinking high/);
-  const outcome = await pending;
-
-  assert.equal(outcome.status, "done", "only the final result is reported");
-  const first = log.find((line) => line.startsWith("create "))!.slice("create ".length);
-  assert.ok(log.includes(`create ${first}-2`), "the second attempt starts from the first one's branch");
-  assert.match(outcome.text, /opencode-go\/glm-5\.3 · thinking high · tier standard/);
-  assert.match(outcome.text, new RegExp(`Note: openai-codex/gpt-6-sol ran out of quota; continued on opencode-go/glm-5\\.3 from ${first}`));
-  assert.match(seen.script!, /'--model' 'opencode-go\/glm-5\.3'/);
-  assert.match(seen.script!, /ran out of model quota on this task/);
-  assert.deepEqual(lifecycle(log), ["open ○ Export", "close tab-1", "remove dir", "open ○ Export", "close tab-2", "remove dir"]);
-
-  const next = await delegator.start({ kind: "prototype", title: "Import", task: "t" }, both);
-  assert.match(next.text, /to opencode-go\/glm-5\.3/);
-  assert.match(delegator.list()[1]!.route.note!, /quota exhausted: openai-codex until ~\d\d:\d\d/);
-});
-
-test("a rerouted worker's PR check still targets the first remote branch", async (t) => {
-  const checked: string[] = [];
-  const { delegator, log, nextOutcome } = await setup(t, {
-    replies: [chatgptLimit, { status: "done" }],
-    herdrOptions: { sharedTurns: true },
-    // "debug" defaults to the "standard" tier: give it the two-model fallback.
-    config: {
-      tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high", fallbacks: [{ model: "opencode-go/glm-5.3" }] } },
-    },
     workspace: {
       ...fakeWorkspace([]),
       prChecks: async ({ branch }) => {
@@ -1262,45 +1216,28 @@ test("a rerouted worker's PR check still targets the first remote branch", async
       },
     },
   });
-  const both: DelegateIO = {
-    ...io,
-    lead: { provider: "openai-codex", id: "gpt-6-sol" },
-    available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
-  };
-  const pending = nextOutcome();
-  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, both);
+  let pending = nextOutcome();
+  await delegator.start({ kind: "debug", title: "Fix", task: "t" }, codexAndGo);
+  assert.equal((await pending).status, "blocked");
+  const [previous] = delegator.list();
+  const firstBranch = previous!.branch!;
+
+  pending = nextOutcome();
+  const started = await delegator.start({ kind: "debug", title: "Fix", task: "t", startFrom: firstBranch, model: "opencode-go/glm-5.3", thinking: "high" }, codexAndGo);
+  assert.equal(started.status, "started");
+  assert.match(started.text, new RegExp(`It continues "Fix" \\[${previous!.id.slice(0, 8)}\\] from ${firstBranch}, which ran out of quota`));
   const outcome = await pending;
   assert.equal(outcome.status, "done");
-  const firstBranch = log.find((line) => line.startsWith("create "))!.slice("create ".length);
-  assert.ok(log.includes(`create ${firstBranch}-2`), "the reroute relaunched on a new local branch");
-  assert.deepEqual(checked, [firstBranch], "the check reused the original remote branch, not the reroute's");
-  assert.ok(log.includes(`start ${firstBranch}-2 at sha-of-${firstBranch}`), "the reroute's worktree starts from the previous attempt's branch, not the ticket base");
+  assert.ok(log.includes("close tab-1"), "the out-of-quota worker's tab is closed");
+  assert.equal(delegator.list().find((w) => w.id === previous!.id)!.state, "stopped", "it no longer waits on the user");
+  const second = delegator.list().find((w) => w.id !== previous!.id)!;
+  assert.ok(log.includes(`start ${second.branch} at sha-of-${firstBranch}`), "its worktree starts from the previous worker's branch, not the ticket base");
+  assert.deepEqual(checked, [firstBranch], "it pushes onto the first worker's remote branch, so the same PR");
   assert.match(outcome.text, /^Base: abc123$/m, "the report still covers everything since the ticket base");
   assert.match(outcome.text, new RegExp(`PR: https://example\\.test/pr/${firstBranch}$`, "m"));
-});
-
-test("without another model a worker out of quota is reported blocked, never sent to a paid balance", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, {
-    replies: [chatgptLimit],
-    config: { tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high" } } },
-  });
-  const codexOnly: DelegateIO = {
-    ...io,
-    lead: { provider: "openai-codex", id: "gpt-6-sol" },
-    available: [{ provider: "openai-codex", id: "gpt-6-sol" }],
-  };
-  const pending = nextOutcome();
-  await delegator.start({ kind: "prototype", title: "Export", task: "t" }, codexOnly);
-  const outcome = await pending;
-  assert.equal(outcome.status, "blocked");
-  assert.equal(outcome.details.quota?.retryAfterMinutes, 90);
-  assert.match(outcome.text, /quota of openai-codex is exhausted \(back around \d\d:\d\d\).*nothing was charged to a paid balance/);
-  assert.equal(log.filter((line) => line.startsWith("open")).length, 1, "no second attempt");
-  assert.equal(delegator.list()[0]!.state, "waiting", "the tab stays open to resume once the quota is back");
-
-  const refused = await delegator.start({ kind: "prototype", title: "Import", task: "t" }, codexOnly);
-  assert.equal(refused.status, "failed");
-  assert.match(refused.text, /No worker model: .*\(quota exhausted: openai-codex until ~\d\d:\d\d\)/);
+  assert.match(seen.script!, /'--model' 'opencode-go\/glm-5\.3' '--thinking' 'high'/);
+  assert.match(seen.script!, /ran out of model quota on this task/);
+  assert.match(seen.script!, /gh pr create --draft --base main /, "the PR still targets the ticket's base branch");
 });
 
 test("a provider error that is not about quota is reported instead of leaving the worker hanging", async (t) => {
@@ -1316,36 +1253,31 @@ test("a provider error that is not about quota is reported instead of leaving th
   assert.equal(outcome.details.quota, undefined);
 });
 
-test("a worker out of quota with uncommitted changes stays put instead of moving to the fallback", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, {
-    replies: [{ ...chatgptLimit, uncommitted: true }],
-    config: {
-      tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high", fallbacks: [{ model: "opencode-go/glm-5.3" }] } },
-    },
-  });
-  const both: DelegateIO = {
-    ...io,
-    available: [{ provider: "openai-codex", id: "gpt-6-sol" }, { provider: "opencode-go", id: "glm-5.3" }],
-  };
+test("a worker out of quota with uncommitted changes stays put: the user hears of it", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, { replies: [{ ...chatgptLimit, uncommitted: true }] });
   const pending = nextOutcome();
-  await delegator.start({ kind: "prototype", title: "Export", task: "t" }, both);
+  await delegator.start({ kind: "prototype", title: "Export", task: "t" }, codexAndGo);
   const outcome = await pending;
   assert.equal(outcome.status, "blocked");
-  assert.match(outcome.text, /uncommitted changes, so it was not moved to another model/);
+  assert.match(outcome.text, /uncommitted changes in its worktree, so no other model can continue it: tell the user/);
+  assert.doesNotMatch(outcome.text, /Delegate this ticket again now/);
   assert.equal(log.filter((line) => line.startsWith("open")).length, 1);
   assert.ok(!log.includes("remove dir"), "the worktree with the changes is kept");
 });
 
-test("with keepFailedWorkers off, a blocked quota report says to delegate again from the branch", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, {
-    replies: [chatgptLimit],
-    config: { keepFailedWorkers: false, tiers: { standard: { model: "openai-codex/gpt-6-sol", thinking: "high" } } },
-  });
-  const pending = nextOutcome();
-  await delegator.start({ kind: "implement", title: "Export", task: "t" }, { ...io, lead: undefined, available: [{ provider: "openai-codex", id: "gpt-6-sol" }] });
+test("with keepFailedWorkers off, an out-of-quota worker's branch still continues on another model", async (t) => {
+  const { delegator, log, nextOutcome } = await setup(t, { replies: [chatgptLimit, { status: "done" }], herdrOptions: { sharedTurns: true }, config: { keepFailedWorkers: false } });
+  let pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "Export", task: "t" }, codexAndGo);
   const outcome = await pending;
   assert.match(outcome.text, /once the quota is back, delegate again, starting from branch pi-lead\/export-/);
   assert.doesNotMatch(outcome.text, /relay a message/);
+  const branch = delegator.list()[0]!.branch!;
+  pending = nextOutcome();
+  const started = await delegator.start({ kind: "implement", title: "Export", task: "t", startFrom: branch, model: "opencode-go/glm-5.3" }, codexAndGo);
+  assert.match(started.text, /It continues "Export"/);
+  assert.equal((await pending).status, "done");
+  assert.ok(log.some((line) => line.endsWith(`at sha-of-${branch}`)));
 });
 
 test("an implement delegation starts exactly one worker, on the implement route, with no scout phase", async (t) => {
@@ -1366,14 +1298,6 @@ test("an implement delegation starts exactly one worker, on the implement route,
   assert.equal(log.filter((line) => line.startsWith("open")).length, 1, "one worktree, one tab");
   assert.ok(!progress.some((line) => /scout/i.test(line)));
   assert.doesNotMatch(outcome.text, /scout/i);
-});
-
-test("a trivial implement ticket runs on the fast tier: no scout floor", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, { judge: { modelTier: async () => ({ tier: "fast", difficulty: 0.4 }) } });
-  const pending = nextOutcome();
-  const started = await delegator.start({ kind: "implement", title: "Typo", task: "t" }, io);
-  assert.match(started.text, /tier fast/);
-  await pending;
 });
 
 test("an implement worker may change any file: done is never capped for scope", async (t) => {
@@ -1566,18 +1490,6 @@ test("a partial, blocked or needs_human the worker reported itself reaches the L
   }
 });
 
-test("a partial Jev judged, not the host, reaches the Lead at once", async (t) => {
-  const { delegator, log, nextOutcome } = await setup(t, {
-    judge: { verdict: async () => "partial" },
-    replies: [{ status: "done" }],
-    workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state: "fail" as const, failed: [] }) },
-  });
-  const pending = nextOutcome();
-  await delegator.start({ kind: "implement", title: "x", task: "t" }, io);
-  assert.equal((await pending).status, "partial");
-  assert.ok(!log.some((line) => line.startsWith("send ")));
-});
-
 test("green checks on a PR head other than the worker's branch head count as pending", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
     workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "0ld0ld", state: "pass" as const, failed: [] }) },
@@ -1590,28 +1502,6 @@ test("green checks on a PR head other than the worker's branch head count as pen
   const sent = log.filter((line) => line.startsWith("send "));
   assert.equal(sent.length, 1);
   assert.match(sent[0]!, /PR head is 0ld0ld, not your branch head def456/);
-});
-
-test("no Jev verdict call once the host proved the work: a PR with CI green on the head (or no checks)", async (t) => {
-  const cases = [
-    { kind: "implement" as const, state: "pass" as const, asked: 0 },
-    { kind: "research" as const, state: "none" as const, asked: 0 },
-    // Not proven: CI red (asked again after the send-back), or no PR at all.
-    { kind: "implement" as const, state: "fail" as const, asked: 2 },
-    { kind: "prototype" as const, state: "pass" as const, asked: 1 },
-  ];
-  for (const { kind, state, asked } of cases) {
-    let calls = 0;
-    const { delegator, nextOutcome } = await setup(t, {
-      judge: { verdict: async () => (calls += 1, undefined) },
-      replies: [{ status: "done" }, { status: "done" }],
-      workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state, failed: [] }) },
-    });
-    const pending = nextOutcome();
-    await delegator.start({ kind, title: "x", task: "t" }, io);
-    await pending;
-    assert.equal(calls, asked, `${kind}, CI ${state}`);
-  }
 });
 
 /** gh calls and tab closes, with each worker PR's URL shortened to its title slug. */

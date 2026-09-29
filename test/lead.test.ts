@@ -65,11 +65,13 @@ test("in a Pi that PI Lead started, the Lead extension registers nothing", (t) =
   assert.deepEqual(renderers, []);
 });
 
-test("without the marker the Lead registers its tools and handlers, and no /jev command", () => {
+test("without the marker the Lead registers its tools and handlers, and no Jev command or renderer", () => {
   const pi = fakePi();
   lead(pi.api as any);
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker", "merge"]);
-  assert.deepEqual(pi.commands, [], "Jev's decisions are transcript lines; there is no spend to report");
+  assert.deepEqual(pi.commands, []);
+  // A `pi-lead-jev` entry stored by an older version has no renderer, so Pi shows nothing for it.
+  assert.deepEqual([...pi.renderers.keys()].sort(), ["message:pi-lead-worker", "pi-lead-progress"]);
   assert.deepEqual([...pi.handlers.keys()].sort(), ["before_agent_start", "resources_discover", "session_shutdown", "session_start"]);
 });
 
@@ -80,15 +82,18 @@ test("the worker tool takes no scope widening: list, message or stop only", () =
   assert.deepEqual(Object.keys(worker.parameters.properties).sort(), ["action", "id", "message"]);
 });
 
-test("delegate has no readiness override", () => {
+test("delegate takes the worker's kind, model and thinking level, and no readiness override", () => {
   const pi = fakePi();
   lead(pi.api as any);
   const delegate = pi.tools.find((tool) => tool.name === "delegate")!;
-  assert.deepEqual(Object.keys(delegate.parameters.properties).sort(), ["kind", "startFrom", "task", "title"]);
+  assert.deepEqual(Object.keys(delegate.parameters.properties).sort(), ["kind", "model", "startFrom", "task", "thinking", "title"]);
+  assert.deepEqual(delegate.parameters.properties.thinking.enum, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  assert.doesNotMatch(delegate.description, /Jev/);
   // Said once, where Pi lists the tool's rules, not again in the workflow guidance.
   const rules = delegate.promptGuidelines.join("\n");
   assert.match(rules, /Pass the complete ticket or request in `task`; the worker does not see this conversation/);
   assert.match(rules, /delegate does not wait: keep talking with the user/);
+  assert.match(rules, /cheaper, faster model and low thinking for mechanical or single-module work; the strongest model and high thinking for cross-cutting, subtle or debugging work; otherwise omit both to use your own/);
   assert.doesNotMatch(leadGuidance("/skills"), /does not see this conversation|does not wait/);
 });
 
@@ -106,18 +111,29 @@ test("worker reports render as a card, and fall back to Pi's plain view without 
   assert.equal(render({ content: "old", details: { status: "done" } }, { expanded: false, outputPad: 1 }, theme), undefined);
 });
 
-test("Jev decisions render as dim transcript lines, old ones included", () => {
+test("each prompt lists the models a worker may run on, the Lead's own first, as a delegate guideline", async () => {
   const pi = fakePi();
   lead(pi.api as any);
-  const render = pi.renderers.get("pi-lead-jev");
-  const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` };
-  const entry = { data: { kind: "overlap", outcome: "unsure → waits", applied: "fallback", at: 0 } };
-  assert.deepEqual(render(entry, { expanded: false }, theme).render(80), ["<dim>◇ jev · overlap unsure → waits</dim>"]);
-  const legacy = { data: { ...entry.data, threshold: "overlaps at p ≥ 0.5", usd: 0.00005, ms: 412 } };
-  assert.deepEqual(render(legacy, { expanded: true }, theme).render(80), ["<dim>◇ jev · overlap unsure → waits</dim>"], "an entry from an older version still renders, as one line");
-  const overBudget = { data: { kind: "tier", outcome: "over budget → standard", applied: "fallback", at: 0 } };
-  assert.deepEqual(render(overBudget, { expanded: false }, theme).render(80), ["<dim>◇ jev · tier over budget → standard</dim>"], "a budget fallback from an older version still renders as stored");
-  assert.equal(render({ data: { junk: true } }, { expanded: false }, theme), undefined);
+  const [handler] = pi.handlers.get("before_agent_start")!;
+  const model = (provider: string, id: string) => ({ provider, id });
+  const ctx = {
+    cwd: "/repo",
+    model: model("anthropic", "claude-sonnet-5"),
+    thinkingLevel: "high",
+    scopedModels: [],
+    modelRegistry: { getAvailable: () => [model("openai-codex", "gpt-6-luna"), model("anthropic", "claude-sonnet-5"), model("opencode-go", "glm-5.3")] },
+    isProjectTrusted: () => true,
+  };
+  const options = { sections: {}, toolGuidelines: { delegate: ["static rule"], other: ["kept"] } };
+  await handler!({ systemPromptOptions: options }, ctx);
+  assert.deepEqual(options.toolGuidelines.delegate, ["static rule", "Worker models: anthropic/claude-sonnet-5 (yours), openai-codex/gpt-6-luna, opencode-go/glm-5.3."]);
+  assert.deepEqual(options.toolGuidelines.other, ["kept"]);
+
+  // A session scoped to a few models (--models, enabledModels) lists only those.
+  const scoped = { ...ctx, scopedModels: [{ model: model("openai-codex", "gpt-6-luna") }] };
+  const again = { sections: {}, toolGuidelines: { delegate: ["static rule"] } };
+  await handler!({ systemPromptOptions: again }, scoped);
+  assert.equal(again.toolGuidelines.delegate.at(-1), "Worker models: anthropic/claude-sonnet-5 (yours), openai-codex/gpt-6-luna.");
 });
 
 test("the workflow guidance is a system prompt section of its own", async () => {
@@ -141,6 +157,10 @@ test("the guidance routes by ask-matt's multi-session branch: the Lead implement
   assert.match(guidance, /A multi-session build: `\/to-spec`,\s+then `\/to-tickets`, then one `delegate` per ticket/);
   assert.match(guidance, /Delegate whenever the user asks/);
   assert.doesNotMatch(guidance, /Do\s+not\s+implement code changes yourself/);
+});
+
+test("the guidance continues a ticket whose worker ran out of quota at once, from its branch, on another model", () => {
+  assert.match(leadGuidance("/skills"), /ran out\s+of quota reports `blocked` with its branch: delegate the same ticket again at\s+once, without asking the user, on an available model of another provider,\s+with `startFrom` set to that branch/);
 });
 
 test("after grilling, the guidance asks one question: spec, tickets, or implement now", () => {
@@ -233,7 +253,7 @@ test("workers get the Lead's skills and trust decision, and the user's own exten
   const base = {
     taskPath: "/tmp/t/task.json",
     prompt: "/skill:implement do it",
-    route: { model: "anthropic/claude-sonnet-5", thinking: "high" as const, tier: "deep" as const },
+    route: { model: "anthropic/claude-sonnet-5", thinking: "high" as const },
     label: "lead: x",
   };
   const argv = workerCommand({ ...base, projectTrusted: true });

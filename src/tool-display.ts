@@ -20,24 +20,28 @@ export function cleanLines(text: string, maxLines = 40, lineLimit = 400): string
   return [...shown, ...(lines.length > maxLines ? [`… ${lines.length - maxLines} more lines`] : [])].join("\n");
 }
 
-/** `openai-codex/gpt-6-sol` → `gpt-6-sol`: the provider is noise once the tier is shown. */
+/** `openai-codex/gpt-6-sol` → `gpt-6-sol`: in a one-line row the provider is noise. */
 const shortModel = (model: string) => model.slice(model.indexOf("/") + 1);
 
+/** Model ids come from the Lead model's arguments, or from a list stored by an older version. */
 const routeText = (worker: WorkerInfo) =>
-  `${worker.id.slice(0, 8)} · ${worker.route.tier} · ${shortModel(worker.route.model)} (${worker.route.thinking})`;
-/** The quota or fallback note of a route, host-written but quoting model ids. */
-const routeNote = (worker: WorkerInfo, paint: Paint) => (worker.route.note ? `\n${paint("warning", `! ${safePreview(worker.route.note, 200)}`)}` : "");
+  `${worker.id.slice(0, 8)} · ${safePreview(shortModel(worker.route.model), 60)} (${safePreview(worker.route.thinking, 10)})`;
 
 export function delegateCall(
-  args: { kind?: unknown; title?: unknown; task?: unknown; startFrom?: unknown },
+  args: { kind?: unknown; title?: unknown; task?: unknown; startFrom?: unknown; model?: unknown; thinking?: unknown },
   paint: Paint,
 ): string {
+  const route = [
+    ...(typeof args.model === "string" && args.model ? [safePreview(args.model, 60)] : []),
+    ...(typeof args.thinking === "string" && args.thinking ? [`thinking ${safePreview(args.thinking, 10)}`] : []),
+  ];
   const head = [
     paint("toolTitle", "delegate "),
     paint("accent", safePreview(args.kind ?? "", 20)),
     " ",
     safePreview(args.title ?? "", 80),
     ...(typeof args.startFrom === "string" && args.startFrom ? [paint("muted", ` from ${safePreview(args.startFrom, 80)}`)] : []),
+    ...(route.length ? [paint("muted", ` on ${route.join(", ")}`)] : []),
   ].join("");
   const task = typeof args.task === "string" && args.task.trim() ? `\n${paint("dim", `└ ${safePreview(args.task.trim(), 120)}`)}` : "";
   return head + task;
@@ -54,7 +58,7 @@ export function delegateResult(details: unknown, text: string, expanded: boolean
   if (!isStartResult(details)) return paint("dim", safePreview(text, 200));
   switch (details.status) {
     case "started":
-      return `${paint("accent", "●")} started · ${routeText(details.worker)}${paint("dim", " · in a background Herdr tab")}${routeNote(details.worker, paint)}${more}`;
+      return `${paint("accent", "●")} started · ${routeText(details.worker)}${paint("dim", " · in a background Herdr tab")}${more}`;
     case "failed":
       return `${paint("error", "✗")} ${expanded ? cleanLines(text) : safePreview(text, 300)}`;
   }

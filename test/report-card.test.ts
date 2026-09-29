@@ -78,7 +78,7 @@ test("the card never hides the worker's words, never lets them pass for host lin
   assert.ok(!/[\x00-\x09\x0b-\x1f\x7f\u202e]/.test(text));
 });
 
-test("overrides, CI not checked and sensitive files stand out; an old review severity is not shown", () => {
+test("CI not checked and sensitive files stand out; an old Jev verdict or review severity is not shown", () => {
   const text = renderCard(
     {
       status: "partial",
@@ -93,7 +93,7 @@ test("overrides, CI not checked and sensitive files stand out; an old review sev
     paint,
   )!;
   assert.match(text, /^<warning>~<\/warning> <accent>implement<\/accent> · CSV export: <warning>partly done<\/warning> in 12m/);
-  assert.match(text, /<warning> {2}▲ the worker said done, Jev judged partial<\/warning>/);
+  assert.doesNotMatch(text, /Jev|▲/, "stored by an older version: no Jev line");
   assert.match(text, /<warning> {2}CI: not checked \(no PR\)<\/warning>/);
   assert.doesNotMatch(text, /severity/, "stored by an older version: Jev no longer scores reviews");
   assert.match(text, /<warning> {2}! review before merging: package\.json scripts, \.github\/workflows\/<\/warning>/);

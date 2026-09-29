@@ -25,10 +25,12 @@ as written instead:
   that finds a real gap reports `needs_human` in its own words. An up-front
   list of files and tests contradicts `/tdd`, where each cycle teaches what
   the next test is.
-- **Jev only routes tiers and checks verdicts.** No readiness, severity,
-  failure-kind or overlap judgment, and no spend budget (ADR 0002). Jev's
-  overlap guess saw only ticket text and a queued worker still started from
-  the same base, so it delayed conflicts rather than preventing them.
+- **No readiness, severity, failure-kind or overlap judgment.** An overlap
+  guess saw only ticket text and a queued worker still started from the same
+  base, so it delayed conflicts rather than preventing them. Jev, which made
+  these judgments, is removed altogether: the Lead picks each worker's model
+  and thinking level, and a worker's status is its own, capped only by host
+  evidence (ADR 0008).
 - **Sequencing is the tickets' Blocked-by edges plus a one-at-a-time merge.**
   A blocked ticket is delegated once its blockers' PRs have merged (or started
   from a blocker's branch when the user asks for stacking); every other ticket

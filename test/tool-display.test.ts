@@ -13,7 +13,7 @@ const worker = (overrides: Partial<WorkerInfo> = {}): WorkerInfo => ({
   title: "Add CSV export",
   kind: "implement",
   state: "running",
-  route: { model: "openai-codex/gpt-6-sol", thinking: "high", tier: "standard" },
+  route: { model: "openai-codex/gpt-6-sol", thinking: "high" },
   tabOpen: true,
   ...overrides,
 });
@@ -24,6 +24,10 @@ test("a delegate call shows kind, title and the start of the task", () => {
     "<toolTitle>delegate </toolTitle><accent>implement</accent> Add CSV export\n└ Add a CSV export to the reports page.⏎ Acceptance: …",
   );
   assert.equal(delegateCall({ kind: "review", title: "Review", task: "", startFrom: "feature/x" }, plain), "delegate review Review from feature/x");
+  assert.equal(
+    delegateCall({ kind: "debug", title: "Flaky login", task: "", model: "openai-codex/gpt-6-sol", thinking: "high" }, plain),
+    "delegate debug Flaky login on openai-codex/gpt-6-sol, thinking high",
+  );
   // While the model still streams the arguments, some are missing.
   assert.equal(delegateCall({}, plain), "delegate  ");
 });
@@ -37,19 +41,20 @@ test("model-written arguments cannot reach the terminal raw", () => {
   assert.match(cleanLines(Array.from({ length: 45 }, (_, i) => `l${i}`).join("\n")), /… 5 more lines$/);
 });
 
-test("a delegate result says started, with the route", () => {
+test("a delegate result says started, with the model and thinking level", () => {
   const started: StartResult = { status: "started", worker: worker(), text: "Delegated…" };
   assert.equal(
     delegateResult(started, "Delegated…", false, paint),
-    "<accent>●</accent> started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab",
+    "<accent>●</accent> started · a1b2c3d4 · gpt-6-sol (high) · in a background Herdr tab",
   );
-  assert.equal(delegateResult(started, "Delegated…", true, plain), "● started · a1b2c3d4 · standard · gpt-6-sol (high) · in a background Herdr tab\nDelegated…");
+  assert.equal(delegateResult(started, "Delegated…", true, plain), "● started · a1b2c3d4 · gpt-6-sol (high) · in a background Herdr tab\nDelegated…");
   // Jev no longer refuses tickets: a not_ready result stored by an older version shows as its text only.
   assert.equal(delegateResult({ status: "not_ready", missing: ["acceptance"] }, "Not delegated.", false, plain), "Not delegated.");
   const failed: StartResult = { status: "failed", text: "PI Lead workers need Herdr." };
   assert.equal(delegateResult(failed, failed.text, false, paint), "<error>✗</error> PI Lead workers need Herdr.");
-  const noted: StartResult = { status: "started", worker: worker({ route: { model: "a/b", thinking: "high", tier: "deep", note: "a/x ran out of quota" } }), text: "" };
-  assert.match(delegateResult(noted, "", false, plain), /\n! a\/x ran out of quota$/);
+  // A result stored by a version with tiers and route notes: neither shows.
+  const old = { status: "started", worker: worker({ route: { model: "a/b", thinking: "high", tier: "deep", note: "a/x ran out of quota" } as WorkerInfo["route"] }), text: "" };
+  assert.equal(delegateResult(old, "", false, plain), "● started · a1b2c3d4 · b (high) · in a background Herdr tab");
   assert.equal(delegateResult(failed, "line one\nline two", true, plain), "✗ line one\nline two");
   // A result stored by another version: its text only.
   assert.equal(delegateResult(undefined, "old text", false, plain), "old text");

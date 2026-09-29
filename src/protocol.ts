@@ -1,5 +1,8 @@
-import type { WorkKind, WorkerVerdict } from "./jev.ts";
 import type { QuotaError } from "./quota.ts";
+
+export type WorkKind = "implement" | "prototype" | "debug" | "review" | "research";
+/** What a worker reports in `finish`, and what the Lead hears once host evidence has capped it. */
+export type WorkerVerdict = "done" | "partial" | "blocked" | "needs_human";
 
 /**
  * Set in every Pi that PI Lead starts (`worker`, `sub-agent`); the Lead extension
