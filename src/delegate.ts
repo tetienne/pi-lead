@@ -155,10 +155,14 @@ type TabRecord = {
   worker?: AdoptableWorker;
 };
 
-/** The watcher's view of a worker, as a later Lead rebuilds it. `repo`, the main checkout, keys adoption to its repository. */
+/**
+ * The watcher's view of a worker, as a later Lead rebuilds it. `repo`, the main checkout, keys adoption to its repository;
+ * `pr` and `changedFiles` let a done worker's PR still merge through it. A record written before they were is read without them.
+ */
 const ADOPTED = [
   "id", "title", "kind", "state", "verdict", "branch", "route", "params", "difficulty", "repoRoot", "repo", "base", "originBase",
   "baseBranch", "remoteBranch", "handledSeq", "attempts", "delegatedAt", "runningSince", "resumed", "reroutes", "sentBack",
+  "pr", "changedFiles",
 ] as const satisfies readonly (keyof Worker)[];
 type AdoptableWorker = Pick<Worker, (typeof ADOPTED)[number]>;
 
@@ -171,8 +175,11 @@ async function replaceRecord(dir: string, record: unknown): Promise<void> {
   await rename(aside, join(dir, RECORD));
 }
 
-/** States whose Pi a later Lead can keep watching. */
+/** States whose Pi a later Lead can keep watching; a done worker too while its PR awaits merge (see `adoptableState`). */
 const ADOPTABLE: readonly WorkerState[] = ["starting", "running", "waiting"];
+
+/** A done worker with an open PR keeps its tab for a merge-time conflict or red CI; one without (an older record) does not. */
+const adoptableState = (worker: AdoptableWorker) => ADOPTABLE.includes(worker.state) || (worker.state === "done" && worker.pr !== undefined);
 
 /** Model changes a single task may go through on quota errors. */
 const MAX_REROUTES = 3;
@@ -1020,7 +1027,7 @@ export function createDelegator(deps: DelegateDeps) {
 
   /** A dead Lead's worker whose Pi still runs: run.sh has not recorded its exit, and Herdr still sees the agent. */
   const piRuns = async (dir: string, record: TabRecord) => {
-    if (!record.paneId || record.failed || !record.worker || !ADOPTABLE.includes(record.worker.state)) return false;
+    if (!record.paneId || record.failed || !record.worker || !adoptableState(record.worker)) return false;
     if ((await readIfPresent(join(dir, "exit")).catch(() => "unreadable"))?.trim()) return false;
     return (await deps.herdr?.hasAgent(record.paneId).catch(() => false)) ?? false;
   };
@@ -1060,7 +1067,7 @@ export function createDelegator(deps: DelegateDeps) {
     workers.set(worker.id, worker);
     void writeRecord(worker);
     describe(worker);
-    progress(`adopted "${worker.title}" from an earlier Lead (${worker.state})`);
+    progress(`adopted "${worker.title}" from an earlier Lead (${worker.state}${awaitsMerge(worker) ? ", its PR awaits merge" : ""})`);
     void watch(worker).catch(() => undefined);
   };
 

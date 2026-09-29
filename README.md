@@ -102,7 +102,7 @@ you ─► Lead (Pi, your tab)
   conflict or red CI after the update goes back to that PR's worker, which
   reports again once it is fixed; the run stops there, and the Lead hears
   which PRs merged and which were not attempted. A PR whose worker is gone
-  (stopped, or from before a restart) is reported to you instead. A merge
+  (stopped, or its Pi ended before a restart) is reported to you instead. A merge
   that a merge queue or auto-merge accepts without merging yet also stops
   the run.
 - A **worker** is an interactive Pi session in its own Herdr worktree
@@ -144,10 +144,12 @@ you ─► Lead (Pi, your tab)
   running, and the next Lead you start in the same repository adopts every
   one whose pane still runs its Pi: it shows in `worker list`, you can
   message or stop it, and its result arrives as usual, including a `finish`
-  it made while no Lead was running. Workers whose Pi is gone are removed,
-  branch kept, and so are done workers waiting for their merge: their PRs
-  still merge by number or URL, with any problem reported to you. A Lead
-  never adopts the workers of another Lead that is still running.
+  it made while no Lead was running. That includes a done worker whose PR
+  still awaits its merge: it keeps its workspace, a conflict or red CI at
+  merge time goes back to it, and its workspace closes once the PR merges.
+  Workers whose Pi is gone are removed, branch kept; their PRs still merge
+  by number or URL, with any problem reported to you. A Lead never adopts
+  the workers of another Lead that is still running.
 - **Tickets are sequenced by their Blocked-by edges.** Every worker starts
   at once; the Lead delegates a blocked ticket only once its blockers' PRs are
   merged, or starts it from a blocker's branch (`startFrom`) when you ask for
