@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.8.0](https://github.com/tetienne/pi-lead/compare/v0.7.0...v0.8.0) (2026-09-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* the delegate tool loses confirmedReady and the worker tool loses allowFiles; git_read and /jev are removed; the leadGuard, verify, verifyTimeoutMinutes, waitingTimeoutMinutes, jev.dailyBudgetUsd and jev.inputUsdPerMillion settings are gone (old keys are ignored); workers load the user's global extensions and no longer get web_search from PI Lead.
+* let workers own CI and drop the worker cap ([#44](https://github.com/tetienne/pi-lead/issues/44))
+* run workers on the host in Herdr worktrees ([#40](https://github.com/tetienne/pi-lead/issues/40))
+
+### Features
+
+* a fluid workflow without sandbox-era fences ([#50](https://github.com/tetienne/pi-lead/issues/50)) ([d85c99d](https://github.com/tetienne/pi-lead/commit/d85c99d42a3690cde64b8cb8db8815a75532d00c))
+* adopt workers whose PR awaits merge after a restart ([#53](https://github.com/tetienne/pi-lead/issues/53)) ([7255d1a](https://github.com/tetienne/pi-lead/commit/7255d1a827ecdcf59350483bf420667d2e2476da))
+* apply review fixes without asking ([#47](https://github.com/tetienne/pi-lead/issues/47)) ([a4702ac](https://github.com/tetienne/pi-lead/commit/a4702acc83097e6c83d7768f1fe69828abd31160))
+* let workers own CI and drop the worker cap ([#44](https://github.com/tetienne/pi-lead/issues/44)) ([0efff69](https://github.com/tetienne/pi-lead/commit/0efff6952d56555ff99a9ff0a26ccf6c7434b313))
+* make worker sidecar services available on main ([#39](https://github.com/tetienne/pi-lead/issues/39)) ([7ff298f](https://github.com/tetienne/pi-lead/commit/7ff298fc98805d1d01705caee7e563789419c4ef))
+* offer architecture review after a spec ([#41](https://github.com/tetienne/pi-lead/issues/41)) ([b94e8ca](https://github.com/tetienne/pi-lead/commit/b94e8caee2aa829db9e1272737c84acabfa25bf7))
+* run workers on the host in Herdr worktrees ([#40](https://github.com/tetienne/pi-lead/issues/40)) ([8889991](https://github.com/tetienne/pi-lead/commit/888999145199fc09fe753ca9e6aa2db6c0fb99fd))
+* scout tickets, open draft PRs, wait for CI ([#42](https://github.com/tetienne/pi-lead/issues/42)) ([fcae026](https://github.com/tetienne/pi-lead/commit/fcae0262e671f5aec93e324008ff504d74d9e265))
+
+
+### Bug Fixes
+
+* **ci:** drop the release job for the removed worker image ([#52](https://github.com/tetienne/pi-lead/issues/52)) ([57e87e1](https://github.com/tetienne/pi-lead/commit/57e87e182fba77ff981749d63c9cec399f7e09be))
+* create workers from the main checkout and fail vanished tabs ([#48](https://github.com/tetienne/pi-lead/issues/48)) ([623c862](https://github.com/tetienne/pi-lead/commit/623c862a52f4580eaf0ffc6f2fa9cc468cf18a17))
+* keep skill mounts under kernel cmdline limit ([#35](https://github.com/tetienne/pi-lead/issues/35)) ([be664d7](https://github.com/tetienne/pi-lead/commit/be664d7c6f0be36576460d6bcb8be8dc406c7833))
+* let the lead widen a scout brief ([#45](https://github.com/tetienne/pi-lead/issues/45)) ([c0c0e68](https://github.com/tetienne/pi-lead/commit/c0c0e68e161cac07e7e933ccfa96c0e9ba1437b5))
+* let worker git use its clone and stop extra worktrees ([#37](https://github.com/tetienne/pi-lead/issues/37)) ([106ebf0](https://github.com/tetienne/pi-lead/commit/106ebf071dfb1f455f347a5b3b781bd3a6ad9b38))
+
 ## [0.7.0](https://github.com/tetienne/pi-lead/compare/v0.6.1...v0.7.0) (2026-09-24)
 
 
