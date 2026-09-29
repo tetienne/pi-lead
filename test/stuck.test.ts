@@ -6,7 +6,7 @@ import { createStuckDetector, normalizeCommand, steerMessage } from "../src/work
 function detector() {
   const steered: string[] = [];
   const stuck = createStuckDetector({ steer: (text) => void steered.push(text) });
-  const run = (command: string, exitCode = 1) => stuck.record(command, exitCode);
+  const run = (command: string, failed = true) => stuck.record(command, failed);
   return { stuck, run, steered };
 }
 
@@ -34,9 +34,9 @@ test("a success of the command resets its count; other commands in between do no
   const { run, steered } = detector();
   run("npm test");
   run("npm test");
-  run("npm test", 0);
+  run("npm test", false);
   run("npm test");
-  run("cat src/a.ts", 0);
+  run("cat src/a.ts", false);
   run("npm test");
   assert.deepEqual(steered, []);
   run("npm test");
@@ -67,7 +67,7 @@ test("a test-first loop (edit, tests fail, edit, tests fail) is never flagged", 
     stuck.progress();
     run("npm test");
   }
-  run("npm test", 0);
+  run("npm test", false);
   assert.deepEqual(steered, []);
 });
 
@@ -81,7 +81,7 @@ test("six failures in a row with no file change steer, whatever the commands", (
 
   const broken = detector();
   for (const command of ["a", "b", "c"]) broken.run(command);
-  broken.run("ls", 0);
+  broken.run("ls", false);
   for (const command of ["d", "e", "f", "g", "h"]) broken.run(command);
   assert.deepEqual(broken.steered, [], "a success breaks the streak");
 });

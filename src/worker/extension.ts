@@ -69,7 +69,7 @@ export default function worker(pi: ExtensionAPI) {
   // failing shell command counts against the streak, a file change clears it.
   pi.on("tool_result", async (event) => {
     if (isBashToolResult(event) && typeof event.input.command === "string") {
-      if (task && task.stuckDetection !== false) stuck.record(event.input.command, event.isError ? 1 : 0);
+      if (task && task.stuckDetection !== false) stuck.record(event.input.command, event.isError);
     } else if ((isWriteToolResult(event) || isEditToolResult(event)) && !event.isError) {
       stuck.progress();
     }

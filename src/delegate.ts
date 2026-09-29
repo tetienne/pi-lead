@@ -21,7 +21,7 @@ import {
 import { providerOf, quotaPauseMinutes } from "./quota.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
-import { mergeOne, type MergeTarget } from "./merge.ts";
+import { mergeOne, type MergeStep, type MergeTarget } from "./merge.ts";
 import { checkList, type MergeMethod, type Workspace } from "./workspace.ts";
 
 export type DelegateParams = {
@@ -951,11 +951,11 @@ export function createDelegator(deps: DelegateDeps) {
         stopped = { target, text: `Worker "${worker.title}" is ${worker.state}; merge its PR once it reports done again.` };
         break;
       }
-      let step;
+      let step: MergeStep;
       try {
         step = await mergeOne(target, { workspace: deps.workspace, ...(method ? { method } : {}), graceMs, sleep: (ms) => sleep(ms) });
       } catch (error) {
-        step = { merged: false as const, text: `Merging ${target.ref} failed: ${errorText(error)}` };
+        step = { merged: false, text: `Merging ${target.ref} failed: ${errorText(error)}` };
       }
       if (!step.merged) {
         stopped = { target, text: step.text };

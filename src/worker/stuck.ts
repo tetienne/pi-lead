@@ -42,8 +42,8 @@ export function steerMessage(trigger: StuckTrigger): string {
 }
 
 export type StuckDetector = {
-  /** Record one shell command and its exit code. */
-  record(command: string, exitCode: number): void;
+  /** Record one shell command and whether it failed. */
+  record(command: string, failed: boolean): void;
   /** A file was written or edited: the failures so far were not a loop. */
   progress(): void;
   /** A new prompt (from the Lead or the user), or a reported result, starts a new cycle. */
@@ -61,9 +61,9 @@ export function createStuckDetector(options: { steer: (text: string) => void }):
   };
 
   return {
-    record(command, exitCode) {
+    record(command, failed) {
       const key = normalizeCommand(command);
-      if (exitCode === 0) {
+      if (!failed) {
         failures.delete(key);
         streak = 0;
         return;

@@ -48,7 +48,7 @@ export async function mergeOne(target: MergeTarget, deps: MergeDeps): Promise<Me
   const problem = async (what: string, instructions: string, evidence = ""): Promise<MergeStep> => {
     if (!target.sendBack) return stop(`${what}. No worker is open for it: tell the user.`);
     const unsent = await target.sendBack(`${what}${evidence}. ${instructions}`);
-    if (unsent === undefined) return { merged: false, text: `${what}; sent back to its worker, which reports again once it is fixed.` };
+    if (unsent === undefined) return stop(`${what}; sent back to its worker, which reports again once it is fixed.`);
     return stop(`${what}. ${unsent} Tell the user.`);
   };
 
