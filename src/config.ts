@@ -2,31 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-export type Tier = "fast" | "standard" | "deep";
-
-export type TierRoute = {
-  /** `provider/model-id`. Omitted means "the model the Lead is using". */
-  model?: string;
-  thinking: ThinkingLevel;
-  /**
-   * Tried in order when `model` is not available (no auth for its provider, or
-   * missing from the installed Pi catalog). `thinking` defaults to the tier's.
-   */
-  fallbacks?: { model: string; thinking?: ThinkingLevel }[];
-};
-
 export type LeadConfig = {
-  tiers: Record<Tier, TierRoute>;
-  jev: {
-    /** Environment variable holding a TypeSafe or OpenRouter key. */
-    apiKeyEnv: string;
-    /** `openrouter` routes through OpenRouter's System One endpoint. */
-    via: "typesafe" | "openrouter";
-    model: string;
-    /** Below this confidence a judgment is treated as "don't know". */
-    minConfidence: number;
-  };
   /** Keep the Herdr worktree workspace of a worker that did not finish cleanly. */
   keepFailedWorkers: boolean;
   /**
@@ -37,48 +13,18 @@ export type LeadConfig = {
 };
 
 export const DEFAULT_CONFIG: LeadConfig = {
-  tiers: {
-    fast: { thinking: "low" },
-    standard: { thinking: "medium" },
-    deep: { thinking: "high" },
-  },
-  jev: {
-    apiKeyEnv: "PI_LEAD_JEV_API_KEY",
-    via: "openrouter",
-    model: "jev-1.13",
-    minConfidence: 0.7,
-  },
   keepFailedWorkers: true,
   stuckDetection: true,
 };
 
-type PartialConfig = {
-  tiers?: Partial<Record<Tier, Partial<TierRoute>>>;
-  jev?: Partial<LeadConfig["jev"]>;
-  keepFailedWorkers?: boolean;
-  stuckDetection?: boolean;
-};
+type PartialConfig = Partial<LeadConfig>;
 
-const JEV_KEYS = ["apiKeyEnv", "via", "model", "minConfidence"] as const satisfies readonly (keyof LeadConfig["jev"])[];
-
-/** Known keys only: any other (such as a removed setting) is dropped without a notice. */
-function mergeJev(base: LeadConfig["jev"], override: Partial<LeadConfig["jev"]> | undefined): LeadConfig["jev"] {
-  const jev = { ...base };
-  for (const key of JEV_KEYS) {
-    if (override?.[key] !== undefined) (jev as Record<string, unknown>)[key] = override[key];
-  }
-  return jev;
-}
-
-/** Known keys only: any other (such as a removed setting) is dropped without a notice. A flag that is not a boolean keeps its default. */
+/**
+ * Known keys only: any other (such as a removed setting: `tiers`, `jev`) is dropped without a
+ * notice. A flag that is not a boolean keeps its default.
+ */
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
-  const tiers = { ...base.tiers };
-  for (const tier of Object.keys(tiers) as Tier[]) {
-    tiers[tier] = { ...tiers[tier], ...override.tiers?.[tier] };
-  }
   return {
-    tiers,
-    jev: mergeJev(base.jev, override.jev),
     keepFailedWorkers: typeof override.keepFailedWorkers === "boolean" ? override.keepFailedWorkers : base.keepFailedWorkers,
     stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
   };

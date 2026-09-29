@@ -16,9 +16,8 @@ input.
 Delegation does not block: `delegate` returns once the worker is queued, and
 each result arrives later as a message that wakes the Lead, so the Lead keeps
 talking with the user while workers run. The worker's `finish` result, not
-Herdr's view of the pane, decides when a worker is done. Jev answers only the
-closed questions code cannot (the difficulty that picks a model tier, and a
-check of the worker's verdict), within the policy of ADR 0002.
+Herdr's view of the pane, decides when a worker is done. The Lead also
+chooses each worker's model and thinking level (ADR 0008).
 
 ## Consequences
 

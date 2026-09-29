@@ -37,12 +37,14 @@ test("an old maxWorkers, leadGuard or waitingTimeoutMinutes key in a user file i
   assert.equal((config as { waitingTimeoutMinutes?: number }).waitingTimeoutMinutes, undefined);
 });
 
-test("old Jev budget keys in a user file are ignored, no error and no notice", async () => {
-  const { agentDir, cwd } = await dirs({ jev: { dailyBudgetUsd: 0.5, inputUsdPerMillion: 2, model: "jev-2" } }, { jev: { dailyBudgetUsd: 3 } });
+test("old jev and tiers blocks in either file are ignored, no error and no notice", async () => {
+  const { agentDir, cwd } = await dirs(
+    { jev: { via: "openrouter", model: "jev-2", dailyBudgetUsd: 0.5 }, tiers: { deep: { model: "openai-codex/gpt-6-astra", thinking: "xhigh" } } },
+    { jev: { minConfidence: 0.5 }, tiers: { fast: { thinking: "low" } }, stuckDetection: false },
+  );
   const { config, ignored } = await loadConfig(cwd, { projectTrusted: true, agentDir });
   assert.deepEqual(ignored, []);
-  assert.equal(config.jev.model, "jev-2");
-  assert.deepEqual(Object.keys(config.jev).sort(), ["apiKeyEnv", "minConfidence", "model", "via"]);
+  assert.deepEqual(config, { keepFailedWorkers: true, stuckDetection: false });
 });
 
 test("old verify and verifyTimeoutMinutes keys in either file are ignored, no error and no notice", async () => {

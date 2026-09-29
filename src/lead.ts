@@ -11,8 +11,7 @@ import { loadConfig } from "./config.ts";
 import { createDelegator, type DelegateIO, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
-import { createAskJev, createJudge, describeJevProblem, type JevDecision } from "./jev.ts";
-import { isDecision, JEV_ENTRY, renderDecision } from "./jev-display.ts";
+import { modelList, THINKING_LEVELS, type ThinkingLevel } from "./model-routing.ts";
 import { ROLE_ENV } from "./protocol.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
@@ -86,13 +85,36 @@ export const workerCommand: WorkerCommand = ({ taskPath, prompt, route, label, p
 
 const WORKER_ACTIONS = ["list", "message", "stop"] as const;
 
-/** What the session knows that a worker needs: the repository, the models it may use, the project's trust. */
-const sessionIO = (ctx: ExtensionContext): DelegateIO => ({
-  cwd: ctx.cwd,
-  lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-  available: ctx.modelRegistry.getAvailable().map((model) => ({ provider: model.provider, id: model.id })),
-  projectTrusted: ctx.isProjectTrusted(),
-});
+/**
+ * What the session knows that a worker needs: the repository, the Lead's own model and thinking
+ * level, the models a worker may run on, the project's trust. Those models are the ones the user
+ * scoped the session to (`--models`, `enabledModels`), else every model Pi has auth for.
+ */
+const sessionIO = (ctx: ExtensionContext, thinking: ThinkingLevel): DelegateIO => {
+  const models = ctx.scopedModels?.length ? ctx.scopedModels.map((scoped) => scoped.model) : ctx.modelRegistry.getAvailable();
+  return {
+    cwd: ctx.cwd,
+    lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+    thinking,
+    available: models.map((model) => ({ provider: model.provider, id: model.id })),
+    projectTrusted: ctx.isProjectTrusted(),
+  };
+};
+
+/** When to pick which model and thinking level: fixed; the model list beside it is generated per prompt. */
+export const MODEL_RULE =
+  "Choose each worker's `model` and `thinking`: a cheaper, faster model and low thinking for mechanical or single-module work; " +
+  "the strongest model and high thinking for cross-cutting, subtle or debugging work; otherwise omit both to use your own.";
+
+const DELEGATE_GUIDELINES = [
+  "Pass the complete ticket or request in `task`; the worker does not see this conversation.",
+  "Use kind implement for a ticket, not a vague idea; shape ideas with the user first.",
+  "delegate does not wait: keep talking with the user; worker results arrive as messages.",
+  MODEL_RULE,
+];
+
+/** Before the first session starts there is no delegator, and so no exhausted provider to mark. */
+const modelListOnly = (choice: DelegateIO) => modelList(choice, () => undefined);
 
 const paint = (theme: Theme): Paint => (color, text) => theme.fg(color, text);
 
@@ -109,8 +131,8 @@ export default function lead(pi: ExtensionAPI) {
   let closed = false;
   let hasUI = false;
 
-  /** `delegate` calls in their start phase, which share Pi's working message. */
-  let delegating = 0;
+  /** The Lead's own thinking level, which a worker gets unless `delegate` names one. */
+  const io = (ctx: ExtensionContext) => sessionIO(ctx, (ctx.thinkingLevel ?? pi.getThinkingLevel()) as ThinkingLevel);
 
   /** The footer counts live workers, in the warning colour while one waits on the user. */
   const status = () => {
@@ -126,20 +148,8 @@ export default function lead(pi: ExtensionAPI) {
     const { config, ignored } = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     // A setting dropped by the global/project rules would otherwise vanish without a trace.
     if (ctx.hasUI) for (const notice of ignored) ctx.ui.notify(notice, "warning");
-    const judge = createJudge({
-      ask: createAskJev(config.jev),
-      config: config.jev,
-      // Otherwise a wrong key or model id silently turns every judgment into a default.
-      onProblem: (message) => ui?.notify(describeJevProblem(message), "warning"),
-      onDecision(decision) {
-        if (closed) return;
-        // A custom entry, not a message: the transcript shows it, the model never sees it.
-        pi.appendEntry(JEV_ENTRY, decision);
-      },
-    });
     delegator = createDelegator({
       config,
-      judge,
       herdr: createHerdrCli(),
       workspace: gitWorkspace,
       workerCommand,
@@ -192,7 +202,7 @@ export default function lead(pi: ExtensionAPI) {
     // Adopt this repository's workers a crashed or killed Lead left running, remove the worktrees
     // of the others; in the background, never blocking the session.
     void Promise.resolve()
-      .then(() => current.reconcile(sessionIO(ctx)))
+      .then(() => current.reconcile(io(ctx)))
       .then(() => {
         if (!closed) status();
       })
@@ -206,14 +216,7 @@ export default function lead(pi: ExtensionAPI) {
     await delegator?.shutdown();
   });
 
-  pi.registerEntryRenderer<JevDecision>(JEV_ENTRY, (entry, _options, theme) => {
-    const decision = entry.data;
-    if (!isDecision(decision)) return undefined;
-    return {
-      render: (width: number) => [theme.fg("dim", renderDecision(decision, width))],
-      invalidate: () => undefined,
-    };
-  });
+  // Jev decision lines stored by older versions (`pi-lead-jev` entries) have no renderer: Pi shows nothing for them.
 
   // A card for the user; the model still reads the report's full text.
   pi.registerMessageRenderer(WORKER_REPORT_TYPE, (message, { expanded, outputPad }, theme) => {
@@ -234,38 +237,33 @@ export default function lead(pi: ExtensionAPI) {
   }));
 
   // A prompt section of its own: Pi records it as a transcript delta, and other extensions keep theirs.
-  pi.on("before_agent_start", (event) => {
-    event.systemPromptOptions.sections.pi_lead = leadGuidance(SKILLS_DIR);
+  // The models a worker may run on change with auth, scope and quota: listed afresh for each prompt.
+  pi.on("before_agent_start", (event, ctx) => {
+    const options = event.systemPromptOptions;
+    options.sections.pi_lead = leadGuidance(SKILLS_DIR);
+    if (!ctx) return;
+    const models = (delegator?.models ?? modelListOnly)(io(ctx));
+    options.toolGuidelines = { ...options.toolGuidelines, delegate: [...(options.toolGuidelines?.delegate ?? DELEGATE_GUIDELINES), `Worker models: ${models || "none"}.`] };
   });
 
   pi.registerTool({
     name: "delegate",
     label: "Delegate",
     description:
-      "Start one engineering task in a worker (background Herdr tab, model chosen by Jev). Returns at once; the result arrives later as a message. Runs the execution skills: implement, prototype, diagnosing-bugs (debug), code-review (review), research. Never for questions you can answer yourself.",
+      "Start one engineering task in a worker (background Herdr tab, on the model and thinking level you choose). Returns at once; the result arrives later as a message. Runs the execution skills: implement, prototype, diagnosing-bugs (debug), code-review (review), research. Never for questions you can answer yourself.",
     promptSnippet: "delegate: start implement/prototype/debug/review/research work in a background worker",
-    promptGuidelines: [
-      "Pass the complete ticket or request in `task`; the worker does not see this conversation.",
-      "Use kind implement for a ticket, not a vague idea; shape ideas with the user first.",
-      "delegate does not wait: keep talking with the user; worker results arrive as messages.",
-    ],
+    promptGuidelines: DELEGATE_GUIDELINES,
     parameters: Type.Object({
       kind: StringEnum(["implement", "prototype", "debug", "review", "research"] as const, { description: "Kind of work" }),
       title: Type.String({ description: "Short title, used for the tab and branch name" }),
       task: Type.String({ description: "Self-contained ticket, symptom, review scope or research question" }),
-      startFrom: Type.Optional(Type.String({ description: "Local branch to start from (the branch to review)" })),
+      startFrom: Type.Optional(Type.String({ description: "Local branch to start from (the branch to review, or of a worker out of quota)" })),
+      model: Type.Optional(Type.String({ description: "provider/model-id from the worker models list; omitted: your own model" })),
+      thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level; omitted: your own" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
-      // Jev's difficulty call can take a few seconds: say what the wait is.
-      // One shared slot: the last of parallel delegations restores Pi's default.
-      if (ctx.hasUI && delegating++ === 0) ctx.ui.setWorkingMessage("Sizing up the ticket and picking a model…");
-      let started: StartResult;
-      try {
-        started = await current.start(params, sessionIO(ctx));
-      } finally {
-        if (ctx.hasUI && --delegating === 0) ctx.ui.setWorkingMessage();
-      }
+      const started: StartResult = await current.start(params, io(ctx));
       status();
       return { content: [{ type: "text", text: started.text }], details: started };
     },
@@ -294,7 +292,7 @@ export default function lead(pi: ExtensionAPI) {
         details = { workers };
         text = workers.length
           ? workers
-              .map((w) => `- [${w.id.slice(0, 8)}] ${w.title} · ${w.kind} · ${w.state}${w.branch ? ` · ${w.branch}` : ""} · ${w.route.model}${w.pr ? ` · PR ${w.pr}` : ""}`)
+              .map((w) => `- [${w.id.slice(0, 8)}] ${w.title} · ${w.kind} · ${w.state}${w.branch ? ` · ${w.branch}` : ""} · ${w.route.model} (${w.route.thinking})${w.pr ? ` · PR ${w.pr}` : ""}`)
               .join("\n")
           : "No workers.";
       } else if (!params.id) {
@@ -328,7 +326,7 @@ export default function lead(pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));
-      const text = await current.merge(params.prs, sessionIO(ctx), params.method);
+      const text = await current.merge(params.prs, io(ctx), params.method);
       return { content: [{ type: "text", text }], details: undefined };
     },
   });

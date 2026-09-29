@@ -3,11 +3,21 @@ import { mkdir, mkdtemp, readdir, readFile, rename, writeFile } from "node:fs/pr
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import type { LeadConfig, Tier } from "./config.ts";
+import type { LeadConfig } from "./config.ts";
 import type { Herdr } from "./herdr.ts";
-import { DEFAULT_TIER, VERDICT_ORDER, type Judge, type WorkKind, type WorkerVerdict } from "./jev.ts";
-import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, shellQuote, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { chooseRoute, modelList, type ModelChoice, type ThinkingLevel, type WorkerRoute } from "./model-routing.ts";
+import {
+  parseWorkerResult,
+  PUBLISHED_KINDS,
+  ROLE_ENV,
+  shellQuote,
+  workerPrompt,
+  WRITES_CODE,
+  type WorkKind,
+  type WorkerResult,
+  type WorkerTask,
+  type WorkerVerdict,
+} from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
@@ -18,15 +28,20 @@ export type DelegateParams = {
   kind: WorkKind;
   title: string;
   task: string;
-  /** Local branch to start from (reviews start from the branch under review). */
+  /**
+   * Local branch to start from (reviews start from the branch under review). The branch of a
+   * worker stopped on an exhausted quota continues that worker's ticket, PR included.
+   */
   startFrom?: string;
+  /** `provider/model-id` the worker runs on; omitted, the Lead's own model. */
+  model?: string;
+  /** Omitted, the Lead's own thinking level. */
+  thinking?: ThinkingLevel;
 };
 
-/** What the Lead's session knows when a task is delegated. */
-export type DelegateIO = {
+/** What the Lead's session knows when a task is delegated: its models (`lead`, `thinking`, `available`) and more. */
+export type DelegateIO = ModelChoice & {
   cwd: string;
-  lead: ModelRef | undefined;
-  available: readonly ModelRef[];
   /** Whether the Lead trusts this project; its workers then trust their worktrees too. */
   projectTrusted: boolean;
 };
@@ -61,7 +76,6 @@ export type DelegateOutcome = {
   text: string;
   details: {
     reported?: WorkerVerdict;
-    jevVerdict?: WorkerVerdict;
     quota?: QuotaError;
     /** Sensitive path patterns the branch touches; a review hint only, never a status change. */
     sensitive?: string[];
@@ -115,14 +129,13 @@ export type WorkerCommand = (input: {
 
 export type DelegateDeps = {
   config: LeadConfig;
-  judge: Judge;
   herdr: Herdr | undefined;
   workspace: Workspace;
   workerCommand: WorkerCommand;
   stateRoot: string;
   /** Called for every result: first finish, each later finish, failures and stops. */
   onOutcome(outcome: DelegateOutcome): void;
-  /** Short progress lines, one per event (started, retried, rerouted), for the Lead's transcript. */
+  /** Short progress lines, one per event (started, retried, out of quota), for the Lead's transcript. */
   onProgress?(text: string): void;
   /** The end of a `merge` run: what merged, where it stopped and why. */
   onMergeReport?(text: string): void;
@@ -160,9 +173,9 @@ type TabRecord = {
  * `pr` and `changedFiles` let a done worker's PR still merge through it. A record written before they were is read without them.
  */
 const ADOPTED = [
-  "id", "title", "kind", "state", "verdict", "branch", "route", "params", "difficulty", "repoRoot", "repo", "base", "originBase",
-  "baseBranch", "remoteBranch", "handledSeq", "attempts", "delegatedAt", "runningSince", "resumed", "reroutes", "sentBack",
-  "pr", "changedFiles",
+  "id", "title", "kind", "state", "verdict", "branch", "route", "params", "repoRoot", "repo", "base", "originBase",
+  "baseBranch", "remoteBranch", "handledSeq", "attempts", "delegatedAt", "runningSince", "resumed", "sentBack",
+  "pr", "changedFiles", "outOfQuota",
 ] as const satisfies readonly (keyof Worker)[];
 type AdoptableWorker = Pick<Worker, (typeof ADOPTED)[number]>;
 
@@ -181,9 +194,6 @@ const ADOPTABLE: readonly WorkerState[] = ["starting", "running", "waiting"];
 /** A done worker with an open PR keeps its tab for a merge-time conflict or red CI; one without (an older record) does not. */
 const adoptableState = (worker: AdoptableWorker) => ADOPTABLE.includes(worker.state) || (worker.state === "done" && worker.pr !== undefined);
 
-/** Model changes a single task may go through on quota errors. */
-const MAX_REROUTES = 3;
-
 const RESUME_NOTE =
   "\n\nA previous PI Lead worker ran out of model quota on this task. Its work so far is committed on the current branch: review it with git log and continue from there.";
 
@@ -200,8 +210,7 @@ function isProcessAlive(pid: number): boolean {
 type Worker = Omit<WorkerInfo, "tabOpen"> & {
   params: DelegateParams;
   io: DelegateIO;
-  difficulty: number | undefined;
-  /** Set on the first launch that publishes: the remote branch to push to, reused across a reroute so it lands on the same PR. */
+  /** Set on the first launch that publishes: the remote branch to push to, reused by a continuation so it lands on the same PR. */
   remoteBranch?: string;
   controller: AbortController;
   done: Promise<void>;
@@ -214,7 +223,7 @@ type Worker = Omit<WorkerInfo, "tabOpen"> & {
   base?: string;
   /** The ticket's original base commit, set once at first launch. */
   originBase?: string;
-  /** The branch the checkout was on when the ticket was first delegated; the PR base. Undefined on a detached HEAD. */
+  /** The branch the checkout was on when the ticket was first delegated (inherited by a continuation); the PR base. Undefined on a detached HEAD. */
   baseBranch?: string;
   workspaceId?: string;
   paneId?: string;
@@ -225,7 +234,7 @@ type Worker = Omit<WorkerInfo, "tabOpen"> & {
   handledSeq: number;
   attempts: number;
   createdAt?: string;
-  /** When the task was delegated, and when the worker last started running (a relayed answer, a reroute): the card times this run. */
+  /** When the task was delegated, and when the worker last started running (a relayed answer): the card times this run. */
   delegatedAt: number;
   runningSince?: number;
   /** The label Herdr last took for the worktree workspace, so a state change renames it only when it changes. */
@@ -237,9 +246,10 @@ type Worker = Omit<WorkerInfo, "tabOpen"> & {
   /** Herdr agent name: set once, tried at most twice per tab. */
   named: boolean;
   renameTries: number;
-  /** Continues the branch of an attempt that ran out of quota. */
+  /** Continues the branch of a worker that ran out of quota. */
   resumed: boolean;
-  reroutes: number;
+  /** Its last finish was an exhausted quota with everything committed: a delegation from its branch continues it. */
+  outOfQuota?: boolean;
   /** A CI partial already went back to the worker: the next one reaches the Lead. */
   sentBack: boolean;
   /** Paths the branch changed since its base, as of its last finish (worker-chosen names). */
@@ -323,22 +333,16 @@ export function createDelegator(deps: DelegateDeps) {
   const now = deps.now ?? Date.now;
 
   /**
-   * Providers whose included quota ran out, until when. Workers are routed
-   * around them; nothing ever falls back to a paid balance, since Pi does not
-   * retry quota errors and PI Lead only moves to another configured model.
+   * Providers whose included quota ran out, until when. No worker starts on
+   * them meanwhile; nothing ever falls back to a paid balance, since Pi does
+   * not retry quota errors and only the Lead picks another model.
    */
   const exhausted = new Map<string, number>();
-  const isExhausted = (provider: string) => (exhausted.get(provider) ?? 0) > now();
   const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
-  const exhaustedNote = () => {
-    const providers = [...exhausted].filter(([provider]) => isExhausted(provider));
-    return providers.length ? `quota exhausted: ${providers.map(([provider, until]) => `${provider} until ~${clock(until)}`).join(", ")}` : undefined;
+  const quotaBack = (provider: string) => {
+    const until = exhausted.get(provider);
+    return until !== undefined && until > now() ? `~${clock(until)}` : undefined;
   };
-  /** The models a worker may use now: the session's, minus exhausted providers. */
-  const routable = (io: DelegateIO) => ({
-    lead: io.lead && !isExhausted(io.lead.provider) ? io.lead : undefined,
-    available: io.available.filter((model) => !isExhausted(model.provider)),
-  });
   const processAlive = deps.processAlive ?? isProcessAlive;
   const pid = deps.pid ?? process.pid;
 
@@ -549,19 +553,19 @@ export function createDelegator(deps: DelegateDeps) {
       repoRoot: worker.repoRoot,
       ...(params.startFrom ? { startFrom: params.startFrom } : {}),
     });
-    // A resumed attempt's worktree starts from the previous attempt's branch (reroute sets
-    // `startFrom` to it), so the commits made before the quota ran out carry over.
+    // A continuation's worktree starts from the branch of the worker that ran out of quota
+    // (its `startFrom`), so the commits made before the quota ran out carry over.
     const start = worker.resumed && params.startFrom
       ? await deps.workspace.resolveBase({ repoRoot: worker.repoRoot, startFrom: params.startFrom })
       : worker.base;
-    // Captured once, at the ticket's first launch: a reroute starts from the previous worker
+    // Captured once, at the ticket's first launch: a continuation starts from the previous worker
     // branch, but the PR still targets the original one. Gated on `originBase`
     // (always set once resolved), not `baseBranch` (stays undefined on a detached HEAD).
     if (worker.originBase === undefined) {
       worker.baseBranch = params.startFrom ?? (await deps.workspace.currentBranch(worker.repoRoot));
       worker.originBase = worker.base;
     }
-    // Set on the first launch of a publishing kind; a later reroute keeps
+    // Set on the first launch of a publishing kind; a continuation keeps
     // pushing onto this same remote branch instead of opening a second PR.
     if (PUBLISHED_KINDS.includes(worker.kind)) worker.remoteBranch ??= worker.branch;
     worker.tabLabel = tabLabel(worker);
@@ -627,11 +631,7 @@ export function createDelegator(deps: DelegateDeps) {
     progress(`"${worker.title}" started on ${worker.route.model} (${worker.route.thinking})`);
   };
 
-  const header = (worker: Worker) => [
-    `Worker "${worker.title}" [${worker.id.slice(0, 8)}]: ${worker.route.model} · thinking ${worker.route.thinking} · tier ${worker.route.tier}` +
-      (worker.difficulty !== undefined ? ` (Jev difficulty ${worker.difficulty.toFixed(1)}/4)` : " (default tier; Jev unavailable)"),
-    ...(worker.route.note ? [`Note: ${worker.route.note}`] : []),
-  ];
+  const header = (worker: Worker) => [`Worker "${worker.title}" [${worker.id.slice(0, 8)}]: ${worker.route.model} · thinking ${worker.route.thinking}`];
 
   const cardBase = (worker: Worker) => ({
     kind: worker.kind,
@@ -657,23 +657,8 @@ export function createDelegator(deps: DelegateDeps) {
       // Checks run on the PR's head: green on an older commit is not green on the branch.
       if (pr.url !== undefined && pr.state !== "error" && pr.head !== collected.head) pr = { ...pr, state: "pending", failed: [] };
     }
-    // A PR is open and CI is green on its head (or the repository runs no checks): the host has
-    // proven the work, and no model may downgrade it.
-    const proven = pr?.url !== undefined && (pr.state === "pass" || pr.state === "none");
-    const jevVerdict = proven
-      ? undefined
-      : await deps.judge.verdict({
-          task: worker.params.task,
-          reported: result.status,
-          summary: result.summary,
-          diffStat: collected.diffStat,
-          commits: collected.commits,
-          changedFiles: collected.changedFiles,
-        });
-    // Trust the more pessimistic of the worker and Jev.
-    const judged =
-      jevVerdict && VERDICT_ORDER.indexOf(jevVerdict) > VERDICT_ORDER.indexOf(result.status) ? jevVerdict : result.status;
-    let status = judged;
+    // The worker's own status, capped below only by the host's evidence (its PR and CI).
+    let status = result.status;
     const sensitive = sensitivePatterns(collected.changedFiles);
     worker.changedFiles = collected.changedFiles;
     // Other workers' PRs still waiting to merge that change a file this branch changes: a likely conflict.
@@ -707,10 +692,10 @@ export function createDelegator(deps: DelegateDeps) {
       ci = PUBLISHED_KINDS.includes(worker.kind) && worker.baseBranch !== undefined ? "not checked (not done)" : "not checked (no PR)";
     }
 
-    // Capped only by the host's own evidence (the worker and Jev said done): the worker gets that
+    // Capped only by the host's own evidence (the worker said done): the worker gets that
     // evidence and fixes it itself, once, before the Lead hears about it.
     const ciRed = pr?.url !== undefined && (pr.state === "fail" || pr.state === "pending") ? pr : undefined;
-    if (judged === "done" && status === "partial" && ciRed && !worker.sentBack) {
+    if (result.status === "done" && status === "partial" && ciRed && !worker.sentBack) {
       const evidence =
         ciRed.state === "fail"
           ? [`CI is not green on ${ciRed.url}. Failed checks:`, ...checkList(ciRed.failed)]
@@ -729,6 +714,9 @@ export function createDelegator(deps: DelegateDeps) {
     }
 
     const keep = status !== "done" && deps.config.keepFailedWorkers;
+    // Out of quota with everything committed: the Lead continues the ticket on another model at once.
+    const continuable = result.quota !== undefined && !result.uncommitted;
+    worker.outOfQuota = continuable;
     worker.verdict = status;
     // Green and open: the tab stays until the PR is merged (or the Lead session ends).
     worker.pr = status === "done" && pr?.url ? pr.url : undefined;
@@ -737,11 +725,11 @@ export function createDelegator(deps: DelegateDeps) {
 
     const id = worker.id.slice(0, 8);
     const next: string[] = [];
-    if (keep) {
+    if (keep && !continuable) {
       next.push(`The worker waits in its tab: relay what it needs with \`worker\` (action message, id ${id}), or stop it.`);
     }
     if (status === "needs_human") next.push(keep ? "Ask the user for what the worker needs, then relay the answer." : "Ask the user for what the worker needed, then delegate a new task with the answer.");
-    if (status === "partial" || status === "blocked") next.push("Tell the user what is left; continue only if they agree.");
+    if ((status === "partial" || status === "blocked") && !continuable) next.push("Tell the user what is left; continue only if they agree.");
     if (pr?.state === "error") next.push(`PI Lead could not read the PR or its checks (${pr.error}); tell the user.`);
     else if (pr && !pr.url) next.push(`The worker reported done but opened no PR on branch ${worker.remoteBranch}; tell the user.`);
     if (pr?.url && (pr.state === "fail" || pr.state === "pending")) next.push(`CI is not green on ${pr.url}; tell the user.`);
@@ -757,11 +745,15 @@ export function createDelegator(deps: DelegateDeps) {
       ? "relay a message to the worker to continue, or stop it"
       : `delegate again, starting from branch ${worker.branch}`;
     if (result.quota) {
-      const until = exhausted.get(providerOf(worker.route.model));
+      const provider = providerOf(worker.route.model);
+      const until = quotaBack(provider);
+      const out = `The quota of ${provider} is exhausted${until ? ` (back around ${until.slice(1)})` : ""}; nothing was charged to a paid balance.`;
       next.push(
-        `The quota of ${providerOf(worker.route.model)} is exhausted` + (until ? ` (back around ${clock(until)})` : "") +
-          (result.uncommitted ? "; the worker has uncommitted changes, so it was not moved to another model" : " and no other configured model is available") +
-          `; nothing was charged to a paid balance. Tell the user; once the quota is back, ${resume}.`,
+        continuable
+          ? `${out} Delegate this ticket again now, without asking the user: the same kind, title and task, \`startFrom\` ${worker.branch}, ` +
+              `and a \`model\` of another provider that is available; it continues this branch${worker.remoteBranch ? " and its PR" : ""}. ` +
+              `Only if no other model is available, tell the user; once the quota is back, ${resume}.`
+          : `${out} The worker has uncommitted changes in its worktree, so no other model can continue it: tell the user; once the quota is back, ${resume}.`,
       );
     } else if (result.modelError) {
       next.push(`The model stopped on a provider error: tell the user; to retry, ${resume}.`);
@@ -793,8 +785,7 @@ export function createDelegator(deps: DelegateDeps) {
       status,
       text: [
         ...header(worker),
-        `Status: ${status}` +
-          (jevVerdict && jevVerdict !== result.status ? ` (worker said ${result.status}, Jev said ${jevVerdict})` : ""),
+        `Status: ${status}`,
         // Host-written; check names and links (repo-controlled) stay inside the untrusted block below.
         ...(ci ? [`CI: ${ci}`] : []),
         ...(pr?.url ? [`PR: ${pr.url}`] : []),
@@ -811,7 +802,6 @@ export function createDelegator(deps: DelegateDeps) {
       ].join("\n"),
       details: {
         reported: result.status,
-        ...(jevVerdict ? { jevVerdict } : {}),
         ...(result.quota ? { quota: result.quota } : {}),
         ...(sensitive.length ? { sensitive } : {}),
         ...(pr?.url ? { pr: pr.url } : {}),
@@ -825,36 +815,6 @@ export function createDelegator(deps: DelegateDeps) {
         },
       },
     });
-  };
-
-  /**
-   * The worker's provider ran out of quota: remember it, and when another
-   * configured model of the tier is available, continue the task there from
-   * the worker's branch. Returns false when nothing else can take it.
-   */
-  const reroute = async (worker: Worker, result: WorkerResult & { quota: QuotaError }): Promise<boolean> => {
-    const from = worker.route.model;
-    exhausted.set(providerOf(from), now() + quotaPauseMinutes(result.quota) * 60_000);
-    // Uncommitted changes live only in this worktree: keep the worker where it is.
-    if (result.uncommitted || worker.reroutes >= MAX_REROUTES) return false;
-    const { lead, available } = routable(worker.io);
-    const route = resolveRoute(worker.route.tier, deps.config.tiers, lead, available);
-    if ("error" in route || route.model === from) return false;
-    worker.reroutes += 1;
-    const previous = worker.branch!;
-    worker.params = { ...worker.params, startFrom: previous };
-    worker.route = { model: route.model, thinking: route.thinking, tier: route.tier, note: `${from} ran out of quota; continued on ${route.model} from ${previous}` };
-    worker.resumed = true;
-    progress(`"${worker.title}": ${from} ran out of quota; continuing on ${route.model}`);
-    await closeAndClean(worker);
-    // Stopped meanwhile: open no new tab.
-    if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
-    // Not setState: its tab is gone. A worker left waiting (the user may have typed in its tab) no longer waits on the user.
-    worker.state = "starting";
-    worker.verdict = undefined;
-    await launch(worker);
-    setState(worker, "running");
-    return true;
   };
 
   const fail = async (worker: Worker, error: unknown) => {
@@ -914,7 +874,11 @@ export function createDelegator(deps: DelegateDeps) {
       do {
         const result = await waitForResult(worker);
         worker.lastSeq = result.seq;
-        if (result.quota && (await reroute(worker, { ...result, quota: result.quota }))) continue;
+        // No worker starts on that provider until its quota is back: the Lead picks another model.
+        if (result.quota) {
+          exhausted.set(providerOf(worker.route.model), now() + quotaPauseMinutes(result.quota) * 60_000);
+          progress(`"${worker.title}": ${worker.route.model} ran out of quota`);
+        }
         await settle(worker, result);
         // Only now: a Lead that dies mid-settle leaves this finish for the one that adopts the worker.
         worker.handledSeq = result.seq;
@@ -939,7 +903,8 @@ export function createDelegator(deps: DelegateDeps) {
           if (worker.controller.signal.aborted || worker.attempts > 1) throw error;
           progress(`"${worker.title}" failed to start; retrying once`);
           await closeAndClean(worker);
-          worker.base = undefined; // the retry is a fresh start: HEAD may have moved
+          // The retry is a fresh start (HEAD may have moved), except a continuation, which keeps its ticket's base.
+          if (!worker.resumed) worker.base = undefined;
         }
       }
     } catch (error) {
@@ -1079,6 +1044,9 @@ export function createDelegator(deps: DelegateDeps) {
   return {
     list: (): WorkerInfo[] => [...workers.values()].map(info),
 
+    /** The models a worker may run on, for the Lead's prompt: its own first, exhausted providers marked. */
+    models: (choice: ModelChoice): string => modelList(choice, quotaBack),
+
     async start(params: DelegateParams, io: DelegateIO): Promise<StartResult> {
       if (!deps.herdr) {
         return { status: "failed", text: "PI Lead workers need Herdr: start this Pi session inside a Herdr pane, then delegate again." };
@@ -1086,13 +1054,12 @@ export function createDelegator(deps: DelegateDeps) {
       if (params.startFrom !== undefined && !isSafeBranchName(params.startFrom)) {
         return { status: "failed", text: `"${params.startFrom}" is not a valid local branch name.` };
       }
-      const judged = await deps.judge.modelTier({ task: params.task, kind: params.kind });
-      const tier: Tier = judged?.tier ?? DEFAULT_TIER;
-      const { lead, available } = routable(io);
-      const resolved = resolveRoute(tier, deps.config.tiers, lead, available);
-      const skipped = exhaustedNote();
-      if ("error" in resolved) return { status: "failed", text: `No worker model: ${resolved.error}${skipped ? ` (${skipped})` : ""}.` };
-      const route = skipped && resolved.note ? { ...resolved, note: `${resolved.note} (${skipped})` } : resolved;
+      const route = chooseRoute(params, io, quotaBack);
+      if ("error" in route) return { status: "failed", text: `No worker started: ${route.error}.` };
+      // The branch of a worker stopped on an exhausted quota: this worker continues its ticket.
+      const previous = params.startFrom === undefined
+        ? undefined
+        : [...workers.values()].find((other) => other.outOfQuota && other.branch === params.startFrom && (other.state === "waiting" || other.state === "failed"));
 
       let resolveDone!: () => void;
       const done = new Promise<void>((resolve) => (resolveDone = resolve));
@@ -1104,7 +1071,6 @@ export function createDelegator(deps: DelegateDeps) {
         route,
         params,
         io,
-        difficulty: judged?.difficulty,
         controller: new AbortController(),
         done,
         resolveDone,
@@ -1115,17 +1081,30 @@ export function createDelegator(deps: DelegateDeps) {
         named: false,
         renameTries: 0,
         resumed: false,
-        reroutes: 0,
         sentBack: false,
       };
+      if (previous) {
+        // Its report still covers everything since the ticket's base, and it pushes onto the same PR,
+        // against the same base branch; its worktree starts from the previous branch (see launch).
+        Object.assign(worker, {
+          resumed: true,
+          base: previous.base,
+          originBase: previous.originBase,
+          baseBranch: previous.baseBranch,
+          remoteBranch: previous.remoteBranch,
+        });
+        previous.outOfQuota = false;
+        if (previous.state === "waiting") setState(previous, "stopped");
+        await retire(previous);
+      }
       workers.set(worker.id, worker);
       void drive(worker).catch(() => undefined);
       return {
         status: "started",
         worker: info(worker),
         text: [
-          `Delegated "${params.title}" [${worker.id.slice(0, 8)}] to ${route.model} (thinking ${route.thinking}, tier ${route.tier}` +
-            (judged ? `, Jev difficulty ${judged.difficulty.toFixed(1)}/4).` : ", default tier)."),
+          `Delegated "${params.title}" [${worker.id.slice(0, 8)}] to ${route.model} (thinking ${route.thinking}).`,
+          ...(previous ? [`It continues "${previous.title}" [${previous.id.slice(0, 8)}] from ${previous.branch}, which ran out of quota; that worker's tab is closed.`] : []),
           "It is starting in a background Herdr tab.",
           "Its result will arrive as a message; keep helping the user meanwhile.",
         ].join("\n"),

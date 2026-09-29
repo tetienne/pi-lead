@@ -1,68 +1,40 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
-import { resolveRoute } from "../src/model-routing.ts";
+import { chooseRoute, modelList, type ModelChoice } from "../src/model-routing.ts";
 
 const lead = { provider: "anthropic", id: "claude-sonnet-5" };
-const available = [lead, { provider: "openai-codex", id: "gpt-5.6-mini" }];
+const choice: ModelChoice = { lead, thinking: "medium", available: [lead, { provider: "openai-codex", id: "gpt-6-luna" }] };
+const none = () => undefined;
 
-test("without configured models every tier uses the Lead's model with its thinking level", () => {
-  assert.deepEqual(resolveRoute("fast", DEFAULT_CONFIG.tiers, lead, available), {
-    model: "anthropic/claude-sonnet-5",
-    thinking: "low",
-    tier: "fast",
-  });
-  assert.equal((resolveRoute("deep", DEFAULT_CONFIG.tiers, lead, available) as { thinking: string }).thinking, "high");
+test("omitted model and thinking run the worker on the Lead's own", () => {
+  assert.deepEqual(chooseRoute({}, choice, none), { model: "anthropic/claude-sonnet-5", thinking: "medium" });
 });
 
-test("a configured, available model is used", () => {
-  const config = mergeConfig(DEFAULT_CONFIG, { tiers: { fast: { model: "openai-codex/gpt-5.6-mini" } } });
-  assert.deepEqual(resolveRoute("fast", config.tiers, lead, available), {
-    model: "openai-codex/gpt-5.6-mini",
-    thinking: "low",
-    tier: "fast",
+test("an available model and a thinking level are taken as given", () => {
+  assert.deepEqual(chooseRoute({ model: "openai-codex/gpt-6-luna", thinking: "low" }, choice, none), { model: "openai-codex/gpt-6-luna", thinking: "low" });
+});
+
+test("a thinking level Pi does not know is refused", () => {
+  assert.deepEqual(chooseRoute({ thinking: "extreme" as never }, choice, none), { error: "thinking must be one of off, minimal, low, medium, high, xhigh, max" });
+});
+
+test("a model Pi cannot use is refused with the list to choose from", () => {
+  const refused = chooseRoute({ model: "openai-codex/gpt-6-astra" }, choice, none);
+  assert.deepEqual(refused, {
+    error: "openai-codex/gpt-6-astra is not a model Pi can use now. Available: anthropic/claude-sonnet-5 (yours), openai-codex/gpt-6-luna",
   });
 });
 
-test("an unavailable configured model degrades to the Lead's model and says so", () => {
-  const config = mergeConfig(DEFAULT_CONFIG, { tiers: { deep: { model: "openai-codex/gpt-6" } } });
-  const route = resolveRoute("deep", config.tiers, lead, available);
-  assert.ok("note" in route && route.model === "anthropic/claude-sonnet-5");
-  assert.ok("error" in resolveRoute("deep", config.tiers, undefined, available));
+test("an exhausted provider's models are listed with when they are back, and refused until then", () => {
+  const back = (provider: string) => (provider === "openai-codex" ? "~14:05" : undefined);
+  assert.equal(modelList(choice, back), "anthropic/claude-sonnet-5 (yours), openai-codex/gpt-6-luna (quota exhausted until ~14:05)");
+  assert.match((chooseRoute({ model: "openai-codex/gpt-6-luna" }, choice, back) as { error: string }).error, /^the quota of openai-codex is exhausted until ~14:05\. Available: /);
+  const leadOut = (provider: string) => (provider === "anthropic" ? "~09:30" : undefined);
+  assert.match((chooseRoute({}, choice, leadOut) as { error: string }).error, /quota of anthropic is exhausted/, "the Lead's own model too");
 });
 
-test("an unavailable configured model falls back to the first available fallback, with its own thinking", () => {
-  const config = mergeConfig(DEFAULT_CONFIG, {
-    tiers: {
-      standard: {
-        model: "openai-codex/gpt-6-sol",
-        thinking: "high",
-        fallbacks: [{ model: "opencode-go/kimi-k3", thinking: "max" }, { model: "opencode-go/glm-5.3" }],
-      },
-    },
-  });
-  const withGo = [lead, { provider: "opencode-go", id: "glm-5.3" }];
-  assert.deepEqual(resolveRoute("standard", config.tiers, lead, withGo), {
-    model: "opencode-go/glm-5.3",
-    thinking: "high",
-    tier: "standard",
-    note: "openai-codex/gpt-6-sol, opencode-go/kimi-k3 are not available; using opencode-go/glm-5.3",
-  });
-  const withCodex = [...withGo, { provider: "openai-codex", id: "gpt-6-sol" }];
-  assert.deepEqual(resolveRoute("standard", config.tiers, lead, withCodex), {
-    model: "openai-codex/gpt-6-sol",
-    thinking: "high",
-    tier: "standard",
-  });
-  const none = resolveRoute("standard", config.tiers, lead, [lead]);
-  assert.ok("note" in none && none.model === "anthropic/claude-sonnet-5" && none.note?.endsWith("using the Lead's model"));
-});
-
-test("config merging keeps defaults for unspecified fields", () => {
-  const config = mergeConfig(DEFAULT_CONFIG, { jev: { minConfidence: 0.5 } });
-  assert.equal(config.jev.minConfidence, 0.5);
-  assert.equal(config.jev.model, DEFAULT_CONFIG.jev.model);
-  assert.equal(config.stuckDetection, true);
-  assert.equal(mergeConfig(DEFAULT_CONFIG, { stuckDetection: false }).stuckDetection, false);
+test("without a Lead model a worker needs an explicit one", () => {
+  assert.ok("error" in chooseRoute({}, { ...choice, lead: undefined }, none));
+  assert.deepEqual(chooseRoute({ model: "anthropic/claude-sonnet-5" }, { ...choice, lead: undefined }, none), { model: "anthropic/claude-sonnet-5", thinking: "medium" });
 });

@@ -33,8 +33,12 @@ A point at which work requires an explicit human decision or authorization befor
 _Avoid_: Model approval
 
 **Policy**:
-The deterministic rules that turn model judgments and host evidence into actions, which no model answer can override.
+The deterministic rules that turn host evidence into actions (a worker's status capped by its PR and CI, a quota-exhausted provider refused), which no model answer can override.
 _Avoid_: Prompt, model judgment
+
+**Worker route**:
+The model and thinking level a worker runs on, chosen by the Lead for each delegation; its own when it names none.
+_Avoid_: Tier
 
 **DONE**:
 A worker outcome whose required checks passed and whose results were collected.

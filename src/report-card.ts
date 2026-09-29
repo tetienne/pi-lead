@@ -1,7 +1,7 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import { INVISIBLE, type ReportCard } from "./delegate.ts";
-import type { WorkerVerdict } from "./jev.ts";
+import type { WorkerVerdict } from "./protocol.ts";
 import { cleanLines, type Paint } from "./tool-display.ts";
 import { safePreview } from "./safe-preview.ts";
 
@@ -26,7 +26,6 @@ const HEADLINE: Record<Status, { glyph: string; color: "success" | "warning" | "
 export type ReportDetails = {
   status?: unknown;
   reported?: WorkerVerdict;
-  jevVerdict?: WorkerVerdict;
   sensitive?: string[];
   pr?: string;
   card?: ReportCard;
@@ -39,8 +38,6 @@ export function duration(ms: number): string {
   const minutes = Math.round(seconds / 60);
   return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}`;
 }
-
-const VERDICTS: readonly string[] = ["done", "partial", "blocked", "needs_human"];
 
 const OPEN = "<worker-report untrusted>";
 const CLOSE = "</worker-report>";
@@ -141,10 +138,6 @@ export function renderCard(details: unknown, content: string, expanded: boolean,
     `${paint(head.color, head.glyph)} ${paint("accent", safePreview(card.kind, 20))} · ${safePreview(card.title, 80)}: ` +
       `${paint(head.color, head.text)} in ${duration(card.elapsedMs)}${paint("dim", ` · ${safePreview(model, 60)} (${safePreview(card.thinking, 10)})`)}`,
   ];
-  const { reported, jevVerdict } = report;
-  if (typeof reported === "string" && typeof jevVerdict === "string" && VERDICTS.includes(reported) && VERDICTS.includes(jevVerdict) && reported !== jevVerdict) {
-    lines.push(paint("warning", `  ▲ the worker said ${reported}, Jev judged ${jevVerdict}`));
-  }
   const work = [
     ...(card.commits ? [`${card.commits} commit${card.commits === 1 ? "" : "s"}`] : []),
     ...(card.diff ? [safePreview(card.diff, 120)] : []),
