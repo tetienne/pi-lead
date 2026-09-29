@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0](https://github.com/tetienne/pi-lead/compare/v0.8.0...v0.9.0) (2026-09-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* Jev is removed, with the jev and tiers settings (old keys are ignored), PI_LEAD_JEV_API_KEY and the @typesafe-ai/sdk dependency; delegate gains model and thinking and workers default to the Lead's model and thinking level; after a quota runs out the Lead continues on another model instead of an automatic reroute.
+
+### Features
+
+* the Lead chooses each worker's model and thinking level; remove Jev ([#56](https://github.com/tetienne/pi-lead/issues/56)) ([bc910ea](https://github.com/tetienne/pi-lead/commit/bc910ea042794cac25bf8cd88d18b50747c6acea))
+
+
+### Bug Fixes
+
+* a quota reroute continues from the previous attempt's branch ([#54](https://github.com/tetienne/pi-lead/issues/54)) ([f9b323c](https://github.com/tetienne/pi-lead/commit/f9b323cfdc37402ae0842910bcdb62386c4a3046))
+
 ## [0.8.0](https://github.com/tetienne/pi-lead/compare/v0.7.0...v0.8.0) (2026-09-29)
 
 
