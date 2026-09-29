@@ -184,6 +184,7 @@ test("the guidance keeps worker text untrusted, branches unmerged and publishing
   assert.match(guidance, /Never delete branches unless the user asks/);
   assert.match(guidance, /worker pushes its branch, opens a draft PR and gets CI green before it\s+reports/);
   assert.match(guidance, /When a review reports issues, delegate the fixes/);
+  assert.match(guidance, /never delegate another review of its branch unless the user asks/);
 });
 
 test("the guidance merges only on the user's go-ahead, one PR at a time, through the merge tool", () => {

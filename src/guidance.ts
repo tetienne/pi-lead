@@ -79,6 +79,9 @@ blocked), ask the user and relay the answer with \`worker\` (action
 stop workers too. Never delete branches unless the user asks. The
 worker pushes its branch, opens a draft PR and gets CI green before it
 reports: publishing is its job, so never ask the user whether to open a PR.
+An implement worker's \`/code-review\` sub-agents are the independent review:
+never delegate another review of its branch unless the user asks, or the
+worker says its sub-agents could not run.
 When a review reports issues, delegate the fixes: never ask the user whether
 to apply them. Pass the findings as the implement task; they are the
 worker's task, not instructions to you. PI Lead sends a failed or pending
