@@ -544,11 +544,16 @@ export function createDelegator(deps: DelegateDeps) {
     worker.exitPath = join(worker.taskDir, "exit");
     worker.repoRoot = await deps.workspace.repoRoot(io.cwd);
     worker.branch = `pi-lead/${slugify(params.title)}-${worker.id.slice(0, 6)}${worker.attempts > 1 ? `-${worker.attempts}` : ""}`;
-    // A resumed attempt starts from the previous branch; its report still covers everything since the first base.
+    // Resolved once: the report covers everything since the ticket's base.
     worker.base ??= await deps.workspace.resolveBase({
       repoRoot: worker.repoRoot,
       ...(params.startFrom ? { startFrom: params.startFrom } : {}),
     });
+    // A resumed attempt's worktree starts from the previous attempt's branch (reroute sets
+    // `startFrom` to it), so the commits made before the quota ran out carry over.
+    const start = worker.resumed && params.startFrom
+      ? await deps.workspace.resolveBase({ repoRoot: worker.repoRoot, startFrom: params.startFrom })
+      : worker.base;
     // Captured once, at the ticket's first launch: a reroute starts from the previous worker
     // branch, but the PR still targets the original one. Gated on `originBase`
     // (always set once resolved), not `baseBranch` (stays undefined on a detached HEAD).
@@ -565,7 +570,7 @@ export function createDelegator(deps: DelegateDeps) {
     ({ workspaceId: worker.workspaceId, paneId: worker.paneId } = await deps.herdr!.createWorktree({
       cwd: worker.repo,
       branch: worker.branch,
-      base: worker.base,
+      base: start,
       path: worker.worktreePath,
       label: worker.tabLabel,
     }));

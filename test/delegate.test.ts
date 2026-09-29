@@ -129,7 +129,7 @@ function fakeWorkspace(log: Log, gh = fakeGh(log, {})): Workspace {
     },
     resolveBase: async ({ startFrom }) => {
       log.push(`resolveBase${startFrom ? ` from ${startFrom}` : ""}`);
-      return "abc123";
+      return startFrom ? `sha-of-${startFrom}` : "abc123";
     },
     currentBranch: async () => "main",
     collect: async ({ branch }) => ({ commits: `def456 work on ${branch}`, diffStat: " src/a.ts | 3 ++-", changedFiles: ["src/a.ts"], head: "def456" }),
@@ -201,10 +201,11 @@ function fakeHerdr(
     async notify(title, sound) {
       log.push(`notify ${title} (${sound})`);
     },
-    async createWorktree({ cwd, branch, label }) {
+    async createWorktree({ cwd, branch, base, label }) {
       const workspaceId = `tab-${++tabs}`;
       const paneId = `pane-${tabs}`;
       log.push(`create ${branch}`);
+      log.push(`start ${branch} at ${base}`);
       log.push(`cwd ${cwd}`);
       log.push(`open ${label}`);
       return { workspaceId, paneId };
@@ -1273,6 +1274,8 @@ test("a rerouted worker's PR check still targets the first remote branch", async
   const firstBranch = log.find((line) => line.startsWith("create "))!.slice("create ".length);
   assert.ok(log.includes(`create ${firstBranch}-2`), "the reroute relaunched on a new local branch");
   assert.deepEqual(checked, [firstBranch], "the check reused the original remote branch, not the reroute's");
+  assert.ok(log.includes(`start ${firstBranch}-2 at sha-of-${firstBranch}`), "the reroute's worktree starts from the previous attempt's branch, not the ticket base");
+  assert.match(outcome.text, /^Base: abc123$/m, "the report still covers everything since the ticket base");
   assert.match(outcome.text, new RegExp(`PR: https://example\\.test/pr/${firstBranch}$`, "m"));
 });
 
