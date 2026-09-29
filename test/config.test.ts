@@ -28,31 +28,14 @@ test("settings in their right place produce no notice", async () => {
   assert.deepEqual((await loadConfig(none.cwd, { projectTrusted: false, agentDir: none.agentDir })).ignored, []);
 });
 
-test("an old maxWorkers, leadGuard or waitingTimeoutMinutes key in a user file is ignored, no error and no notice", async () => {
-  const { agentDir, cwd } = await dirs({ maxWorkers: 3, waitingTimeoutMinutes: 5 }, { leadGuard: "off" });
-  const { config, ignored } = await loadConfig(cwd, { projectTrusted: true, agentDir });
-  assert.deepEqual(ignored, []);
-  assert.equal((config as { maxWorkers?: number }).maxWorkers, undefined);
-  assert.equal((config as { leadGuard?: string }).leadGuard, undefined);
-  assert.equal((config as { waitingTimeoutMinutes?: number }).waitingTimeoutMinutes, undefined);
-});
-
-test("old jev and tiers blocks in either file are ignored, no error and no notice", async () => {
+test("removed settings in either file are ignored, no error and no notice", async () => {
   const { agentDir, cwd } = await dirs(
-    { jev: { via: "openrouter", model: "jev-2", dailyBudgetUsd: 0.5 }, tiers: { deep: { model: "openai-codex/gpt-6-astra", thinking: "xhigh" } } },
-    { jev: { minConfidence: 0.5 }, tiers: { fast: { thinking: "low" } }, stuckDetection: false },
+    { maxWorkers: 3, waitingTimeoutMinutes: 5, verify: "make check", jev: { via: "openrouter" }, tiers: { deep: { thinking: "xhigh" } } },
+    { leadGuard: "off", verifyTimeoutMinutes: 9, jev: { minConfidence: 0.5 }, tiers: { fast: { thinking: "low" } }, stuckDetection: false },
   );
   const { config, ignored } = await loadConfig(cwd, { projectTrusted: true, agentDir });
   assert.deepEqual(ignored, []);
   assert.deepEqual(config, { keepFailedWorkers: true, stuckDetection: false });
-});
-
-test("old verify and verifyTimeoutMinutes keys in either file are ignored, no error and no notice", async () => {
-  const { agentDir, cwd } = await dirs({ verify: "make check", verifyTimeoutMinutes: 5 }, { verify: "npm test", verifyTimeoutMinutes: 9 });
-  const { config, ignored } = await loadConfig(cwd, { projectTrusted: true, agentDir });
-  assert.deepEqual(ignored, []);
-  assert.equal((config as { verify?: string }).verify, undefined);
-  assert.equal((config as { verifyTimeoutMinutes?: number }).verifyTimeoutMinutes, undefined);
 });
 
 test("a project file of an untrusted project is ignored with a notice on how to trust it", async () => {

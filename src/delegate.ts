@@ -18,7 +18,7 @@ import {
   type WorkerTask,
   type WorkerVerdict,
 } from "./protocol.ts";
-import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
+import { providerOf, quotaPauseMinutes } from "./quota.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
 import { mergeOne, type MergeTarget } from "./merge.ts";
@@ -75,8 +75,6 @@ export type DelegateOutcome = {
   /** Delivered to the Lead model as a message. */
   text: string;
   details: {
-    reported?: WorkerVerdict;
-    quota?: QuotaError;
     /** Sensitive path patterns the branch touches; a review hint only, never a status change. */
     sensitive?: string[];
     /** The worker's own draft PR for a finished ticket. */
@@ -584,7 +582,6 @@ export function createDelegator(deps: DelegateDeps) {
       id: worker.id,
       kind: worker.kind,
       title: params.title,
-      task: params.task,
       branch: worker.branch,
       worktreePath: worker.worktreePath,
       resultPath: worker.resultPath,
@@ -671,7 +668,6 @@ export function createDelegator(deps: DelegateDeps) {
 
     // Only a `done` report is capped by its PR and CI.
     let ci: string | undefined;
-    if (status !== "done") pr = undefined;
     if (pr) {
       if (pr.state === "error") {
         status = "partial"; // gh could not be read: CI not checked
@@ -801,8 +797,6 @@ export function createDelegator(deps: DelegateDeps) {
         ...(next.length ? ["", "Next:", ...next.map((line) => `- ${line}`)] : []),
       ].join("\n"),
       details: {
-        reported: result.status,
-        ...(result.quota ? { quota: result.quota } : {}),
         ...(sensitive.length ? { sensitive } : {}),
         ...(pr?.url ? { pr: pr.url } : {}),
         card: {
@@ -961,7 +955,7 @@ export function createDelegator(deps: DelegateDeps) {
       try {
         step = await mergeOne(target, { workspace: deps.workspace, ...(method ? { method } : {}), graceMs, sleep: (ms) => sleep(ms) });
       } catch (error) {
-        step = { merged: false as const, text: `Merging ${target.ref} failed: ${errorText(error)}`, sentBack: false };
+        step = { merged: false as const, text: `Merging ${target.ref} failed: ${errorText(error)}` };
       }
       if (!step.merged) {
         stopped = { target, text: step.text };

@@ -160,7 +160,7 @@ export default function lead(pi: ExtensionAPI) {
         if (closed) return;
         status();
         pi.sendMessage(
-          { customType: WORKER_REPORT_TYPE, content: outcome.text, display: true, details: { status: outcome.status, worker: outcome.worker, ...outcome.details } },
+          { customType: WORKER_REPORT_TYPE, content: outcome.text, display: true, details: { status: outcome.status, ...outcome.details } },
           { triggerTurn: true, deliverAs: "followUp" },
         );
       },
@@ -215,8 +215,6 @@ export default function lead(pi: ExtensionAPI) {
     closed = true;
     await delegator?.shutdown();
   });
-
-  // Jev decision lines stored by older versions (`pi-lead-jev` entries) have no renderer: Pi shows nothing for them.
 
   // A card for the user; the model still reads the report's full text.
   pi.registerMessageRenderer(WORKER_REPORT_TYPE, (message, { expanded, outputPad }, theme) => {

@@ -1,6 +1,5 @@
 .DS_Store
 node_modules/
-.pi-lead/
 .env
 .env.*
 !.env.example

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
 
 import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
@@ -62,12 +62,11 @@ function fakeGh(log: Log, prs: Record<string, FakePr>, methods: MergeMethod[] = 
     if (!found) throw new Error(`fake gh: no PR ${pr}`);
     return found;
   };
-  const number = (pr: string) => Number(/(\d+)$/.exec(pr)?.[1] ?? 1);
   return {
     async prView({ pr }: { pr: string }) {
       log.push(`gh view ${pr}`);
       const found = get(pr);
-      return { number: number(pr), url: pr, state: found.state ?? "OPEN", isDraft: found.isDraft ?? false, head: found.head, base: "main" };
+      return { url: pr, state: found.state ?? "OPEN", isDraft: found.isDraft ?? false, head: found.head, base: "main" };
     },
     async prReady({ pr }: { pr: string }) {
       log.push(`gh ready ${pr}`);
@@ -702,18 +701,16 @@ test("the launch script and the task carry stuck detection, the Herdr hint and t
   await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
   await pending;
   assert.equal(seen.task?.stuckDetection, true);
-  assert.ok(!("verify" in seen.task!), "the host runs no verify command");
   assert.match(seen.script!, /export HERDR_AGENT=pi/);
   assert.match(seen.script!, /export PI_LEAD_ROLE=worker/, "a Lead extension loaded in the worker stays inert");
 });
 
-test("a worker is started with the Lead's trust decision, and nothing is copied out of its worktree", async (t) => {
+test("a worker is started with the Lead's trust decision", async (t) => {
   for (const projectTrusted of [true, false]) {
     const seen: boolean[] = [];
-    const { delegator, nextOutcome, stateRoot } = await setup(t, {
+    const { delegator, nextOutcome } = await setup(t, {
       workerCommand: (input) => {
         seen.push(input.projectTrusted);
-        assert.ok(!("resources" in input));
         return ["pi", "--pi-lead-task", input.taskPath];
       },
     });
@@ -721,8 +718,6 @@ test("a worker is started with the Lead's trust decision, and nothing is copied 
     await delegator.start({ kind: "implement", title: "x", task: "y" }, { ...io, projectTrusted });
     await done;
     assert.deepEqual(seen, [projectTrusted]);
-    const taskDirs = await readdir(stateRoot, { recursive: true });
-    assert.ok(!taskDirs.some((path) => path.split(sep).includes("resources")), "no snapshot of project resources");
   }
 });
 
@@ -1183,7 +1178,6 @@ test("a worker out of quota is reported blocked with its branch, never sent to a
   const outcome = await pending;
   assert.equal(outcome.status, "blocked");
   assert.ok(progress.includes(`"Export": openai-codex/gpt-6-sol ran out of quota`));
-  assert.equal(outcome.details.quota?.retryAfterMinutes, 90);
   const branch = delegator.list()[0]!.branch!;
   assert.match(outcome.text, new RegExp(`^Branch: ${branch}$`, "m"));
   assert.match(outcome.text, /quota of openai-codex is exhausted \(back around \d\d:\d\d\); nothing was charged to a paid balance/);
@@ -1250,7 +1244,6 @@ test("a provider error that is not about quota is reported instead of leaving th
   assert.equal(outcome.status, "blocked");
   assert.match(outcome.text, /401 unauthorized/);
   assert.match(outcome.text, /stopped on a provider error: tell the user/);
-  assert.equal(outcome.details.quota, undefined);
 });
 
 test("a worker out of quota with uncommitted changes stays put: the user hears of it", async (t) => {
@@ -1280,9 +1273,9 @@ test("with keepFailedWorkers off, an out-of-quota worker's branch still continue
   assert.ok(log.some((line) => line.endsWith(`at sha-of-${branch}`)));
 });
 
-test("an implement delegation starts exactly one worker, on the implement route, with no scout phase", async (t) => {
+test("an implement delegation starts exactly one worker, on the implement route", async (t) => {
   const seen: Seen = {};
-  const { delegator, log, nextOutcome, progress } = await setup(t, { seen });
+  const { delegator, log, nextOutcome } = await setup(t, { seen });
   const pending = nextOutcome();
   const started = await delegator.start({ kind: "implement", title: "Feature", task: "Add the thing" }, io);
   assert.ok(started.status === "started");
@@ -1291,28 +1284,9 @@ test("an implement delegation starts exactly one worker, on the implement route,
   assert.equal(outcome.status, "done");
   assert.equal(outcome.worker.kind, "implement");
   assert.equal(seen.task?.kind, "implement");
-  assert.equal(seen.task?.task, "Add the thing", "the ticket reaches the worker unchanged");
   assert.match(seen.script!, /'\/skill:implement Add the thing/);
-  assert.doesNotMatch(seen.script!, /[Ss]cout/);
   assert.deepEqual(log.filter((line) => line.startsWith("resolveBase")), ["resolveBase"], "one launch, from the Lead's checkout");
   assert.equal(log.filter((line) => line.startsWith("open")).length, 1, "one worktree, one tab");
-  assert.ok(!progress.some((line) => /scout/i.test(line)));
-  assert.doesNotMatch(outcome.text, /scout/i);
-});
-
-test("an implement worker may change any file: done is never capped for scope", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, {
-    workspace: {
-      ...fakeWorkspace([]),
-      collect: async () => ({ commits: "i1 impl", diffStat: "", changedFiles: ["src/a.ts", "src/other.ts", "test/a.test.ts"], head: "def456" }),
-    },
-  });
-  const pending = nextOutcome();
-  await delegator.start({ kind: "implement", title: "Feature", task: "t" }, io);
-  const outcome = await pending;
-  assert.equal(outcome.status, "done");
-  assert.doesNotMatch(outcome.text, /outside|out-of-scope|scout/i);
-  assert.equal("outOfScope" in outcome.details, false);
 });
 
 test("a finished implement ticket reports its own PR and passing CI, checked on the original base", async (t) => {

@@ -23,7 +23,7 @@ export type MergeTarget = {
 
 export type MergeStep =
   | { merged: true; url: string }
-  | { merged: false; text: string; sentBack: boolean };
+  | { merged: false; text: string };
 
 export type MergeDeps = {
   workspace: Workspace;
@@ -40,7 +40,7 @@ const GRACE_TRIES = 3;
 export async function mergeOne(target: MergeTarget, deps: MergeDeps): Promise<MergeStep> {
   const { workspace, graceMs } = deps;
   const { repoRoot, pr } = target;
-  const stop = (text: string): MergeStep => ({ merged: false, text, sentBack: false });
+  const stop = (text: string): MergeStep => ({ merged: false, text });
   /**
    * A conflict or red CI is the worker's to fix; without a worker it is the user's. `evidence`
    * (repo-controlled check names and links) goes to the worker only.
@@ -48,7 +48,7 @@ export async function mergeOne(target: MergeTarget, deps: MergeDeps): Promise<Me
   const problem = async (what: string, instructions: string, evidence = ""): Promise<MergeStep> => {
     if (!target.sendBack) return stop(`${what}. No worker is open for it: tell the user.`);
     const unsent = await target.sendBack(`${what}${evidence}. ${instructions}`);
-    if (unsent === undefined) return { merged: false, text: `${what}; sent back to its worker, which reports again once it is fixed.`, sentBack: true };
+    if (unsent === undefined) return { merged: false, text: `${what}; sent back to its worker, which reports again once it is fixed.` };
     return stop(`${what}. ${unsent} Tell the user.`);
   };
 

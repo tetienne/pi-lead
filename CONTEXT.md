@@ -45,5 +45,5 @@ A worker outcome whose required checks passed and whose results were collected.
 _Avoid_: Agent idle, process exited
 
 **BLOCKED**:
-A worker outcome that requires human intervention or has reached an applicable retry limit, with diagnostic evidence preserved.
+A worker outcome that requires human intervention, with diagnostic evidence preserved.
 _Avoid_: DONE, success

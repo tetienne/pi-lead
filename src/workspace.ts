@@ -27,8 +27,8 @@ export const checkList = (failed: readonly { name: string; link: string }[]) => 
 export const MERGE_METHODS = ["merge", "rebase", "squash"] as const;
 export type MergeMethod = (typeof MERGE_METHODS)[number];
 
-/** A PR as `gh pr view --json number,url,state,isDraft,headRefOid,baseRefName` reports it. */
-export type PrView = { number: number; url: string; state: "OPEN" | "CLOSED" | "MERGED"; isDraft: boolean; head: string; base: string };
+/** A PR as `gh pr view --json url,state,isDraft,headRefOid,baseRefName` reports it. */
+export type PrView = { url: string; state: "OPEN" | "CLOSED" | "MERGED"; isDraft: boolean; head: string; base: string };
 
 /**
  * Each worker runs in a linked git worktree of the repository, created by
@@ -179,11 +179,11 @@ export const gitWorkspace: Workspace = {
   },
 
   async prView({ repoRoot, pr }) {
-    const run = await ghIn(repoRoot, ["pr", "view", pr, "--json", "number,url,state,isDraft,headRefOid,baseRefName"]);
+    const run = await ghIn(repoRoot, ["pr", "view", pr, "--json", "url,state,isDraft,headRefOid,baseRefName"]);
     if (run.error) return { error: ghError(run) };
     try {
-      const view = JSON.parse(run.stdout ?? "") as { number: number; url: string; state: PrView["state"]; isDraft: boolean; headRefOid: string; baseRefName: string };
-      return { number: view.number, url: view.url, state: view.state, isDraft: view.isDraft, head: view.headRefOid, base: view.baseRefName };
+      const view = JSON.parse(run.stdout ?? "") as { url: string; state: PrView["state"]; isDraft: boolean; headRefOid: string; baseRefName: string };
+      return { url: view.url, state: view.state, isDraft: view.isDraft, head: view.headRefOid, base: view.baseRefName };
     } catch (error) {
       return { error: shortError(error) };
     }

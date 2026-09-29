@@ -43,7 +43,7 @@ const SAID = "Summary:\nAdded CsvExporter and a /reports/export route.\n\nCommit
 
 test("a done report is a card: headline, work, CI, branch, every line the worker wrote, and what comes next", () => {
   assert.equal(
-    renderCard({ status: "done", reported: "done", card: card() }, content(SAID), false, plain),
+    renderCard({ status: "done", card: card() }, content(SAID), false, plain),
     [
       "✓ implement · CSV export: done in 12m · gpt-6-sol (high)",
       "  3 commits · 9 files changed, 214 insertions(+), 37 deletions(-)",
@@ -78,13 +78,10 @@ test("the card never hides the worker's words, never lets them pass for host lin
   assert.ok(!/[\x00-\x09\x0b-\x1f\x7f\u202e]/.test(text));
 });
 
-test("CI not checked and sensitive files stand out; an old Jev verdict or review severity is not shown", () => {
+test("CI not checked and sensitive files stand out", () => {
   const text = renderCard(
     {
       status: "partial",
-      reported: "done",
-      jevVerdict: "partial",
-      review: { severity: 2.5, action: "fix" },
       sensitive: ["package.json scripts", ".github/workflows/"],
       card: card({ ci: "not checked (no PR)" }),
     },
@@ -93,9 +90,7 @@ test("CI not checked and sensitive files stand out; an old Jev verdict or review
     paint,
   )!;
   assert.match(text, /^<warning>~<\/warning> <accent>implement<\/accent> · CSV export: <warning>partly done<\/warning> in 12m/);
-  assert.doesNotMatch(text, /Jev|▲/, "stored by an older version: no Jev line");
   assert.match(text, /<warning> {2}CI: not checked \(no PR\)<\/warning>/);
-  assert.doesNotMatch(text, /severity/, "stored by an older version: Jev no longer scores reviews");
   assert.match(text, /<warning> {2}! review before merging: package\.json scripts, \.github\/workflows\/<\/warning>/);
 });
 

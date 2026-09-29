@@ -25,7 +25,6 @@ const HEADLINE: Record<Status, { glyph: string; color: "success" | "warning" | "
 
 export type ReportDetails = {
   status?: unknown;
-  reported?: WorkerVerdict;
   sensitive?: string[];
   pr?: string;
   card?: ReportCard;

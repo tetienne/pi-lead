@@ -115,7 +115,7 @@ test("a run that ends on a provider error reports it to the Lead instead of idli
   assert.equal(second.modelError, "401 unauthorized");
 });
 
-test("finish done needs no allowed-files list, reports the findings and runs no verify command", async () => {
+test("finish done reports the findings", async () => {
   const { execFile } = await import("node:child_process");
   const run = (args: string[], cwd: string) => new Promise<void>((resolve, reject) => execFile("git", args, { cwd }, (error) => (error ? reject(error) : resolve())));
   const worktree = await mkdtemp(join(tmpdir(), "pi-lead-worker-git-"));
@@ -127,8 +127,7 @@ test("finish done needs no allowed-files list, reports the findings and runs no 
   const stateDir = await mkdtemp(join(tmpdir(), "pi-lead-worker-state-"));
   const taskPath = join(stateDir, "task.json");
   const resultPath = join(stateDir, "result.json");
-  // A task written by an older Lead may still name a verify command: it is not run.
-  const task = { version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: worktree, verify: "touch verify-ran" };
+  const task = { version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", resultPath, worktreePath: worktree };
   await writeFile(taskPath, JSON.stringify(task));
   const tools = new Map<string, any>();
   worker({
@@ -147,8 +146,6 @@ test("finish done needs no allowed-files list, reports the findings and runs no 
   const result = parseWorkerResult(JSON.parse(await readFile(resultPath, "utf8")), "t");
   assert.equal(result.status, "done");
   assert.equal(result.findings, "notes");
-  assert.equal((result as { verification?: unknown }).verification, undefined);
-  await assert.rejects(readFile(join(worktree, "verify-ran"), "utf8"), "no verify command ran in the worktree");
 });
 
 test("finish with a non-done status commits leftovers despite a failing pre-commit hook; done still runs it", async () => {
@@ -187,20 +184,6 @@ test("finish with a non-done status commits leftovers despite a failing pre-comm
     /Could not commit the remaining changes/,
     "a done finish still runs the hook, which blocks it",
   );
-});
-
-test("the worker extension never blocks write or edit", async () => {
-  const handlers = new Map<string, (event: any, ctx?: any) => any>();
-  const dir = await mkdtemp(join(tmpdir(), "pi-lead-worker-"));
-  const taskPath = join(dir, "task.json");
-  await writeFile(taskPath, JSON.stringify({ version: 1, id: "t", kind: "implement", branch: "pi-lead/x-1", title: "x", worktreePath: dir }));
-  worker({
-    registerFlag: () => undefined,
-    getFlag: () => taskPath,
-    registerTool: () => undefined,
-    on: (event: string, handler: any) => handlers.set(event, handler),
-  } as any);
-  assert.equal(handlers.get("tool_call"), undefined, "no tool_call guard is registered");
 });
 
 test("the leftovers commit reports git add's own error on stdout", async () => {

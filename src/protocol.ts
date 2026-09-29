@@ -16,7 +16,6 @@ export type WorkerTask = {
   id: string;
   kind: WorkKind;
   title: string;
-  task: string;
   branch: string;
   /** Host path of the worker's own git worktree; its tools run there. */
   worktreePath: string;

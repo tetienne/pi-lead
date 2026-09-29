@@ -65,30 +65,28 @@ test("in a Pi that PI Lead started, the Lead extension registers nothing", (t) =
   assert.deepEqual(renderers, []);
 });
 
-test("without the marker the Lead registers its tools and handlers, and no Jev command or renderer", () => {
+test("without the marker the Lead registers its tools and handlers", () => {
   const pi = fakePi();
   lead(pi.api as any);
   assert.deepEqual(pi.tools.map((tool) => tool.name), ["delegate", "worker", "merge"]);
   assert.deepEqual(pi.commands, []);
-  // A `pi-lead-jev` entry stored by an older version has no renderer, so Pi shows nothing for it.
   assert.deepEqual([...pi.renderers.keys()].sort(), ["message:pi-lead-worker", "pi-lead-progress"]);
   assert.deepEqual([...pi.handlers.keys()].sort(), ["before_agent_start", "resources_discover", "session_shutdown", "session_start"]);
 });
 
-test("the worker tool takes no scope widening: list, message or stop only", () => {
+test("the worker tool takes list, message or stop only", () => {
   const pi = fakePi();
   lead(pi.api as any);
   const worker = pi.tools.find((tool) => tool.name === "worker")!;
   assert.deepEqual(Object.keys(worker.parameters.properties).sort(), ["action", "id", "message"]);
 });
 
-test("delegate takes the worker's kind, model and thinking level, and no readiness override", () => {
+test("delegate takes the worker's kind, model and thinking level", () => {
   const pi = fakePi();
   lead(pi.api as any);
   const delegate = pi.tools.find((tool) => tool.name === "delegate")!;
   assert.deepEqual(Object.keys(delegate.parameters.properties).sort(), ["kind", "model", "startFrom", "task", "thinking", "title"]);
   assert.deepEqual(delegate.parameters.properties.thinking.enum, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-  assert.doesNotMatch(delegate.description, /Jev/);
   // Said once, where Pi lists the tool's rules, not again in the workflow guidance.
   const rules = delegate.promptGuidelines.join("\n");
   assert.match(rules, /Pass the complete ticket or request in `task`; the worker does not see this conversation/);

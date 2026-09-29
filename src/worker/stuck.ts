@@ -42,7 +42,7 @@ export function steerMessage(trigger: StuckTrigger): string {
 }
 
 export type StuckDetector = {
-  /** Record one shell command; `exitCode` -1 means it did not complete. */
+  /** Record one shell command and its exit code. */
   record(command: string, exitCode: number): void;
   /** A file was written or edited: the failures so far were not a loop. */
   progress(): void;
