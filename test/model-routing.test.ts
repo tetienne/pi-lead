@@ -26,6 +26,15 @@ test("a model Pi cannot use is refused with the list to choose from", () => {
   });
 });
 
+test("the list shows each model's price, unless unknown or free", () => {
+  const priced: ModelChoice = {
+    ...choice,
+    lead: { ...lead, cost: { input: 3, output: 15 } },
+    available: [lead, { provider: "openai-codex", id: "gpt-6-luna", cost: { input: 0, output: 0 } }],
+  };
+  assert.equal(modelList(priced, none), "anthropic/claude-sonnet-5 (yours, $3/$15 per Mtok), openai-codex/gpt-6-luna");
+});
+
 test("an exhausted provider's models are listed with when they are back, and refused until then", () => {
   const back = (provider: string) => (provider === "openai-codex" ? "~14:05" : undefined);
   assert.equal(modelList(choice, back), "anthropic/claude-sonnet-5 (yours), openai-codex/gpt-6-luna (quota exhausted until ~14:05)");

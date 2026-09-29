@@ -11,7 +11,7 @@ import { loadConfig } from "./config.ts";
 import { createDelegator, type DelegateIO, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
-import { modelList, THINKING_LEVELS, type ThinkingLevel } from "./model-routing.ts";
+import { modelList, modelName, THINKING_LEVELS, type ModelRef, type ThinkingLevel } from "./model-routing.ts";
 import { ROLE_ENV } from "./protocol.ts";
 import { gutterBlock, renderCard } from "./report-card.ts";
 import { delegateCall, delegateResult, workerCall, workerResult, type Paint } from "./tool-display.ts";
@@ -94,17 +94,26 @@ const sessionIO = (ctx: ExtensionContext, thinking: ThinkingLevel): DelegateIO =
   const models = ctx.scopedModels?.length ? ctx.scopedModels.map((scoped) => scoped.model) : ctx.modelRegistry.getAvailable();
   return {
     cwd: ctx.cwd,
-    lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+    lead: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id, cost: ctx.model.cost } : undefined,
     thinking,
-    available: models.map((model) => ({ provider: model.provider, id: model.id })),
+    available: models.map((model) => ({ provider: model.provider, id: model.id, cost: model.cost })),
     projectTrusted: ctx.isProjectTrusted(),
   };
 };
 
+/** The model part of a `--model` value: an optional `:thinking` suffix is stripped only when it is a thinking level. */
+const reviewModelAvailable = (value: string, available: readonly ModelRef[]) => {
+  const cut = value.lastIndexOf(":");
+  const name = cut >= 0 && THINKING_LEVELS.includes(value.slice(cut + 1) as ThinkingLevel) ? value.slice(0, cut) : value;
+  return available.some((ref) => modelName(ref) === name);
+};
+
 /** When to pick which model and thinking level: fixed; the model list beside it is generated per prompt. */
 export const MODEL_RULE =
-  "Choose each worker's `model` and `thinking`: a cheaper, faster model and low thinking for mechanical or single-module work; " +
-  "the strongest model and high thinking for cross-cutting, subtle or debugging work; otherwise omit both to use your own.";
+  "Always choose each worker's `model` and `thinking` from the list, weighing difficulty against the listed prices: " +
+  "a cheaper, faster model and low thinking for mechanical or single-module work; " +
+  "the strongest model and high thinking for cross-cutting, subtle or debugging work; " +
+  "your own model only when it is the right fit, and say so in `why`.";
 
 const DELEGATE_GUIDELINES = [
   "Pass the complete ticket or request in `task`; the worker does not see this conversation.",
@@ -130,8 +139,9 @@ export default function lead(pi: ExtensionAPI) {
   let ui: ExtensionContext["ui"] | undefined;
   let closed = false;
   let hasUI = false;
+  let reviewModel: string | undefined;
 
-  /** The Lead's own thinking level, which a worker gets unless `delegate` names one. */
+  /** The Lead's own thinking level. */
   const io = (ctx: ExtensionContext) => sessionIO(ctx, (ctx.thinkingLevel ?? pi.getThinkingLevel()) as ThinkingLevel);
 
   /** The footer counts live workers, in the warning colour while one waits on the user. */
@@ -148,6 +158,10 @@ export default function lead(pi: ExtensionAPI) {
     const { config, ignored } = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     // A setting dropped by the global/project rules would otherwise vanish without a trace.
     if (ctx.hasUI) for (const notice of ignored) ctx.ui.notify(notice, "warning");
+    reviewModel = config.reviewModel;
+    if (ctx.hasUI && reviewModel && !reviewModelAvailable(reviewModel, sessionIO(ctx, "off").available)) {
+      ctx.ui.notify(`PI Lead: reviewModel ${reviewModel} is not among the models Pi can use now; code-review sub-agents will fail.`, "warning");
+    }
     delegator = createDelegator({
       config,
       herdr: createHerdrCli(),
@@ -240,7 +254,7 @@ export default function lead(pi: ExtensionAPI) {
   // The models a worker may run on change with auth, scope and quota: listed afresh for each prompt.
   pi.on("before_agent_start", (event, ctx) => {
     const options = event.systemPromptOptions;
-    options.sections.pi_lead = leadGuidance(SKILLS_DIR);
+    options.sections.pi_lead = leadGuidance(SKILLS_DIR, reviewModel);
     if (!ctx) return;
     const models = (delegator?.models ?? modelListOnly)(io(ctx));
     options.toolGuidelines = { ...options.toolGuidelines, delegate: [...(options.toolGuidelines?.delegate ?? DELEGATE_GUIDELINES), `Worker models: ${models || "none"}.`] };
@@ -258,8 +272,9 @@ export default function lead(pi: ExtensionAPI) {
       title: Type.String({ description: "Short title, used for the tab and branch name" }),
       task: Type.String({ description: "Self-contained ticket, symptom, review scope or research question" }),
       startFrom: Type.Optional(Type.String({ description: "Local branch to start from (the branch to review, or of a worker out of quota)" })),
-      model: Type.Optional(Type.String({ description: "provider/model-id from the worker models list; omitted: your own model" })),
-      thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level; omitted: your own" })),
+      model: Type.String({ description: "provider/model-id from the worker models list" }),
+      thinking: StringEnum(THINKING_LEVELS, { description: "Thinking level" }),
+      why: Type.String({ description: "One sentence: why this model and thinking level fit this task" }),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const current = delegator ?? (await setup(ctx));

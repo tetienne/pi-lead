@@ -28,7 +28,7 @@ const routeText = (worker: WorkerInfo) =>
   `${worker.id.slice(0, 8)} · ${safePreview(shortModel(worker.route.model), 60)} (${safePreview(worker.route.thinking, 10)})`;
 
 export function delegateCall(
-  args: { kind?: unknown; title?: unknown; task?: unknown; startFrom?: unknown; model?: unknown; thinking?: unknown },
+  args: { kind?: unknown; title?: unknown; task?: unknown; startFrom?: unknown; model?: unknown; thinking?: unknown; why?: unknown },
   paint: Paint,
 ): string {
   const route = [
@@ -44,7 +44,8 @@ export function delegateCall(
     ...(route.length ? [paint("muted", ` on ${route.join(", ")}`)] : []),
   ].join("");
   const task = typeof args.task === "string" && args.task.trim() ? `\n${paint("dim", `└ ${safePreview(args.task.trim(), 120)}`)}` : "";
-  return head + task;
+  const why = typeof args.why === "string" && args.why.trim() ? `\n${paint("dim", `└ ${safePreview(args.why.trim(), 120)}`)}` : "";
+  return head + why + task;
 }
 
 function isStartResult(value: unknown): value is StartResult {

@@ -37,6 +37,15 @@ test("an old maxWorkers, leadGuard or waitingTimeoutMinutes key in a user file i
   assert.equal((config as { waitingTimeoutMinutes?: number }).waitingTimeoutMinutes, undefined);
 });
 
+test("reviewModel is kept when a non-empty string and dropped otherwise", async () => {
+  const kept = await dirs({ reviewModel: " openai-codex/gpt-6-astra:high " });
+  assert.equal((await loadConfig(kept.cwd, { projectTrusted: true, agentDir: kept.agentDir })).config.reviewModel, "openai-codex/gpt-6-astra:high");
+  for (const bad of [42, "  ", null, ["a"]]) {
+    const { agentDir, cwd } = await dirs({ reviewModel: bad });
+    assert.equal((await loadConfig(cwd, { projectTrusted: true, agentDir })).config.reviewModel, undefined);
+  }
+});
+
 test("old jev and tiers blocks in either file are ignored, no error and no notice", async () => {
   const { agentDir, cwd } = await dirs(
     { jev: { via: "openrouter", model: "jev-2", dailyBudgetUsd: 0.5 }, tiers: { deep: { model: "openai-codex/gpt-6-astra", thinking: "xhigh" } } },

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 
 import { DELEGATED_SKILLS, leadGuidance } from "../src/guidance.ts";
 import lead, { findHerdrPiExtension, startupWarnings, workerCommand } from "../src/lead.ts";
-import { parseWorkerResult, SUB_AGENT_RECIPE, WORKER_RULES, workerPrompt } from "../src/protocol.ts";
+import { parseWorkerResult, subAgentRecipe, workerPrompt, workerRules } from "../src/protocol.ts";
 
 // A worker running these tests has the marker set; the Lead under test must not see it.
 delete process.env.PI_LEAD_ROLE;
@@ -86,14 +86,15 @@ test("delegate takes the worker's kind, model and thinking level, and no readine
   const pi = fakePi();
   lead(pi.api as any);
   const delegate = pi.tools.find((tool) => tool.name === "delegate")!;
-  assert.deepEqual(Object.keys(delegate.parameters.properties).sort(), ["kind", "model", "startFrom", "task", "thinking", "title"]);
+  assert.deepEqual(Object.keys(delegate.parameters.properties).sort(), ["kind", "model", "startFrom", "task", "thinking", "title", "why"]);
+  assert.deepEqual([...delegate.parameters.required].sort(), ["kind", "model", "task", "thinking", "title", "why"]);
   assert.deepEqual(delegate.parameters.properties.thinking.enum, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
   assert.doesNotMatch(delegate.description, /Jev/);
   // Said once, where Pi lists the tool's rules, not again in the workflow guidance.
   const rules = delegate.promptGuidelines.join("\n");
   assert.match(rules, /Pass the complete ticket or request in `task`; the worker does not see this conversation/);
   assert.match(rules, /delegate does not wait: keep talking with the user/);
-  assert.match(rules, /cheaper, faster model and low thinking for mechanical or single-module work; the strongest model and high thinking for cross-cutting, subtle or debugging work; otherwise omit both to use your own/);
+  assert.match(rules, /cheaper, faster model and low thinking for mechanical or single-module work; the strongest model and high thinking for cross-cutting, subtle or debugging work; your own model only when it is the right fit/);
   assert.doesNotMatch(leadGuidance("/skills"), /does not see this conversation|does not wait/);
 });
 
@@ -174,7 +175,7 @@ test("the guidance lets the Lead inspect and check worker branches itself", () =
   assert.doesNotMatch(guidance, /do not inspect runs yourself/);
   assert.doesNotMatch(guidance, /another worktree or branch/, "the worktree/branch rule lives in the worker rules only");
   assert.doesNotMatch(guidance, /git_read/);
-  assert.match(WORKER_RULES, /Never create another worktree, clone or branch/);
+  assert.match(workerRules(), /Never create another worktree, clone or branch/);
 });
 
 test("the guidance keeps worker text untrusted, branches unmerged and publishing with the worker", () => {
@@ -184,6 +185,7 @@ test("the guidance keeps worker text untrusted, branches unmerged and publishing
   assert.match(guidance, /Never delete branches unless the user asks/);
   assert.match(guidance, /worker pushes its branch, opens a draft PR and gets CI green before it\s+reports/);
   assert.match(guidance, /When a review reports issues, delegate the fixes/);
+  assert.match(guidance, /never delegate another review of its branch unless the user asks/);
 });
 
 test("the guidance merges only on the user's go-ahead, one PR at a time, through the merge tool", () => {
@@ -218,15 +220,25 @@ test("the guidance starts skill sub-agents as marked, non-interactive Pis in Her
   const sections: Record<string, string> = {};
   await handler!({ systemPromptOptions: { sections } });
   const systemPrompt = sections.pi_lead!;
-  assert.ok(systemPrompt.includes(SUB_AGENT_RECIPE));
-  assert.match(SUB_AGENT_RECIPE, /herdr pane split --current --direction right --cwd "\$PWD" --env PI_LEAD_ROLE=sub-agent --no-focus/);
-  assert.match(SUB_AGENT_RECIPE, /herdr pane run <pane-id> "pi --print --no-session @<dir>\/prompt\.md > <dir>\/report\.md 2>&1; echo sub-agent-finished"/);
+  assert.ok(systemPrompt.includes(subAgentRecipe()));
+  assert.match(subAgentRecipe(), /herdr pane split --current --direction right --cwd "\$PWD" --env PI_LEAD_ROLE=sub-agent --no-focus/);
+  assert.match(subAgentRecipe(), /herdr pane run <pane-id> "pi --print --no-session @<dir>\/prompt\.md > <dir>\/report\.md 2>&1; echo sub-agent-finished"/);
   // Herdr matches each line of the unwrapped output: the typed command line, which holds the marker too, never starts with it.
-  assert.match(SUB_AGENT_RECIPE, /herdr pane wait-output <pane-id> --source recent-unwrapped --regex '\^sub-agent-finished'/);
-  assert.match(SUB_AGENT_RECIPE, /herdr pane close <pane-id>/);
-  assert.match(SUB_AGENT_RECIPE, /Herdr is unavailable: do\s+the sub-agents' steps yourself, one after the other/);
-  assert.match(SUB_AGENT_RECIPE, /say so in your output/);
+  assert.match(subAgentRecipe(), /herdr pane wait-output <pane-id> --source recent-unwrapped --regex '\^sub-agent-finished'/);
+  assert.match(subAgentRecipe(), /herdr pane close <pane-id>/);
+  assert.match(subAgentRecipe(), /Herdr is unavailable: do\s+the sub-agents' steps yourself, one after the other/);
+  assert.match(subAgentRecipe(), /say so in your output/);
   assert.doesNotMatch(systemPrompt, /instead of spawning a sub-agent/);
+});
+
+test("reviewModel puts only code-review's sub-agents on that model, and unset leaves the recipe as it was", () => {
+  const recipe = subAgentRecipe("openai-codex/gpt-6-astra:high");
+  assert.match(recipe, /code-review's sub-agents only[\s\S]*pi --print --no-session --model 'openai-codex\/gpt-6-astra:high' @<dir>\/prompt\.md/);
+  assert.match(recipe, /do not\s+rerun it on another model/);
+  assert.ok(recipe.startsWith(subAgentRecipe()));
+  assert.doesNotMatch(subAgentRecipe(), /--model/);
+  assert.ok(leadGuidance("/skills", "a/b").includes(subAgentRecipe("a/b")));
+  assert.ok(workerRules("a/b").includes(subAgentRecipe("a/b")));
 });
 
 test("the Matt skills ship with the package and are discovered", async () => {

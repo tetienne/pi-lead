@@ -7,7 +7,7 @@ import { Type } from "typebox";
 
 import { quotaError } from "../quota.ts";
 import { plainTitle } from "../worker-display.ts";
-import { WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
+import { WORKER_STATUSES, type WorkerResult, type WorkerTask, workerRules } from "../protocol.ts";
 import { createStuckDetector } from "./stuck.ts";
 
 /**
@@ -144,7 +144,7 @@ export default function worker(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     // A new prompt from the Lead or the user: a new cycle for stuck detection.
     stuck.reset();
-    event.systemPromptOptions.sections.pi_lead_worker = WORKER_RULES;
+    event.systemPromptOptions.sections.pi_lead_worker = workerRules(task?.reviewModel);
   });
 
   // A run that ends on a provider error (exhausted quota, or anything Pi

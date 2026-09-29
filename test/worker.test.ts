@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { parseWorkerResult, SUB_AGENT_RECIPE } from "../src/protocol.ts";
+import { parseWorkerResult, subAgentRecipe } from "../src/protocol.ts";
 import worker, { commitLeftoversCommand } from "../src/worker/extension.ts";
 
 /** A worker's `tool_result` event, as narrowed by `isBashToolResult`/`isWriteToolResult`. */
@@ -71,7 +71,7 @@ test("the worker only adds finish; stock file/shell tools and web tools come fro
   const rules = sections.pi_lead_worker!;
   assert.match(rules, /call `finish` with an honest status/);
   assert.match(rules, /"\[PI Lead\]" come from the Lead/);
-  assert.ok(rules.includes(SUB_AGENT_RECIPE), "workers start sub-agents the same way as the Lead");
+  assert.ok(rules.includes(subAgentRecipe()), "workers start sub-agents the same way as the Lead");
 });
 
 test("a run that ends on a provider error reports it to the Lead instead of idling", async () => {

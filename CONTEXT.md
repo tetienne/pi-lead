@@ -37,7 +37,7 @@ The deterministic rules that turn host evidence into actions (a worker's status 
 _Avoid_: Prompt, model judgment
 
 **Worker route**:
-The model and thinking level a worker runs on, chosen by the Lead for each delegation; its own when it names none.
+The model and thinking level a worker runs on, chosen by the Lead for each delegation, with a one-sentence reason.
 _Avoid_: Tier
 
 **DONE**:

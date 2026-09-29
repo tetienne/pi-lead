@@ -702,9 +702,19 @@ test("the launch script and the task carry stuck detection, the Herdr hint and t
   await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
   await pending;
   assert.equal(seen.task?.stuckDetection, true);
+  assert.equal(seen.task?.reviewModel, undefined);
   assert.ok(!("verify" in seen.task!), "the host runs no verify command");
   assert.match(seen.script!, /export HERDR_AGENT=pi/);
   assert.match(seen.script!, /export PI_LEAD_ROLE=worker/, "a Lead extension loaded in the worker stays inert");
+});
+
+test("the task carries the configured reviewModel", async (t) => {
+  const seen: { task?: WorkerTask } = {};
+  const { delegator, nextOutcome } = await setup(t, { seen, config: { reviewModel: "openai-codex/gpt-6-astra" } });
+  const pending = nextOutcome();
+  await delegator.start({ kind: "implement", title: "x", task: "y" }, io);
+  await pending;
+  assert.equal(seen.task?.reviewModel, "openai-codex/gpt-6-astra");
 });
 
 test("a worker is started with the Lead's trust decision, and nothing is copied out of its worktree", async (t) => {

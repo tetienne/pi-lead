@@ -32,6 +32,10 @@ test("a delegate call shows kind, title and the start of the task", () => {
   assert.equal(delegateCall({}, plain), "delegate  ");
 });
 
+test("a delegate call shows the Lead's reason for the model", () => {
+  assert.equal(delegateCall({ kind: "debug", title: "T", task: "", why: "subtle race\nneeds depth" }, plain), "delegate debug T\n└ subtle race⏎ needs depth");
+});
+
 test("model-written arguments cannot reach the terminal raw", () => {
   const call = delegateCall({ kind: "implement", title: "\x1b[2Jwipe\x1b]0;x\x07", task: "a‮b" }, plain);
   assert.ok(!/[\x00-\x09\x0b-\x1f\x7f‮]/.test(call), JSON.stringify(call));

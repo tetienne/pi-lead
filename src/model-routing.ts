@@ -4,7 +4,8 @@ import { providerOf } from "./quota.ts";
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
-export type ModelRef = { provider: string; id: string };
+/** `cost` is Pi's price per million tokens, in dollars. */
+export type ModelRef = { provider: string; id: string; cost?: { input: number; output: number } };
 /** The model and thinking level a worker runs on, as `--model` and `--thinking` take them. */
 export type WorkerRoute = { model: string; thinking: ThinkingLevel };
 
@@ -19,11 +20,16 @@ export type QuotaBack = (provider: string) => string | undefined;
 /** The Lead's model first, then the others; an exhausted provider's models say until when. */
 export function modelList(choice: ModelChoice, back: QuotaBack): string {
   const lead = choice.lead ? modelName(choice.lead) : undefined;
-  const names = [...new Set([...(lead ? [lead] : []), ...choice.available.map(modelName)])];
+  const refs = [...(choice.lead ? [choice.lead] : []), ...choice.available];
+  const names = [...new Set(refs.map(modelName))];
+  const price = (name: string) => {
+    const cost = refs.find((ref) => modelName(ref) === name)?.cost;
+    return cost && (cost.input || cost.output) ? [`$${cost.input}/$${cost.output} per Mtok`] : [];
+  };
   return names
     .map((name) => {
       const until = back(providerOf(name));
-      const notes = [...(name === lead ? ["yours"] : []), ...(until ? [`quota exhausted until ${until}`] : [])];
+      const notes = [...(name === lead ? ["yours"] : []), ...price(name), ...(until ? [`quota exhausted until ${until}`] : [])];
       return notes.length ? `${name} (${notes.join(", ")})` : name;
     })
     .join(", ");
