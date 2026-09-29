@@ -215,7 +215,7 @@ Design record:
 
 <!-- x-release-please-start-version -->
 ```bash
-pi install -l git:github.com/tetienne/pi-lead@v0.8.0
+pi install -l git:github.com/tetienne/pi-lead@v0.9.0
 ```
 <!-- x-release-please-end -->
 
