@@ -1055,6 +1055,94 @@ test("two Leads restarting at once never both adopt the same worker", async (t) 
   assert.equal(a.delegator.list().length + b.delegator.list().length, 1);
 });
 
+/**
+ * A worker that reported done with an open PR under a second Lead (pid 333),
+ * which then "crashes" too: it adopted the worker from a first dead Lead and
+ * settled its finish at once, but its next look is a minute away. The record
+ * then holds the done worker awaiting merge, as a crash leaves it.
+ */
+async function doneBeforeRestart(t: TestContext, replies: Reply[], herdrOptions: Parameters<typeof fakeHerdr>[3] = {}) {
+  const watching = (log: Log) => until(() => log.includes("meta pane-1 state=running"));
+  const [first, ...rest] = replies;
+  const { log, herdr, stateRoot } = await crashedLead(t, [{ ...(first as Exclude<Reply, string>), after: watching }, ...rest], herdrOptions);
+  const { dir } = await recordWhen(stateRoot, () => true);
+  await until(() => existsSync(join(dir, "result.json")));
+  const second = await setup(t, { herdr, stateRoot, pid: 333, processAlive: (pid) => pid !== 111, pollMs: 60_000 });
+  const reported = second.nextOutcome();
+  await second.delegator.reconcile(io);
+  assert.equal((await reported).status, "done");
+  const { record } = await recordWhen(stateRoot, (record) => record.leadPid === 333 && record.worker?.handledSeq === 1);
+  return { log, herdr, stateRoot, dir, record };
+}
+
+test("a new Lead adopts a dead Lead's done worker whose PR awaits merge, and closes it quietly once merged", async (t) => {
+  const { log, herdr, stateRoot, record } = await doneBeforeRestart(t, [{ status: "done" }]);
+  assert.equal(record.worker.state, "done");
+  assert.match(record.worker.pr, /^https:\/\/example\.test\/pr\/pi-lead\/survive-/);
+  assert.deepEqual(record.worker.changedFiles, ["src/a.ts"]);
+  const lead = await setup(t, { herdr, stateRoot, pid: 444, processAlive: (pid) => pid === 444, gh: { survive: { head: "def456" } } });
+  assert.equal(await lead.delegator.reconcile(io), 0, "nothing removed");
+  assert.ok(lead.progress.some((line) => line.includes('adopted "Survive"')));
+  const [adopted] = lead.delegator.list();
+  assert.equal(adopted?.state, "done");
+  assert.equal(adopted?.tabOpen, true);
+  assert.equal(adopted?.pr, record.worker.pr);
+  assert.ok(!log.includes("close tab-1"), "its tab stays open until merged");
+
+  const report = lead.nextMergeReport();
+  await lead.delegator.merge(["Survive"], io);
+  assert.match(await report, /^Merged, in order: Survive \(/);
+  assert.ok(log.includes("close tab-1"), "the merged worker's workspace closes");
+  assert.ok(lead.progress.some((line) => /closed the workspace of "Survive"$/.test(line)));
+  assert.deepEqual(lead.outcomes, [], "and it ends without a report");
+});
+
+test("a merge conflict on an adopted worker's PR goes back to that worker", async (t) => {
+  const { log, herdr, stateRoot } = await doneBeforeRestart(t, [{ status: "done" }, { status: "done", summary: "resolved" }]);
+  const lead = await setup(t, { herdr, stateRoot, pid: 444, processAlive: (pid) => pid === 444, gh: { survive: { head: "def456", conflict: true } } });
+  await lead.delegator.reconcile(io);
+  const report = lead.nextMergeReport();
+  const again = lead.nextOutcome();
+  assert.match(await lead.delegator.merge(["Survive"], io), /^Queued to merge/);
+  assert.match(await report, /conflicts with main now that the PRs before it are merged; sent back to its worker/);
+  assert.ok(log.some((line) => /^send pane-1: \[PI Lead\] .* conflicts with main .*push to pi-lead\/survive-\w+.*call `finish` again\.$/.test(line)));
+  assert.ok(!log.includes("close tab-1"), "the worker keeps its tab to fix it");
+  const outcome = await again;
+  assert.equal(outcome.status, "done");
+  assert.match(outcome.text, /resolved/);
+});
+
+test("a done worker awaiting merge whose Pi is gone is removed as before, never adopted", async (t) => {
+  for (const gone of ["no agent", "exited"] as const) {
+    const noAgent: string[] = [];
+    const { log, herdr, stateRoot, dir } = await doneBeforeRestart(t, [{ status: "done" }], { noAgent });
+    if (gone === "exited") await writeFile(join(dir, "exit"), "0\n");
+    else noAgent.push("pane-1");
+    const removed: string[] = [];
+    const lead = await setup(t, {
+      herdr,
+      stateRoot,
+      pid: 444,
+      processAlive: (pid) => pid === 444,
+      workspace: { ...fakeWorkspace([]), remove: async (path) => void removed.push(path) },
+    });
+    assert.equal(await lead.delegator.reconcile(io), 1, gone);
+    assert.deepEqual(lead.delegator.list(), [], gone);
+    assert.ok(log.includes("close tab-1"), gone);
+    assert.deepEqual(removed, [dir], `${gone}: the task dir goes, the branch stays`);
+  }
+});
+
+test("an older record of a done worker, without its PR, is removed as before", async (t) => {
+  const { log, herdr, stateRoot, dir, record } = await doneBeforeRestart(t, [{ status: "done" }]);
+  const { pr: _pr, changedFiles: _files, ...older } = record.worker;
+  await writeFile(join(dir, "tab.json"), JSON.stringify({ ...record, worker: older }));
+  const lead = await setup(t, { herdr, stateRoot, pid: 444, processAlive: (pid) => pid === 444 });
+  assert.equal(await lead.delegator.reconcile(io), 1);
+  assert.deepEqual(lead.delegator.list(), []);
+  assert.ok(log.includes("close tab-1"));
+});
+
 test("worker panes get Herdr metadata on every state and an agent name, best-effort", async (t) => {
   const seen: Seen = {};
   const { delegator, log, nextOutcome } = await setup(t, {

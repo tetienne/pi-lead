@@ -24,6 +24,7 @@ check of the worker's verdict), within the policy of ADR 0002.
 
 - Each worker's task directory holds a record of its Herdr workspace, pane
   and owning Lead. A Lead that starts in the same repository after its
-  predecessor crashed adopts every worker whose Pi still runs, and removes the
-  worktrees of the others (branches kept). A Lead never adopts the workers of
+  predecessor crashed adopts every worker whose Pi still runs (a done worker
+  whose PR awaits merge included, so a merge-time problem still goes back to
+  it), and removes the worktrees of the others (branches kept). A Lead never adopts the workers of
   another Lead that is still running.
