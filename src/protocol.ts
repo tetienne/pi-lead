@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-
 import type { WorkKind, WorkerVerdict } from "./jev.ts";
 import type { QuotaError } from "./quota.ts";
 
@@ -53,10 +51,6 @@ export const PUBLISHED_KINDS: readonly WorkKind[] = ["implement", "debug", "rese
 
 export const WORKER_STATUSES = ["done", "partial", "blocked", "needs_human"] as const satisfies readonly WorkerVerdict[];
 
-export async function readJsonFile<T>(path: string): Promise<T> {
-  return JSON.parse(await readFile(path, "utf8")) as T;
-}
-
 export function parseWorkerResult(value: unknown, id: string): WorkerResult {
   const result = value as Partial<WorkerResult> | undefined;
   if (
@@ -82,8 +76,10 @@ export function parseWorkerResult(value: unknown, id: string): WorkerResult {
 /** Where the worker pushes its ticket and opens its draft PR; the worker watches that PR's CI itself. */
 export type PublishTarget = { baseBranch: string; remoteBranch: string; title: string };
 
-// The Lead model writes the title; the worker pastes the command into its shell.
-const shellQuote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+/** One shell word, never expanded: for the launch script, and for the commands the worker pastes into its shell. */
+export function shellQuote(argument: string): string {
+  return `'${argument.replaceAll("'", `'"'"'`)}'`;
+}
 
 /** First message of the worker session; explicit `/skill:` invocation. */
 export function workerPrompt(kind: WorkKind, task: string, publish?: PublishTarget): string {
@@ -128,11 +124,10 @@ export function workerPrompt(kind: WorkKind, task: string, publish?: PublishTarg
 /**
  * How the Lead and its workers run the sub-agents Matt's skills ask for:
  * one non-interactive Pi per sub-agent in a Herdr pane beside the caller.
- * The quotes split in the completion marker keep the typed command line from
- * matching `wait-output` before the sub-agent has finished.
+ * `wait-output` matches line by line, and the typed command line never starts
+ * with the marker: only the `echo` output does.
  */
-export const SUB_AGENT_RECIPE = `
-## Sub-agents
+export const SUB_AGENT_RECIPE = `## Sub-agents
 
 When a skill says to spawn, dispatch or fire a sub-agent (code-review's two
 axes, grilling's fact-finding, wayfinder's research,
@@ -145,21 +140,19 @@ you:
    say so in your output.
 2. Write the sub-agent's complete brief to \`<dir>/prompt.md\` in a fresh
    \`mktemp -d\` directory: it sees nothing of your context.
-3. \`herdr pane split --current --direction right --cwd "$PWD" --no-focus\`
+3. \`herdr pane split --current --direction right --cwd "$PWD" --env ${ROLE_ENV}=sub-agent --no-focus\`
    (\`down\` if your pane is narrow), and read the new pane's id from
    \`.result.pane.pane_id\` in the JSON it prints.
-4. \`herdr pane run <pane-id> "${ROLE_ENV}=sub-agent pi --print --no-session @<dir>/prompt.md > <dir>/report.md 2>&1; echo 'sub-agent-''finished'"\`,
+4. \`herdr pane run <pane-id> "pi --print --no-session @<dir>/prompt.md > <dir>/report.md 2>&1; echo sub-agent-finished"\`,
    with \`<dir>\` written out. Start every sub-agent the step asks for before
    waiting on any.
-5. \`herdr pane wait-output <pane-id> --match sub-agent-finished --timeout 1800000\`.
+5. \`herdr pane wait-output <pane-id> --source recent-unwrapped --regex '^sub-agent-finished' --timeout 1800000\`.
    On a timeout, look with \`herdr pane read <pane-id> --source recent-unwrapped --lines 120\`
    before deciding.
 6. Read \`<dir>/report.md\` (the sub-agent's final answer, or its error),
-   then \`herdr pane close <pane-id>\`, and carry on with the skill.
-`;
+   then \`herdr pane close <pane-id>\`, and carry on with the skill.`;
 
-export const WORKER_RULES = `
-## PI Lead worker
+export const WORKER_RULES = `## PI Lead worker
 
 You are a worker delegated by the PI Lead. You run unattended unless a human
 opens your tab.
@@ -177,7 +170,8 @@ opens your tab.
   say exactly what you need.
 - Messages starting with "[PI Lead]" come from the Lead (often relaying the
   user's answer). Continue the task with them and call \`finish\` again.
-- You run unattended: when a skill says to confirm something with the user
-  (a seam, an interface), decide from the code and say so in your finish
-  summary. Use \`needs_human\` only for what the code cannot answer.
+- When a skill says to confirm something with the user (a seam, an
+  interface), decide from the code and say so in your finish summary. Use
+  \`needs_human\` only for what the code cannot answer.
+
 ${SUB_AGENT_RECIPE}`;

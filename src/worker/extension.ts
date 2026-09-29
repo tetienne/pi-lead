@@ -7,16 +7,16 @@ import { Type } from "typebox";
 
 import { quotaError } from "../quota.ts";
 import { plainTitle } from "../worker-display.ts";
-import { readJsonFile, WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
+import { WORKER_RULES, WORKER_STATUSES, type WorkerResult, type WorkerTask } from "../protocol.ts";
 import { createStuckDetector } from "./stuck.ts";
 
-/** The braces send `git add`'s stderr to stdout too, so a failure reaches the model. */
-export const COMMIT_LEFTOVERS =
-  '{ git add -A && (git diff --cached --quiet || git commit -q -m "PI Lead worker: uncommitted changes"); } 2>&1';
-
-/** A `done` finish still runs hooks; any other status is a local WIP commit that must not be blocked by lint. */
-export const COMMIT_LEFTOVERS_NO_VERIFY =
-  '{ git add -A && (git diff --cached --quiet || git commit -q --no-verify -m "PI Lead worker: uncommitted changes"); } 2>&1';
+/**
+ * Commit whatever is left in the tree. A `done` finish runs the hooks; any other status is a
+ * local WIP commit that lint must not block. The braces send `git add`'s stderr to stdout too,
+ * so a failure reaches the model.
+ */
+export const commitLeftoversCommand = (runHooks: boolean) =>
+  `{ git add -A && (git diff --cached --quiet || git commit -q${runHooks ? "" : " --no-verify"} -m "PI Lead worker: uncommitted changes"); } 2>&1`;
 
 /** Run a shell command on the host, in `cwd`. Never rejects: a non-zero exit is just a result. */
 function runShell(command: string, cwd: string): Promise<{ exitCode: number; stdout: string }> {
@@ -47,7 +47,7 @@ export default function worker(pi: ExtensionAPI) {
     if (task) return task;
     const path = pi.getFlag("pi-lead-task");
     if (typeof path !== "string" || !path) throw new Error("PI Lead worker started without --pi-lead-task");
-    task = await readJsonFile<WorkerTask>(path);
+    task = JSON.parse(await readFile(path, "utf8")) as WorkerTask;
     // Continue numbering after a /reload or /new in this tab, so the Lead sees the next finish.
     try {
       const previous = JSON.parse(await readFile(task.resultPath, "utf8")) as { seq?: unknown };
@@ -80,7 +80,7 @@ export default function worker(pi: ExtensionAPI) {
     const current = await loadTask();
     // Without it, execFile would commit in whatever repo Pi was started from.
     if (!current.worktreePath) throw new Error("the task names no worktree to commit in");
-    return runShell(status === "done" ? COMMIT_LEFTOVERS : COMMIT_LEFTOVERS_NO_VERIFY, current.worktreePath);
+    return runShell(commitLeftoversCommand(status === "done"), current.worktreePath);
   };
 
   const writeResult = async (result: WorkerResult) => {
@@ -144,7 +144,7 @@ export default function worker(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     // A new prompt from the Lead or the user: a new cycle for stuck detection.
     stuck.reset();
-    return { systemPrompt: `${event.systemPrompt}\n${WORKER_RULES}` };
+    event.systemPromptOptions.sections.pi_lead_worker = WORKER_RULES;
   });
 
   // A run that ends on a provider error (exhausted quota, or anything Pi

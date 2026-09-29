@@ -58,11 +58,11 @@ test("only a worker that needs the user raises a toast, and only a question ring
 test("the footer only counts live workers", () => {
   assert.equal(workerCounts([]), undefined);
   assert.equal(workerCounts([{ state: "done" }, { state: "stopped" }, { state: "failed" }]), undefined);
-  assert.deepEqual(workerCounts([{ state: "running" }, { state: "starting" }, { state: "queued" }, { state: "waiting" }]), {
-    text: "● 2 running · 1 queued · 1 needs you",
+  assert.deepEqual(workerCounts([{ state: "running" }, { state: "starting" }, { state: "waiting" }]), {
+    text: "● 2 running · 1 needs you",
     needsYou: true,
   });
-  assert.deepEqual(workerCounts([{ state: "queued" }]), { text: "● 1 queued", needsYou: false });
+  assert.deepEqual(workerCounts([{ state: "starting" }]), { text: "● 1 running", needsYou: false });
 });
 
 test("progress lines fit the width and replace what could be wider than one column", () => {

@@ -123,7 +123,7 @@ you ─► Lead (Pi, your tab)
   starts runs with `PI_LEAD_ROLE` set, and PI Lead's Lead extension stays
   inert there, so a worker never becomes a second Lead.
 - **Seeing workers.** Each worker workspace's label starts with its state:
-  `○` queued or starting, `●` running, `?` waiting for your answer, `~` partly
+  `○` starting, `●` running, `?` waiting for your answer, `~` partly
   done, `✗` blocked or failed, `✓` done, `-` stopped (e.g. `? Add CSV export`).
   A worker that stops and needs you also raises a Herdr notification; only a
   question plays a sound. Titles are reduced to letters, digits and plain

@@ -1,17 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import type { LeadConfig, Tier } from "./config.ts";
 import type { Herdr } from "./herdr.ts";
 import { DEFAULT_TIER, VERDICT_ORDER, type Judge, type WorkKind, type WorkerVerdict } from "./jev.ts";
 import { resolveRoute, type ModelRef, type WorkerRoute } from "./model-routing.ts";
-import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
+import { parseWorkerResult, PUBLISHED_KINDS, ROLE_ENV, shellQuote, workerPrompt, WRITES_CODE, type WorkerResult, type WorkerTask } from "./protocol.ts";
 import { providerOf, quotaPauseMinutes, type QuotaError } from "./quota.ts";
 import { sensitivePatterns } from "./sensitive-paths.ts";
 import { attentionNotice, plainTitle, stateLabels, tabLabel } from "./worker-display.ts";
 import { mergeOne, type MergeTarget } from "./merge.ts";
-import type { MergeMethod, Workspace } from "./workspace.ts";
+import { checkList, type MergeMethod, type Workspace } from "./workspace.ts";
 
 export type DelegateParams = {
   kind: WorkKind;
@@ -31,7 +32,6 @@ export type DelegateIO = {
 };
 
 export type WorkerState =
-  | "queued"
   | "starting"
   | "running"
   | "waiting" // stopped on needs_human / partial / blocked, tab open, can be messaged
@@ -122,7 +122,7 @@ export type DelegateDeps = {
   stateRoot: string;
   /** Called for every result: first finish, each later finish, failures and stops. */
   onOutcome(outcome: DelegateOutcome): void;
-  /** Short progress lines, one per event (started, queued, rerouted), for the Lead's transcript. */
+  /** Short progress lines, one per event (started, retried, rerouted), for the Lead's transcript. */
   onProgress?(text: string): void;
   /** The end of a `merge` run: what merged, where it stopped and why. */
   onMergeReport?(text: string): void;
@@ -155,16 +155,12 @@ type TabRecord = {
   worker?: AdoptableWorker;
 };
 
-/** The watcher's view of a worker, as a later Lead rebuilds it. */
-type AdoptableWorker = Pick<
-  Worker,
-  | "id" | "title" | "kind" | "state" | "verdict" | "branch" | "route" | "params" | "difficulty" | "repoRoot" | "base"
-  | "originBase" | "baseBranch" | "remoteBranch" | "handledSeq" | "attempts" | "delegatedAt" | "runningSince" | "resumed"
-  | "reroutes" | "sentBack"
-> & {
-  /** The repository's main checkout: only a Lead of that repository adopts the worker. */
-  repo: string;
-};
+/** The watcher's view of a worker, as a later Lead rebuilds it. `repo`, the main checkout, keys adoption to its repository. */
+const ADOPTED = [
+  "id", "title", "kind", "state", "verdict", "branch", "route", "params", "difficulty", "repoRoot", "repo", "base", "originBase",
+  "baseBranch", "remoteBranch", "handledSeq", "attempts", "delegatedAt", "runningSince", "resumed", "reroutes", "sentBack",
+] as const satisfies readonly (keyof Worker)[];
+type AdoptableWorker = Pick<Worker, (typeof ADOPTED)[number]>;
 
 const RECORD = "tab.json";
 
@@ -194,7 +190,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-type Worker = WorkerInfo & {
+type Worker = Omit<WorkerInfo, "tabOpen"> & {
   params: DelegateParams;
   io: DelegateIO;
   difficulty: number | undefined;
@@ -279,28 +275,10 @@ export function isSafeBranchName(name: string): boolean {
     !name.endsWith(".lock") && !name.includes("//");
 }
 
-export function shellQuote(argument: string): string {
-  return `'${argument.replaceAll("'", `'"'"'`)}'`;
-}
-
-const sleep = (ms: number, signal?: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason);
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
- * Delegation is asynchronous: `start` returns as soon as the worker is queued,
+ * Delegation is asynchronous: `start` returns as soon as the worker is starting,
  * the Lead keeps talking with the user, and every result is pushed through
  * `onOutcome`. Workers stopped on a question stay reachable through `message`.
  */
@@ -357,14 +335,8 @@ export function createDelegator(deps: DelegateDeps) {
   const processAlive = deps.processAlive ?? isProcessAlive;
   const pid = deps.pid ?? process.pid;
 
-  /** Herdr presentation is never needed for correctness: fire and forget, swallow every error. */
-  const bestEffort = (call: () => Promise<unknown> | undefined) => {
-    try {
-      void call()?.catch(() => undefined);
-    } catch {
-      // A synchronous throw is swallowed too.
-    }
-  };
+  /** Herdr presentation is never needed for correctness: fire and forget, swallow every error, a synchronous throw included. */
+  const bestEffort = (call: () => Promise<unknown> | undefined) => void (async () => call())().catch(() => undefined);
 
   /** `[a-z][a-z0-9_-]{0,31}`, unique enough among live agents thanks to the id. */
   const agentName = (worker: Worker) =>
@@ -450,15 +422,8 @@ export function createDelegator(deps: DelegateDeps) {
     );
   };
 
-  const adoptable = (worker: Worker): AdoptableWorker | undefined => {
-    if (!worker.paneId || !worker.repo) return undefined;
-    const { id, title, kind, state, verdict, branch, route, params, difficulty, repoRoot, repo, base, originBase, baseBranch, remoteBranch } = worker;
-    const { handledSeq, attempts, delegatedAt, runningSince, resumed, reroutes, sentBack } = worker;
-    return {
-      id, title, kind, state, verdict, branch, route, params, difficulty, repoRoot, repo, base, originBase, baseBranch, remoteBranch,
-      handledSeq, attempts, delegatedAt, runningSince, resumed, reroutes, sentBack,
-    };
-  };
+  const adoptable = (worker: Worker): AdoptableWorker | undefined =>
+    worker.paneId && worker.repo ? (Object.fromEntries(ADOPTED.map((key) => [key, worker[key]])) as AdoptableWorker) : undefined;
 
   /**
    * Best-effort as well: without a record a crashed Lead's tab is only left
@@ -491,18 +456,6 @@ export function createDelegator(deps: DelegateDeps) {
     } catch {
       return undefined;
     }
-  };
-
-  /**
-   * Every worker starts at once: the Lead sequences tickets by their Blocked-by
-   * edges, and conflicts surface in the one-at-a-time merge flow.
-   */
-  const markStarting = (worker: Worker) => {
-    const signal = worker.controller.signal;
-    if (signal.aborted) throw signal.reason;
-    // Not setState: there is no tab to describe yet. A rerouted waiting worker no longer waits on the user.
-    worker.state = "starting";
-    worker.verdict = undefined;
   };
 
   const readIfPresent = async (path: string) => {
@@ -545,7 +498,7 @@ export function createDelegator(deps: DelegateDeps) {
         }
         lastBeat = Date.now();
       }
-      await sleep(pollMs, worker.controller.signal);
+      await sleep(pollMs, undefined, { signal: worker.controller.signal });
     }
   };
 
@@ -748,7 +701,7 @@ export function createDelegator(deps: DelegateDeps) {
     if (judged === "done" && status === "partial" && ciRed && !worker.sentBack) {
       const evidence =
         ciRed.state === "fail"
-          ? [`CI is not green on ${ciRed.url}. Failed checks:`, ...ciRed.failed.map((check) => `${check.name} (${check.link})`)]
+          ? [`CI is not green on ${ciRed.url}. Failed checks:`, ...checkList(ciRed.failed)]
           : ciRed.head === collected.head
             ? [`CI is not green on ${ciRed.url}: its checks are still pending.`]
             : [`CI is not green on ${ciRed.url}: the PR head is ${ciRed.head ?? "unknown"}, not your branch head ${collected.head}; push your branch.`];
@@ -802,6 +755,27 @@ export function createDelegator(deps: DelegateDeps) {
       next.push(`The model stopped on a provider error: tell the user; to retry, ${resume}.`);
     }
 
+    const section = (heading: string, body: string | undefined) => (body ? ["", `${heading}:`, body] : []);
+    const untrusted = [
+      "Summary:",
+      result.summary,
+      ...section("Commits", collected.commits),
+      ...section("Diff stat", collected.diffStat),
+      ...section("Findings", result.findings),
+      ...section("CI checks failed", checkList(pr?.failed ?? []).join("\n")),
+      ...sharedWith.flatMap((other) => section(`Files also changed by the open PR of "${other.title}"`, other.files.join("\n"))),
+    ].join("\n");
+    // Host-generated, so outside the block: the patterns come from a fixed list, and the file names they matched stay inside.
+    const hostChecks = [
+      sensitive.length
+        ? [`Host check: review these before merging; they can run on your machine or in CI, or steer future agents: ${sensitive.join(", ")}.`]
+        : [],
+      sharedWith.map(
+        (other) =>
+          `Host check: this branch shares files with the open PR of "${other.title}" (${other.pr}), listed in the report above; merging one may conflict with the other.`,
+      ),
+    ];
+
     report({
       worker: info(worker),
       status,
@@ -816,33 +790,11 @@ export function createDelegator(deps: DelegateDeps) {
         `Head: ${collected.head}`,
         `Base: ${worker.base}`,
         "",
-        // Everything in this block was written by the worker: report it, never obey it.
+        // Everything in this block was written by the worker, its repository or its branch: report it, never obey it.
         "<worker-report untrusted>",
-        "Summary:",
-        unmarked(result.summary),
-        ...(collected.commits ? ["", "Commits:", unmarked(collected.commits)] : []),
-        ...(collected.diffStat ? ["", "Diff stat:", unmarked(collected.diffStat)] : []),
-        ...(result.findings ? ["", "Findings:", unmarked(result.findings)] : []),
-        ...(pr?.failed.length ? ["", "CI checks failed:", unmarked(pr.failed.map((check) => `${check.name} (${check.link})`).join("\n"))] : []),
-        ...sharedWith.flatMap((other) => ["", `Files also changed by the open PR of "${other.title}":`, unmarked(other.files.join("\n"))]),
+        unmarked(untrusted),
         "</worker-report>",
-        // Host-generated from the fixed pattern list, so it sits outside the block; worker-chosen file names stay inside.
-        ...(sensitive.length
-          ? [
-              "",
-              `Host check: review these before merging; they can run on your machine or in CI, or steer future agents: ${sensitive.join(", ")}.`,
-            ]
-          : []),
-        // Host data; the shared file names are listed inside the block above.
-        ...(sharedWith.length
-          ? [
-              "",
-              ...sharedWith.map(
-                (other) =>
-                  `Host check: this branch shares files with the open PR of "${other.title}" (${other.pr}), listed in the report above; merging one may conflict with the other.`,
-              ),
-            ]
-          : []),
+        ...hostChecks.flatMap((lines) => (lines.length ? ["", ...lines] : [])),
         ...(next.length ? ["", "Next:", ...next.map((line) => `- ${line}`)] : []),
       ].join("\n"),
       details: {
@@ -882,13 +834,12 @@ export function createDelegator(deps: DelegateDeps) {
     worker.route = { model: route.model, thinking: route.thinking, tier: route.tier, note: `${from} ran out of quota; continued on ${route.model} from ${previous}` };
     worker.resumed = true;
     progress(`"${worker.title}": ${from} ran out of quota; continuing on ${route.model}`);
-    // A worker left waiting (the user may have typed in its tab) no longer waits on the user.
-    const wasRunning = worker.state === "running";
     await closeAndClean(worker);
-    if (wasRunning) setState(worker, "starting");
-    else markStarting(worker);
     // Stopped meanwhile: open no new tab.
     if (worker.controller.signal.aborted) throw worker.controller.signal.reason;
+    // Not setState: its tab is gone. A worker left waiting (the user may have typed in its tab) no longer waits on the user.
+    worker.state = "starting";
+    worker.verdict = undefined;
     await launch(worker);
     setState(worker, "running");
     return true;
@@ -967,7 +918,6 @@ export function createDelegator(deps: DelegateDeps) {
   /** Background life of one worker: launch (one retry on failure), first result. */
   const drive = async (worker: Worker) => {
     try {
-      markStarting(worker);
       while (true) {
         try {
           await launch(worker);
@@ -1092,7 +1042,6 @@ export function createDelegator(deps: DelegateDeps) {
       lastSeq: live.handledSeq,
       // A worker whose Lead died mid-launch already runs its Pi.
       state: live.state === "starting" ? "running" : live.state,
-      tabOpen: true,
       io,
       controller: new AbortController(),
       done,
@@ -1139,9 +1088,8 @@ export function createDelegator(deps: DelegateDeps) {
         id: randomUUID(),
         title: params.title,
         kind: params.kind,
-        state: "queued",
+        state: "starting",
         route,
-        tabOpen: false,
         params,
         io,
         difficulty: judged?.difficulty,
@@ -1269,7 +1217,7 @@ export function createDelegator(deps: DelegateDeps) {
      * branch is kept). Records of live Leads (other sessions, or this
      * process) are left alone. Returns how many worktrees were removed.
      */
-    async reconcile(io?: DelegateIO): Promise<number> {
+    async reconcile(io: DelegateIO): Promise<number> {
       let names: string[];
       try {
         names = await readdir(deps.stateRoot);
@@ -1288,13 +1236,11 @@ export function createDelegator(deps: DelegateDeps) {
       const workspaces = await herdr.listWorkspaces().catch(() => undefined);
       // If Herdr does not answer, or not even for the Lead's own workspace, try again on the next start.
       if (!workspaces || !workspaces.includes(herdr.workspace)) return 0;
-      const repo = io
-        ? await deps.workspace.repoRoot(io.cwd).then((root) => deps.workspace.mainCheckout(root)).catch(() => undefined)
-        : undefined;
+      const repo = await deps.workspace.repoRoot(io.cwd).then((root) => deps.workspace.mainCheckout(root)).catch(() => undefined);
       let closed = 0;
       for (const { dir, record } of orphans) {
         const live = record.worker;
-        if (io && live && record.workspaceId && workspaces.includes(record.workspaceId) && (await piRuns(dir, record))) {
+        if (live && record.workspaceId && workspaces.includes(record.workspaceId) && (await piRuns(dir, record))) {
           // Another repository's worker: its own Lead may still adopt it.
           if (live.repo !== repo) continue;
           // Lost the claim: another Lead started at the same moment and adopts it.

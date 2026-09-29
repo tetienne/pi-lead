@@ -9,7 +9,6 @@ import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
 import {
   createDelegator,
   isSafeBranchName,
-  shellQuote,
   slugify,
   unmarked,
   type DelegateIO,
@@ -18,18 +17,27 @@ import {
 } from "../src/delegate.ts";
 import type { Herdr, PaneMetadata } from "../src/herdr.ts";
 import { createJudge, type Judge, type WorkerVerdict } from "../src/jev.ts";
-import type { WorkerResult, WorkerTask } from "../src/protocol.ts";
+import { shellQuote, type WorkerResult, type WorkerTask } from "../src/protocol.ts";
 import type { MergeMethod, PrView, Workspace } from "../src/workspace.ts";
 
 const noJudge: Judge = {
-  available: false,
   modelTier: async () => undefined,
   verdict: async () => undefined,
 };
 
 type Log = string[];
 type Reply =
-  | { status: WorkerVerdict; summary?: string; findings?: string; delayMs?: number; quota?: WorkerResult["quota"]; modelError?: string; uncommitted?: boolean }
+  | {
+      status: WorkerVerdict;
+      summary?: string;
+      findings?: string;
+      delayMs?: number;
+      /** The fake worker finishes only once this settles (given the fake Herdr's log): an event, not a delay, orders it. */
+      after?: (log: Log) => Promise<unknown>;
+      quota?: WorkerResult["quota"];
+      modelError?: string;
+      uncommitted?: boolean;
+    }
   | "exit"
   | "silent";
 
@@ -166,7 +174,7 @@ function fakeHerdr(
     const next = replies[Math.min(options.sharedTurns ? sharedTurn++ : worker.turn++, replies.length - 1)]!;
     if (next === "silent") return;
     if (next === "exit") return void setTimeout(() => void writeFile(worker.exitPath, "1\n"), 5);
-    setTimeout(() => void write(worker, next), next.delayMs ?? 5);
+    void Promise.resolve(next.after?.(log)).then(() => setTimeout(() => void write(worker, next), next.delayMs ?? 5));
   };
   return {
     workspace: "w1",
@@ -440,7 +448,7 @@ test("a transient rename failure keeps the glyphs and is retried on the next sta
 
 test("Jev picks the tier and a pessimistic Jev verdict keeps the tab", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
-    judge: { available: true, modelTier: async () => ({ tier: "deep", difficulty: 3.4 }), verdict: async () => "partial" },
+    judge: { modelTier: async () => ({ tier: "deep", difficulty: 3.4 }), verdict: async () => "partial" },
   });
   const pending = nextOutcome();
   // A prototype opens no PR, so the host never proves it: Jev has the last word.
@@ -456,7 +464,7 @@ test("Jev's verdict is asked with the commits and changed files", async (t) => {
   const asked: Array<Parameters<Judge["verdict"]>[0]> = [];
   const { delegator, nextOutcome } = await setup(t, {
     replies: [{ status: "done", summary: "tests pass" }],
-    judge: { available: true, verdict: async (input) => (asked.push(input), "partial") },
+    judge: { verdict: async (input) => (asked.push(input), "partial") },
   });
   const pending = nextOutcome();
   // A prototype opens no PR, so the host proves nothing and Jev is asked.
@@ -588,8 +596,10 @@ test("a branch touching only ordinary files gets no host warning", async (t) => 
 });
 
 test("code-writing tickets start in parallel, with or without a Jev key", async (t) => {
-  for (const judge of [{}, { available: true, modelTier: async () => ({ tier: "standard" as const, difficulty: 2 }) }]) {
-    const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", delayMs: 30 }], judge });
+  for (const judge of [{}, { modelTier: async () => ({ tier: "standard" as const, difficulty: 2 }) }]) {
+    // No worker finishes before Two has opened: it opens while One still runs, or never.
+    const twoOpened = (log: Log) => until(() => log.includes("open ○ Two"));
+    const { delegator, log, nextOutcome, progress } = await setup(t, { replies: [{ status: "done", after: twoOpened }], judge });
     const both = [nextOutcome(), nextOutcome()];
     await delegator.start({ kind: "implement", title: "One", task: "a" }, io);
     await delegator.start({ kind: "prototype", title: "Two", task: "b" }, io);
@@ -683,7 +693,7 @@ test("a failed launch is retried exactly once, without asking Jev", async (t) =>
       return herdr.createWorktree(input);
     };
     const judged: string[] = [];
-    const judge: Partial<Judge> = { available: true, verdict: async () => void judged.push("verdict") };
+    const judge: Partial<Judge> = { verdict: async () => void judged.push("verdict") };
     const { delegator, nextOutcome, progress } = await setup(t, { herdr: { ...herdr, createWorktree }, judge });
     const pending = nextOutcome();
     // A prototype is never proven by CI, so its verdict is asked.
@@ -873,7 +883,7 @@ test("reconcile closes tabs of dead Leads that still exist and removes their dir
     herdrOptions: { workspaces: ["w1", "w7"] },
     workspace: { ...fakeWorkspace([]), remove: async (path) => void removed.push(basename(path)) },
   });
-  assert.equal(await delegator.reconcile(), 1);
+  assert.equal(await delegator.reconcile(io), 1);
   assert.deepEqual(log.filter((line) => line.startsWith("close")), ["close w7"], "only the dead Lead's live worktree");
   assert.deepEqual(removed.sort(), ["dead-gone", "dead-open"]);
   const failed = JSON.parse(await readFile(join(stateRoot, "dead-failed", "tab.json"), "utf8"));
@@ -886,7 +896,7 @@ test("reconcile keeps every record when Herdr does not answer", async (t) => {
   await mkdir(join(stateRoot, "dead"));
   await writeFile(join(stateRoot, "dead", "tab.json"), JSON.stringify({ version: 1, leadPid: 111, createdAt: "x", workspaceId: "w7" }));
   const { delegator, log } = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: {} });
-  assert.equal(await delegator.reconcile(), 0);
+  assert.equal(await delegator.reconcile(io), 0);
   assert.ok(!log.some((line) => line.startsWith("close") || line.startsWith("remove")));
   assert.ok((await readdir(stateRoot)).includes("dead"));
 });
@@ -900,7 +910,7 @@ test("reconcile never touches the task dirs of a Lead that is still running", as
   assert.equal(JSON.parse(await readFile(join(stateRoot, dir!, "tab.json"), "utf8")).workspaceId, "tab-1");
   // Same process: even with processAlive faked away, its own records are skipped.
   const other = await setup(t, { stateRoot, processAlive: () => false, herdrOptions: { workspaces: ["w1", "tab-1"] } });
-  assert.equal(await other.delegator.reconcile(), 0);
+  assert.equal(await other.delegator.reconcile(io), 0);
   assert.ok(!other.log.some((line) => line.startsWith("close")));
 });
 
@@ -913,12 +923,12 @@ test("reconcile keeps a dead Lead's directory until its worktree is confirmed re
     processAlive: () => false,
     herdrOptions: { workspaces: ["w1", "w7"], closeFailures: 1 },
   });
-  assert.equal(await delegator.reconcile(), 0);
+  assert.equal(await delegator.reconcile(io), 0);
   assert.ok(log.includes("close w7"));
   assert.ok(!log.includes("remove dir"));
   assert.ok((await readdir(stateRoot)).includes("dead-task"));
 
-  assert.equal(await delegator.reconcile(), 1);
+  assert.equal(await delegator.reconcile(io), 1);
   assert.ok(log.includes("remove dir"));
 });
 
@@ -972,7 +982,9 @@ test("a new Lead adopts a dead Lead's live worker: listed, messaged, and its fin
 });
 
 test("a finish that lands while no Lead is alive reaches the Lead that adopts the worker", async (t) => {
-  const { herdr, stateRoot } = await crashedLead(t, [{ status: "needs_human", summary: "Which colour?", delayMs: 30 }]);
+  // Lands once the dead Lead has started watching (its first look finds nothing; the next is a minute away).
+  const watching = (log: Log) => until(() => log.includes("meta pane-1 state=running"));
+  const { herdr, stateRoot } = await crashedLead(t, [{ status: "needs_human", summary: "Which colour?", after: watching }]);
   const { dir } = await recordWhen(stateRoot, () => true);
   await until(() => existsSync(join(dir, "result.json")));
   const lead = await setup(t, { herdr, stateRoot, pid: 333, processAlive: (pid) => pid !== 111 });
@@ -1047,7 +1059,8 @@ test("worker panes get Herdr metadata on every state and an agent name, best-eff
   const seen: Seen = {};
   const { delegator, log, nextOutcome } = await setup(t, {
     seen,
-    replies: [{ status: "done", delayMs: 80 }],
+    // Finishes only once the heartbeat has retried the agent name.
+    replies: [{ status: "done", after: (log) => until(() => log.filter((line) => line.startsWith("rename")).length === 2) }],
     herdrOptions: { renameFailures: 1 },
   });
   const pending = nextOutcome();
@@ -1265,7 +1278,7 @@ test("an implement delegation starts exactly one worker, on the implement route,
 });
 
 test("a trivial implement ticket runs on the fast tier: no scout floor", async (t) => {
-  const { delegator, nextOutcome } = await setup(t, { judge: { available: true, modelTier: async () => ({ tier: "fast", difficulty: 0.4 }) } });
+  const { delegator, nextOutcome } = await setup(t, { judge: { modelTier: async () => ({ tier: "fast", difficulty: 0.4 }) } });
   const pending = nextOutcome();
   const started = await delegator.start({ kind: "implement", title: "Typo", task: "t" }, io);
   assert.match(started.text, /tier fast/);
@@ -1464,7 +1477,7 @@ test("a partial, blocked or needs_human the worker reported itself reaches the L
 
 test("a partial Jev judged, not the host, reaches the Lead at once", async (t) => {
   const { delegator, log, nextOutcome } = await setup(t, {
-    judge: { available: true, verdict: async () => "partial" },
+    judge: { verdict: async () => "partial" },
     replies: [{ status: "done" }],
     workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state: "fail" as const, failed: [] }) },
   });
@@ -1499,7 +1512,7 @@ test("no Jev verdict call once the host proved the work: a PR with CI green on t
   for (const { kind, state, asked } of cases) {
     let calls = 0;
     const { delegator, nextOutcome } = await setup(t, {
-      judge: { available: true, verdict: async () => (calls += 1, undefined) },
+      judge: { verdict: async () => (calls += 1, undefined) },
       replies: [{ status: "done" }, { status: "done" }],
       workspace: { ...fakeWorkspace([]), prChecks: async () => ({ url: "https://example.test/pr/1", head: "def456", state, failed: [] }) },
     });

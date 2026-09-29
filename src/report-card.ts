@@ -42,12 +42,22 @@ export function duration(ms: number): string {
 
 const VERDICTS: readonly string[] = ["done", "partial", "blocked", "needs_human"];
 
-/** The report's `<worker-report untrusted>` block, as the model reads it, or undefined. */
-export function untrustedBlock(content: string): string | undefined {
-  const open = content.indexOf("<worker-report untrusted>");
-  const close = content.lastIndexOf("</worker-report>");
+const OPEN = "<worker-report untrusted>";
+const CLOSE = "</worker-report>";
+
+/**
+ * The report as the model reads it, cut at its `<worker-report untrusted>` block: the host text
+ * before and after it, and the worker's text inside. Undefined for a report without a block.
+ */
+export function splitReport(content: string): { before: string; block: string; after: string } | undefined {
+  const open = content.indexOf(OPEN);
+  const close = content.lastIndexOf(CLOSE);
   if (open === -1 || close < open) return undefined;
-  return content.slice(open + "<worker-report untrusted>".length, close).replace(/^\n+|\n+$/g, "");
+  return {
+    before: content.slice(0, open).replace(/\n+$/, ""),
+    block: content.slice(open + OPEN.length, close).replace(/^\n+|\n+$/g, ""),
+    after: content.slice(close + CLOSE.length).replace(/^\n+/, ""),
+  };
 }
 
 function isCard(value: unknown): value is ReportCard {
@@ -75,8 +85,6 @@ function isCard(value: unknown): value is ReportCard {
  */
 const cleanWorkerText = (text: string) =>
   cleanLines(text.replace(/\t/g, "   ").replace(INVISIBLE, "·"), Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER);
-
-
 
 const GUTTER = "  │ ";
 const NARROW_GUTTER = "│";
@@ -149,20 +157,17 @@ export function renderCard(details: unknown, content: string, expanded: boolean,
     lines.push(paint("warning", `  ! review before merging: ${report.sensitive.map((pattern) => safePreview(pattern, 60)).join(", ")}`));
   }
 
-  const block = untrustedBlock(content);
-  const said = block ?? card.summary;
+  const split = splitReport(content);
+  const said = split?.block ?? card.summary;
   const parts: CardParts = { head: lines.join("\n"), ...(said?.trim() ? { said } : {}) };
   if (expanded) {
     // The full text around the block, as the model reads it; the block itself stays behind the gutter.
-    const open = content.indexOf("<worker-report untrusted>");
-    const close = content.lastIndexOf("</worker-report>");
-    const before = block === undefined ? content : content.slice(0, open);
-    const after = block === undefined ? "" : content.slice(close + "</worker-report>".length);
+    // Without a block (a failure), the full text already holds the error.
+    const { before, after } = split ?? { before: content.replace(/\n+$/, ""), after: "" };
     return {
-      head: `${parts.head}\n\n${paint("dim", cleanWorkerText(before.replace(/\n+$/, "")))}`,
-      // Without a block (a failure), the full text above already holds the error.
-      ...(parts.said && block !== undefined ? { said: parts.said } : {}),
-      ...(after.trim() ? { tail: paint("dim", cleanWorkerText(after.replace(/^\n+/, ""))) } : {}),
+      head: `${parts.head}\n\n${paint("dim", cleanWorkerText(before))}`,
+      ...(parts.said && split ? { said: parts.said } : {}),
+      ...(after.trim() ? { tail: paint("dim", cleanWorkerText(after)) } : {}),
     };
   }
   return { ...parts, ...(card.next.length ? { tail: card.next.map((step) => paint("dim", `  next: ${safePreview(step, 300)}`)).join("\n") } : {}) };

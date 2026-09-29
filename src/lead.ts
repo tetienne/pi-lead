@@ -7,7 +7,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } fro
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { loadConfigWithNotices } from "./config.ts";
+import { loadConfig } from "./config.ts";
 import { createDelegator, type DelegateIO, type Delegator, type StartResult, type WorkerCommand, type WorkerInfo } from "./delegate.ts";
 import { leadGuidance } from "./guidance.ts";
 import { createHerdrCli } from "./herdr.ts";
@@ -112,18 +112,18 @@ export default function lead(pi: ExtensionAPI) {
   /** `delegate` calls in their start phase, which share Pi's working message. */
   let delegating = 0;
 
+  /** The footer counts live workers, in the warning colour while one waits on the user. */
   const status = () => {
-    const parts: string[] = [];
+    if (!ui) return;
     const counts = workerCounts(delegator?.list() ?? []);
-    if (counts) parts.push(hasUI && ui && counts.needsYou ? ui.theme.fg("warning", counts.text) : counts.text);
-    ui?.setStatus("pi-lead", parts.length ? parts.join(" · ") : undefined);
+    ui.setStatus("pi-lead", counts && (hasUI && counts.needsYou ? ui.theme.fg("warning", counts.text) : counts.text));
   };
 
   const setup = async (ctx: ExtensionContext) => {
     ui = ctx.ui;
     hasUI = ctx.hasUI;
     const agentDir = getAgentDir();
-    const { config, ignored } = await loadConfigWithNotices(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
+    const { config, ignored } = await loadConfig(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
     // A setting dropped by the global/project rules would otherwise vanish without a trace.
     if (ctx.hasUI) for (const notice of ignored) ctx.ui.notify(notice, "warning");
     const judge = createJudge({
@@ -233,7 +233,10 @@ export default function lead(pi: ExtensionAPI) {
     invalidate: () => undefined,
   }));
 
-  pi.on("before_agent_start", async (event) => ({ systemPrompt: `${event.systemPrompt}\n${leadGuidance(SKILLS_DIR)}` }));
+  // A prompt section of its own: Pi records it as a transcript delta, and other extensions keep theirs.
+  pi.on("before_agent_start", (event) => {
+    event.systemPromptOptions.sections.pi_lead = leadGuidance(SKILLS_DIR);
+  });
 
   pi.registerTool({
     name: "delegate",

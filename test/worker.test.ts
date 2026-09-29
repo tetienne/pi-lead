@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { parseWorkerResult, SUB_AGENT_RECIPE } from "../src/protocol.ts";
-import worker, { COMMIT_LEFTOVERS } from "../src/worker/extension.ts";
+import worker, { commitLeftoversCommand } from "../src/worker/extension.ts";
 
 /** A worker's `tool_result` event, as narrowed by `isBashToolResult`/`isWriteToolResult`. */
 const toolResult = (toolName: string, input: Record<string, unknown>, isError: boolean) => ({
@@ -65,13 +65,13 @@ test("the worker only adds finish; stock file/shell tools and web tools come fro
   assert.ok(flags.has("pi-lead-task"));
   assert.deepEqual(tools, ["finish"]);
 
-  const { systemPrompt } = await handlers.get("before_agent_start")!({
-    systemPrompt: `BASE\nCurrent working directory: ${process.cwd()}`,
-  });
-  assert.match(systemPrompt, new RegExp(`Current working directory: ${process.cwd()}`));
-  assert.match(systemPrompt, /call `finish` with an honest status/);
-  assert.match(systemPrompt, /"\[PI Lead\]" come from the Lead/);
-  assert.ok(systemPrompt.includes(SUB_AGENT_RECIPE), "workers start sub-agents the same way as the Lead");
+  const sections: Record<string, string> = { cwd: process.cwd() };
+  assert.equal(await handlers.get("before_agent_start")!({ systemPromptOptions: { sections } }), undefined, "the prompt is never replaced wholesale");
+  assert.equal(sections.cwd, process.cwd());
+  const rules = sections.pi_lead_worker!;
+  assert.match(rules, /call `finish` with an honest status/);
+  assert.match(rules, /"\[PI Lead\]" come from the Lead/);
+  assert.ok(rules.includes(SUB_AGENT_RECIPE), "workers start sub-agents the same way as the Lead");
 });
 
 test("a run that ends on a provider error reports it to the Lead instead of idling", async () => {
@@ -207,7 +207,7 @@ test("the leftovers commit reports git add's own error on stdout", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-lead-not-a-repo-"));
   const { execFile } = await import("node:child_process");
   const result = await new Promise<{ code: number | null; stdout: string }>((resolve) => {
-    const child = execFile("/bin/sh", ["-c", COMMIT_LEFTOVERS], { cwd: dir, env: { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() } }, (_error, stdout) =>
+    const child = execFile("/bin/sh", ["-c", commitLeftoversCommand(true)], { cwd: dir, env: { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir() } }, (_error, stdout) =>
       resolve({ code: child.exitCode, stdout }),
     );
   });
