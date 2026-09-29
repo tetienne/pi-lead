@@ -37,6 +37,8 @@ export type DelegateParams = {
   model?: string;
   /** Omitted, the Lead's own thinking level. */
   thinking?: ThinkingLevel;
+  /** The Lead's one-sentence reason for this model and thinking level. */
+  why?: string;
 };
 
 /** What the Lead's session knows when a task is delegated: its models (`lead`, `thinking`, `available`) and more. */
@@ -589,6 +591,7 @@ export function createDelegator(deps: DelegateDeps) {
       worktreePath: worker.worktreePath,
       resultPath: worker.resultPath,
       stuckDetection: deps.config.stuckDetection,
+      ...(deps.config.reviewModel ? { reviewModel: deps.config.reviewModel } : {}),
     };
     const taskPath = join(worker.taskDir, "task.json");
     await writeFile(taskPath, JSON.stringify(task, null, 2));

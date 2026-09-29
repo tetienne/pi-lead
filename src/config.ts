@@ -10,6 +10,8 @@ export type LeadConfig = {
    * between (see worker/stuck.ts), once per prompt.
    */
   stuckDetection: boolean;
+  /** `--model` value (`provider/id`, optional `:thinking`) for code-review's sub-agents; unset: Pi's default. */
+  reviewModel?: string;
 };
 
 export const DEFAULT_CONFIG: LeadConfig = {
@@ -21,12 +23,14 @@ type PartialConfig = Partial<LeadConfig>;
 
 /**
  * Known keys only: any other (such as a removed setting: `tiers`, `jev`) is dropped without a
- * notice. A flag that is not a boolean keeps its default.
+ * notice. A flag that is not a boolean, or a `reviewModel` that is not a non-empty string, keeps its default.
  */
 export function mergeConfig(base: LeadConfig, override: PartialConfig): LeadConfig {
+  const reviewModel = typeof override.reviewModel === "string" && override.reviewModel.trim() ? override.reviewModel.trim() : base.reviewModel;
   return {
     keepFailedWorkers: typeof override.keepFailedWorkers === "boolean" ? override.keepFailedWorkers : base.keepFailedWorkers,
     stuckDetection: typeof override.stuckDetection === "boolean" ? override.stuckDetection : base.stuckDetection,
+    ...(reviewModel ? { reviewModel } : {}),
   };
 }
 

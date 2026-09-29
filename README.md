@@ -23,7 +23,7 @@ you ─► Lead (Pi, your tab)
         a ticket of a multi-session build, or anything you send to the background
         (implement / prototype / diagnosing-bugs / code-review / research)
                             → delegate tool
-                                 the Lead picks the worker's model + thinking level (default: its own)
+                                 the Lead picks the worker's model + thinking level (with a reason)
                                  → Herdr worktree workspace (no focus), worker Pi in it
                                  worker Pi: runs on the host, /skill:implement … as written
                                  worker pushes, opens a draft PR, gets CI green, calls finish
@@ -160,12 +160,11 @@ you ─► Lead (Pi, your tab)
   worker starts a non-interactive Pi in a pane split beside it, without
   focus, waits for it and reads its report. Without Herdr, it runs those
   steps one after the other in its own context and says so.
-- **The Lead picks each worker's model and thinking level.** `delegate` takes
-  an optional `model` (`provider/model-id`) and `thinking` (`off` to `max`);
-  omitted, the worker runs on the Lead's own model and thinking level. Each
-  prompt lists the models a worker may run on (the ones your session is
-  scoped to with `--models` or `enabledModels`, otherwise every model Pi has
-  auth for) with a rule of thumb: a cheaper, faster model and low thinking for
+- **The Lead picks each worker's model and thinking level.** `delegate` requires
+  a `model` (`provider/model-id`), a `thinking` level (`off` to `max`) and a
+  one-sentence `why`. Each prompt lists the models a worker may run on, with
+  their prices (the ones your session is scoped to with `--models` or
+  `enabledModels`, otherwise every model Pi has auth for) and a rule of thumb: a cheaper, faster model and low thinking for
   mechanical or single-module work, the strongest model and high thinking for
   cross-cutting, subtle or debugging work. Any other model is refused with
   that list (see
@@ -253,9 +252,15 @@ Settings:
   fails (it dies without `finish`) keeps its workspace while the Lead runs
   and its task directory after. With `false`, both are removed, branch kept.
 - `stuckDetection` (default `true`), below.
+- `reviewModel` (default unset): what `pi --model` takes (`provider/id`, with
+  an optional `:thinking` suffix, e.g. `openai-codex/gpt-6-astra:high`). Only
+  code-review's sub-agents (in a worker or in the Lead) run on it; every other
+  sub-agent keeps Pi's default model. Unset keeps that default for all. If a
+  review sub-agent fails (quota, auth, unknown model), that is reported, not
+  rerouted to another model; the Lead may then delegate another review.
 
-There is no model setting: the Lead picks each worker's model and thinking
-level (above). The `tiers` and `jev` blocks of older versions are ignored.
+The Lead picks each worker's model and thinking level (above), so there is no
+worker model setting. The `tiers` and `jev` blocks of older versions are ignored.
 
 `stuckDetection` watches a worker's shell commands and file changes: when the
 same command fails three times without succeeding, or six commands in a row

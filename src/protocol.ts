@@ -24,6 +24,8 @@ export type WorkerTask = {
   resultPath: string;
   /** Steer the worker when it keeps repeating a failing command. Absent means on. */
   stuckDetection?: boolean;
+  /** `--model` value for code-review's sub-agents; absent: Pi's default model. */
+  reviewModel?: string;
 };
 
 /** Written by the worker's `finish` tool. */
@@ -130,7 +132,7 @@ export function workerPrompt(kind: WorkKind, task: string, publish?: PublishTarg
  * `wait-output` matches line by line, and the typed command line never starts
  * with the marker: only the `echo` output does.
  */
-export const SUB_AGENT_RECIPE = `## Sub-agents
+export const subAgentRecipe = (reviewModel?: string) => `## Sub-agents
 
 When a skill says to spawn, dispatch or fire a sub-agent (code-review's two
 axes, grilling's fact-finding, wayfinder's research,
@@ -153,9 +155,18 @@ you:
    On a timeout, look with \`herdr pane read <pane-id> --source recent-unwrapped --lines 120\`
    before deciding.
 6. Read \`<dir>/report.md\` (the sub-agent's final answer, or its error),
-   then \`herdr pane close <pane-id>\`, and carry on with the skill.`;
+   then \`herdr pane close <pane-id>\`, and carry on with the skill.${reviewModel ? reviewModelNote(reviewModel) : ""}`;
 
-export const WORKER_RULES = `## PI Lead worker
+const reviewModelNote = (reviewModel: string) => `
+
+For code-review's sub-agents only (its Standards and Spec axes), step 4's
+command is \`pi --print --no-session --model ${shellQuote(reviewModel)} @<dir>/prompt.md > <dir>/report.md 2>&1; echo sub-agent-finished\`.
+Every other skill's sub-agents keep the command without \`--model\`. If a
+code-review sub-agent's report is an error (quota, auth, unknown model), do not
+rerun it on another model: say in your output and in the finish summary that
+the review sub-agents could not run.`;
+
+export const workerRules = (reviewModel?: string) => `## PI Lead worker
 
 You are a worker delegated by the PI Lead. You run unattended unless a human
 opens your tab.
@@ -177,4 +188,4 @@ opens your tab.
   interface), decide from the code and say so in your finish summary. Use
   \`needs_human\` only for what the code cannot answer.
 
-${SUB_AGENT_RECIPE}`;
+${subAgentRecipe(reviewModel)}`;

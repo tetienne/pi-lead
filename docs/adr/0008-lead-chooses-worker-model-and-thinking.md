@@ -7,10 +7,10 @@ status: accepted
 A worker's model used to come from a tier (`fast`, `standard`, `deep`) that
 Jev picked from a difficulty score, each tier mapped to configured models
 with fallbacks; Jev also checked the worker's verdict (ADR 0002). Now
-`delegate` takes an optional `model` and `thinking`, defaulting to the Lead's
-own, and PI Lead only checks that Pi can use the model now: authenticated
+`delegate` requires a `model`, a `thinking` level and a one-sentence `why`, and
+PI Lead only checks that Pi can use the model now: authenticated
 (and in the session's scope, when there is one) and its provider not out of
-quota. Each prompt lists those models, and a one-line rule of thumb says when
+quota. Each prompt lists those models with their prices, and a one-line rule of thumb says when
 to pick a cheaper or a stronger one. A worker's status is its own, capped only
 by host evidence: its PR and CI on the branch head.
 
@@ -20,6 +20,14 @@ ticket text. Dropping Jev also removes a dependency, an API key and a few
 seconds of latency per delegation, and the `tiers` and `jev` settings go with
 it (old keys are ignored). A verdict check on text alone rarely beat the host's
 CI evidence, which stays.
+
+The parameters are required, with prices in the list, because when they were
+optional the Lead omitted the model in 35 of 36 delegations and every worker
+ran on its own model. The `why` makes it state the fit.
+
+Separately, the `reviewModel` setting runs code-review's sub-agents on a
+configured model. It is distinct from worker routing: it never changes a
+worker's model, and a failing review model is reported, not rerouted.
 
 A quota error no longer reroutes on its own: there are no configured
 fallbacks to reroute to. The worker reports `blocked` with its branch, its
