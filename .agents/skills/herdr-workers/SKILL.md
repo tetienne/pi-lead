@@ -1,14 +1,18 @@
 ---
 name: herdr-workers
-description: Run background workers and sub-agents in Herdr. Use when you delegate a ticket or background work (implement, prototype, diagnosing-bugs, code-review, research) to a worker in its own Herdr worktree, when a skill asks for a sub-agent, when the user asks how the workers are doing, when you relay an answer to a worker, or when the user says to merge workers' PRs.
+description: Lead only, never for a worker (PI_LEAD_ROLE=worker). Run background workers in Herdr. Use when you delegate a ticket or background work (implement, prototype, diagnosing-bugs, code-review, research) to a worker in its own Herdr worktree, when the user asks how the workers are doing, when you relay an answer to a worker, or when the user says to merge workers' PRs.
 ---
 
 # Herdr workers
 
+**Workers stop here.** If `echo "${PI_LEAD_ROLE:-}"` prints `worker`, or your
+system prompt says you are a worker, this skill is not for you: never start
+workers, never merge, follow your own rules.
+
 You are the Lead. You answer the user, shape the work with Matt's skills, and
 hand the long parts to **workers**: each one is an interactive Pi in its own
-Herdr worktree workspace, on its own branch. **Sub-agents** are one-shot,
-non-interactive Pi processes that a skill asks for, in a pane beside you.
+Herdr worktree workspace, on its own branch. For the sub-agents a skill asks
+for, use the `herdr-sub-agents` skill.
 
 Everything below is plain shell. Run it with bash. Every `herdr` command prints
 JSON; read the ids with `jq`.
@@ -68,16 +72,21 @@ MODEL=$MODEL
 EOF
 ```
 
-Then write `$W/brief.md`: the ticket in full (the worker sees nothing of your
-conversation), then the worker rules of section 3, with `$W`, `$WS`,
-`$HERDR_PANE_ID`, `$BASE_BRANCH` and `$ID` written out.
+Then write two files:
+
+- `$W/brief.md`: the ticket in full. The worker sees nothing of your
+  conversation.
+- `$W/rules.md`: the worker rules of section 3, with `$W`, `$WS`,
+  `$HERDR_PANE_ID`, `$BASE_BRANCH`, `$ID` and `$TITLE` written out. They go
+  into the worker's **system prompt** (`--append-system-prompt`), so the worker
+  knows from its first token that it is a worker, not a Lead.
 
 Start Pi in the worker's pane. Use `--approve` when this project is trusted
 (you loaded its `.pi/` extensions and skills), else `--no-approve`, so Pi does
 not stop at a trust dialog that no one sees:
 
 ```sh
-herdr pane run "$PANE" "HERDR_AGENT=pi pi --approve --model $MODEL --thinking $THINKING --name 'worker: $ID' '/skill:implement Your task and your rules are in $W/brief.md. Read it first and follow it.'"
+herdr pane run "$PANE" "PI_LEAD_ROLE=worker HERDR_AGENT=pi pi --approve --append-system-prompt $W/rules.md --model $MODEL --thinking $THINKING --name 'worker: $ID' '/skill:implement Your task is in $W/brief.md. Read it first.'"
 herdr workspace rename -- "$WS" "● $TITLE"
 ```
 
@@ -95,12 +104,14 @@ Tell the user, in one line, which worker started, on what model. Then go back
 to the conversation: **do not wait on the worker.** It tells you when it is
 done (section 3, step 5).
 
-## 3. Worker rules (copy into `brief.md`)
+## 3. Worker rules (`rules.md`)
 
 ```markdown
-## Your rules
+## You are a worker
 
-You are a worker for the Lead. Nobody watches you unless a human opens your tab.
+You are a worker for the Lead, not a Lead. Nobody watches you unless a human
+opens your tab. Never start other workers, never merge a PR, never use the
+`herdr-workers` skill: that is the Lead's job.
 
 1. Your directory is your own git worktree, on branch `worker/<ID>`. Commit
    there. Never switch, reset, rebase or delete another branch, never touch git
@@ -130,8 +141,7 @@ You are a worker for the Lead. Nobody watches you unless a human opens your tab.
        herdr agent prompt <LEAD_PANE> "[worker <ID>] <status>. Report: <W>/report.md"
 6. Messages that start with `[Lead]` come from the Lead, often with the user's
    answer. Continue with them and report again (step 5).
-7. Sub-agents: follow the "Sub-agents" section of the Lead's `herdr-workers`
-   skill (path: <path of this SKILL.md>).
+7. When a skill asks for a sub-agent, use the `herdr-sub-agents` skill.
 ```
 
 ## 4. When a worker reports
@@ -248,38 +258,3 @@ rm -rf "$W"
 ```
 
 Never delete a branch unless the user asks.
-
-## Sub-agents
-
-When a skill says to spawn, dispatch or fire a sub-agent (code-review's two
-axes, grilling's fact-finding, wayfinder's research,
-improve-codebase-architecture's exploration, codebase-design's
-design-it-twice), run each one as a non-interactive Pi in a pane beside you.
-The Lead and workers both follow this.
-
-1. No Herdr (`test "${HERDR_ENV:-}" = 1` fails): do the sub-agents' steps
-   yourself, one after the other, and say so.
-2. Write each sub-agent's complete brief to `<dir>/prompt.md` in a fresh
-   `mktemp -d`: it sees nothing of your context.
-3. Open its pane (`down` instead of `right` if your pane is narrow):
-
-   ```sh
-   SUB=$(herdr pane split --current --direction right --cwd "$PWD" --no-focus | jq -r .result.pane.pane_id)
-   ```
-
-4. Start it. Start every sub-agent the step asks for before waiting on any:
-
-   ```sh
-   herdr pane run "$SUB" "pi --print --no-session @<dir>/prompt.md > <dir>/report.md 2>&1; echo sub-agent-finished"
-   ```
-
-5. Wait, then read and close:
-
-   ```sh
-   herdr pane wait-output "$SUB" --source recent-unwrapped --regex '^sub-agent-finished' --timeout 1800000
-   cat <dir>/report.md
-   herdr pane close "$SUB"
-   ```
-
-   On a timeout, look with
-   `herdr pane read "$SUB" --source recent-unwrapped --lines 120` before deciding.
